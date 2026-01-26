@@ -71,9 +71,8 @@ flowchart TB
 
     subgraph Postgres [postgres profiles]
         PG[(PostgreSQL)]
-        Ingest["Base Ingestion"]
-        Sidecar["ML Sidecar Ingestion"]
-        Views["Views:\nsubmissions\ncomments"]
+        Ingest["Main Table Ingestion"]
+        MLIngest["ML Classifier Ingestion"]
     end
 
     ZST --> Extract
@@ -96,12 +95,11 @@ flowchart TB
 
     CSV --> Ingest
     Ingest --> PG
-    T_Out --> Sidecar
-    E_Out --> Sidecar
-    O_Out --> Sidecar
-    L_Out --> Sidecar
-    Sidecar --> PG
-    PG --> Views
+    T_Out --> MLIngest
+    E_Out --> MLIngest
+    O_Out --> MLIngest
+    L_Out --> MLIngest
+    MLIngest --> PG
 ```
 
 ## Requirements
@@ -180,8 +178,8 @@ docker compose --profile postgres down
 | `ml_cpu` | Run Lingua language detection (CPU-only) | `Dockerfile` | Requires parsed CSVs |
 | `ml` | Run transformer classifiers (GPU) | `Dockerfile.gpu` | Requires parsed CSVs, optionally Lingua output |
 | `postgres` | Run PostgreSQL database server | `postgres:18` | None |
-| `postgres_ingest` | Ingest base CSVs into PostgreSQL | `Dockerfile` | Requires postgres running, parsed CSVs |
-| `postgres_ml` | Ingest ML outputs into PostgreSQL sidecars | `Dockerfile` | Requires postgres running, ML outputs |
+| `postgres_ingest` | Ingest CSVs into PostgreSQL main tables | `Dockerfile` | Requires postgres running, parsed CSVs |
+| `postgres_ml` | Ingest ML classifier outputs into PostgreSQL | `Dockerfile` | Requires postgres running, ML outputs |
 
 > **Note:** GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 
@@ -221,14 +219,14 @@ config/
 │   ├── gpu_classifiers.yaml       # Transformer configurations
 │   └── user.yaml.example          # User override template
 ├── postgres/
-│   ├── pipeline.yaml              # Base ingestion settings
-│   ├── services.yaml              # Sidecar service definitions (for views)
+│   ├── pipeline.yaml              # Main table ingestion settings
+│   ├── services.yaml              # Service definitions (legacy, kept for compatibility)
 │   ├── postgresql.conf            # PostgreSQL tuning
 │   ├── pg_hba.conf                # PostgreSQL authentication
 │   └── user.yaml.example          # User override template
 └── postgres_ml/
-    ├── pipeline.yaml              # ML sidecar ingestion settings
-    ├── services.yaml              # ML sidecar definitions
+    ├── pipeline.yaml              # ML classifier ingestion settings
+    ├── services.yaml              # ML classifier definitions
     └── user.yaml.example          # User override template
 ```
 
@@ -301,6 +299,10 @@ gpu_ids: [0]              # GPUs to use
 file_workers: 1           # Files in parallel
 batch_size: 2000000       # Rows per batch
 use_lingua: true          # Use Lingua output for language filtering
+fields:                   # Columns to keep from input CSV (default: all)
+  - dataset
+  - author
+  - subreddit
 
 # Classifier definitions
 toxic_roberta:
@@ -333,7 +335,6 @@ database:
   port: 5432
   user: postgres
   schema: reddit
-  table_suffix: "_base"   # Base tables (views use original names)
 
 processing:
   check_duplicates: true  # Handle duplicate IDs (upsert)
@@ -343,6 +344,14 @@ processing:
 indexes:
   submissions: [author, subreddit, domain, created_utc]
   comments: [author, subreddit, link_id, created_utc]
+```
+
+#### config/postgres_ml/pipeline.yaml
+
+```yaml
+processing:
+  use_foreign_key: true   # Add FK constraint to main tables (default: true)
+                          # Set false for independent ingestion without main table
 ```
 
 #### PostgreSQL Tuning
@@ -385,6 +394,7 @@ GPU-based classifiers using HuggingFace models with ONNX or PyTorch backends.
 | `model` | HuggingFace model ID | *(required)* |
 | `activation` | `sigmoid` (multi-label) or `softmax` | `softmax` |
 | `supported_languages` | Filter by lang column | *(all)* |
+| `fields` | Columns to keep from input CSV | `[dataset, author, subreddit]` |
 | `classifier_batch_size` | Batch size per GPU | `32` |
 | `max_length` | Max tokens | `512` |
 | `chunking_strategy` | `truncate` or `chunk` | `truncate` |

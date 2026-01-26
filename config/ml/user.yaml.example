@@ -41,7 +41,11 @@
 #   use_lingua: true             # Use 'lang' column from Lingua output for filtering
 #   lang2_fallback: false        # Also check lang2 column for language matches
 #   min_tokens: 0                # Minimum token count for transformers
-#   minimal_fields: true         # Remove 'dataset' and 'body' columns from output
+#   fields:                      # Columns to keep from input CSV (default: dataset, author, subreddit)
+#     - dataset
+#     - author
+#     - subreddit
+#     - created_utc              # Add additional fields as needed
 #
 #   # Classifier-specific overrides (nested under classifier name)
 #   toxic_roberta:

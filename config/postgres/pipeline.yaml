@@ -7,7 +7,6 @@ database:
   name: datasets             # Override with DB_NAME env var
   schema: reddit             # Override with DB_SCHEMA env var
   user: postgres
-  table_suffix: _base        # Suffix for write targets (views use original names)
 
 processing:
   data_types:                # Which data types to process

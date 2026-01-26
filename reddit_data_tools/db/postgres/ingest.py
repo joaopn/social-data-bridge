@@ -24,25 +24,6 @@ MANDATORY_FIELD_SQL = {
 # This disables PostgreSQL compression - use filesystem compression (ZFS, BTRFS) instead
 
 
-def load_services_config(config_dir: str) -> Dict:
-    """
-    Load services.yaml configuration.
-    
-    Args:
-        config_dir: Directory containing services.yaml (postgres profile directory)
-        
-    Returns:
-        Services configuration dictionary
-        
-    Raises:
-        ConfigurationError: If services.yaml is missing
-    """
-    config = load_yaml_file(Path(config_dir) / "services.yaml")
-    if config is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/services.yaml")
-    return config
-
-
 def yaml_type_to_sql(type_def) -> str:
     """
     Convert YAML type definition to PostgreSQL type.
@@ -468,140 +449,13 @@ def ingest_csv(
                 print(f"[INDEX] Warning: Failed to create index on {field}: {e}")
 
 
-def get_existing_sidecars(
-    data_type: str,
-    schema: str,
-    dbname: str,
-    host: str = '127.0.0.1',
-    port: int = 5432,
-    user: str = 'postgres'
-) -> List[str]:
-    """
-    Query database for existing sidecar tables for a data type.
-    
-    Looks for tables matching pattern: {data_type}_base_{sidecar_name}
-    (e.g., submissions_base_lingua, comments_base_emotions)
-    
-    Returns list of sidecar names (without the data_type_base_ prefix).
-    """
-    base_prefix = f"{data_type}_base_"
-    
-    query = """
-        SELECT table_name FROM information_schema.tables 
-        WHERE table_schema = %s 
-        AND table_name LIKE %s
-    """
-    
-    sidecars = []
-    try:
-        with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
-            with conn.cursor() as curr:
-                # Match tables like submissions_base_*
-                curr.execute(query, (schema, f"{base_prefix}%"))
-                for row in curr.fetchall():
-                    table_name = row[0]
-                    # Extract sidecar name (e.g., "submissions_base_lingua" -> "lingua")
-                    sidecar_name = table_name[len(base_prefix):]
-                    sidecars.append(sidecar_name)
-    except Exception as e:
-        print(f"[VIEW] Warning: Could not query for sidecars: {e}")
-    
-    return sidecars
-
-
-def get_view_query(
-    data_type: str,
-    schema: str,
-    sidecars_config: Dict,
-    existing_sidecars: List[str]
-) -> str:
-    """
-    Generate CREATE OR REPLACE VIEW query with dynamic LEFT JOINs.
-    
-    Only includes sidecars that:
-    1. Exist in the database (in existing_sidecars list)
-    2. Are enabled in config (sidecars_config[name].get('enabled', True))
-    
-    When no sidecars exist, creates a simple passthrough view.
-    Sidecar tables use naming: {data_type}_base_{sidecar_name}
-    """
-    base_table = f"{schema}.{data_type}_base"
-    view_name = f"{schema}.{data_type}"
-    
-    select_cols = ["base.*"]
-    joins = []
-    
-    # Add only sidecars that exist in DB AND are enabled in config
-    for name, cfg in sidecars_config.items():
-        if name in existing_sidecars and cfg.get('enabled', True):
-            sidecar_table = f"{schema}.{data_type}_base_{name}"
-            # Use short alias (first 3 chars of sidecar name)
-            alias = name[:3]
-            
-            # Add sidecar columns (id is not included as it's the join key)
-            for col in cfg.get('columns', {}).keys():
-                select_cols.append(f"{alias}.{col}")
-            
-            joins.append(f"LEFT JOIN {sidecar_table} {alias} ON base.id = {alias}.id")
-    
-    join_clause = '\n        '.join(joins) if joins else ''
-    
-    return f"""
-        CREATE OR REPLACE VIEW {view_name} AS
-        SELECT {', '.join(select_cols)}
-        FROM {base_table} base
-        {join_clause};
-    """
-
-
-def rebuild_view(
-    data_type: str,
-    schema: str,
-    dbname: str,
-    host: str,
-    port: int,
-    user: str,
-    config_dir: str
-):
-    """
-    Rebuild the view for a data type, including any existing sidecars.
-    
-    This is idempotent - can be called multiple times safely.
-    
-    Args:
-        data_type: 'submissions' or 'comments'
-        schema: Database schema name
-        dbname: Database name
-        host: Database host
-        port: Database port
-        user: Database user
-        config_dir: Directory containing services.yaml
-    """
-    # Load sidecar configuration
-    services_config = load_services_config(config_dir)
-    sidecars_config = services_config.get('sidecars', {})
-    
-    # Check which sidecars actually exist in the database
-    existing_sidecars = get_existing_sidecars(
-        data_type, schema, dbname, host, port, user
-    )
-    
-    if existing_sidecars:
-        print(f"[VIEW] Found sidecars for {data_type}: {existing_sidecars}")
-    
-    # Generate and execute the view query
-    view_query = get_view_query(data_type, schema, sidecars_config, existing_sidecars)
-    
-    print(f"[VIEW] Creating view: {schema}.{data_type}")
-    execute_query(view_query, dbname, host, port, user)
-    print(f"[VIEW] View created: {schema}.{data_type}")
 
 
 # =============================================================================
-# Sidecar Table Functions
+# Classifier Table Functions
 # =============================================================================
 
-def infer_sql_type(values: List[str]) -> str:
+def infer_sql_type(values: List[str]) -> tuple:
     """
     Infer SQL type from a list of sample values.
     
@@ -611,14 +465,16 @@ def infer_sql_type(values: List[str]) -> str:
         values: List of string values from CSV
         
     Returns:
-        SQL type string
+        Tuple of (sql_type, has_empty) where has_empty indicates column has empty values
     """
     has_int = False
     has_float = False
     has_bool = False
+    has_empty = False
     
     for val in values:
         if not val or val == "":
+            has_empty = True
             continue
         
         # Try integer
@@ -643,46 +499,44 @@ def infer_sql_type(values: List[str]) -> str:
             continue
         
         # If we hit a non-numeric, non-boolean value, it's text
-        return 'text'
+        return ('text', has_empty)
     
     # Determine type based on what we found
     if has_float:
-        return 'real'
+        return ('real', has_empty)
     if has_int:
-        return 'integer'
+        return ('integer', has_empty)
     if has_bool:
-        return 'boolean'
+        return ('boolean', has_empty)
     
     # All empty or no values - default to text
-    return 'text'
+    return ('text', has_empty)
 
 
-def infer_sidecar_schema(
+def infer_classifier_schema(
     csv_file: str,
-    base_columns: List[str],
-    table_columns: Optional[List[str]] = None,
     n_rows: int = 1000,
     column_overrides: Optional[Dict[str, str]] = None
-) -> Dict[str, str]:
+) -> tuple:
     """
-    Infer column types for sidecar table from CSV data.
+    Infer column list and types for classifier table from CSV data.
     
-    Reads N rows from CSV, identifies columns to include, and infers their SQL types.
+    Reads N rows from CSV and infers SQL types for all columns.
+    Returns columns in CSV header order (important for COPY).
     
     Args:
         csv_file: Path to CSV file
-        base_columns: List of base table column names (used to identify classifier columns)
-        table_columns: Optional list of base columns to include (empty/None = classifier cols only)
         n_rows: Number of rows to sample for type inference
         column_overrides: Optional dict of column_name -> sql_type overrides
         
     Returns:
-        Dict of column_name -> sql_type for sidecar columns
+        Tuple of (column_list, column_types_dict, nullable_cols) where:
+        - column_list: List of column names in CSV order
+        - column_types_dict: Dict of column_name -> sql_type
+        - nullable_cols: List of columns that have empty values (need FORCE_NULL)
     """
     import csv
     
-    base_cols_set = set(base_columns)
-    table_cols_set = set(table_columns) if table_columns else set()
     column_overrides = column_overrides or {}
     
     with open(csv_file, 'r', newline='', encoding='utf-8') as f:
@@ -692,75 +546,81 @@ def infer_sidecar_schema(
         if not header:
             raise ValueError(f"CSV file has no header: {csv_file}")
         
-        # Columns to include:
-        # 1. Classifier columns (not in base columns, not 'id')
-        # 2. Base columns explicitly listed in table_columns
-        sidecar_cols = []
-        for c in header:
-            if c == 'id':
-                continue
-            if c not in base_cols_set:
-                # Classifier column - always include
-                sidecar_cols.append(c)
-            elif c in table_cols_set:
-                # Base column explicitly requested
-                sidecar_cols.append(c)
+        # Keep all columns in original order
+        all_cols = list(header)
         
-        if not sidecar_cols:
-            raise ValueError(f"No sidecar columns found in CSV: {csv_file}")
+        if not all_cols:
+            raise ValueError(f"No columns found in CSV: {csv_file}")
         
-        # Collect sample values for each sidecar column
-        samples: Dict[str, List[str]] = {col: [] for col in sidecar_cols}
+        # Collect sample values for each column (except 'id' which is always varchar)
+        samples: Dict[str, List[str]] = {col: [] for col in all_cols if col != 'id'}
         
         for i, row in enumerate(reader):
             if i >= n_rows:
                 break
-            for col in sidecar_cols:
+            for col in samples:
                 samples[col].append(row.get(col, ""))
     
-    # Infer types
-    schema = {}
-    for col in sidecar_cols:
+    # Infer types (id is always varchar(7) PRIMARY KEY, handled separately)
+    column_types = {}
+    nullable_cols = []
+    for col in all_cols:
+        if col == 'id':
+            continue  # id handled separately in table creation
         if col in column_overrides:
-            schema[col] = yaml_type_to_sql(column_overrides[col])
+            column_types[col] = yaml_type_to_sql(column_overrides[col])
         else:
-            schema[col] = infer_sql_type(samples[col])
+            sql_type, has_empty = infer_sql_type(samples[col])
+            column_types[col] = sql_type
+            # Track columns with empty values that aren't text (need FORCE_NULL for COPY)
+            if has_empty and sql_type != 'text':
+                nullable_cols.append(col)
     
-    return schema
+    return all_cols, column_types, nullable_cols
 
 
-def get_sidecar_create_table_query(
+def get_classifier_create_table_query(
+    table_name: str,
     data_type: str,
-    sidecar_name: str,
     schema: str,
-    column_schema: Dict[str, str]
+    column_list: List[str],
+    column_types: Dict[str, str],
+    use_foreign_key: bool = True
 ) -> str:
     """
-    Generate CREATE TABLE query for a sidecar table.
+    Generate CREATE TABLE query for a classifier output table.
     
-    Sidecar tables have:
-    - id VARCHAR(7) PRIMARY KEY (FK to base table)
-    - Classifier output columns with inferred types
-    
-    Table naming: {data_type}_base_{sidecar_name} (e.g., submissions_base_lingua)
+    Classifier tables have:
+    - id VARCHAR(7) PRIMARY KEY
+    - Optional FOREIGN KEY to main table (submissions/comments)
+    - All other columns from CSV with inferred types
     
     Args:
-        data_type: 'submissions' or 'comments'
-        sidecar_name: Name of the sidecar (e.g., 'lingua', 'toxic_roberta')
+        table_name: Full table name (e.g., 'submissions_lingua')
+        data_type: 'submissions' or 'comments' (for FK reference)
         schema: Database schema name
-        column_schema: Dict of column_name -> sql_type
+        column_list: List of column names in CSV order
+        column_types: Dict of column_name -> sql_type (excludes 'id')
+        use_foreign_key: If True, add FK constraint to main table
         
     Returns:
         CREATE TABLE SQL query
     """
-    table_name = f"{data_type}_base_{sidecar_name}"
     full_table = f"{schema}.{table_name}"
-    base_table = f"{schema}.{data_type}_base"
+    main_table = f"{schema}.{data_type}"
     
-    # Build column definitions
-    col_defs = ["    id character varying(7) PRIMARY KEY"]
-    for col, sql_type in column_schema.items():
-        col_defs.append(f"    {col} {sql_type}")
+    # Build column definitions in CSV order
+    col_defs = []
+    for col in column_list:
+        if col == 'id':
+            col_defs.append("    id character varying(7) PRIMARY KEY")
+        else:
+            sql_type = column_types.get(col, 'text')
+            col_defs.append(f"    {col} {sql_type}")
+    
+    # Add foreign key constraint if enabled
+    if use_foreign_key:
+        col_defs.append(f"    CONSTRAINT fk_{table_name}_id FOREIGN KEY (id) REFERENCES {main_table}(id)")
     
     columns_sql = ",\n".join(col_defs)
     
@@ -771,105 +631,96 @@ def get_sidecar_create_table_query(
         );"""
 
 
-def ingest_sidecar_from_csv(
-    csv_file: str,
-    data_type: str,
-    sidecar_name: str,
+def get_classifier_ingest_query(
+    table_name: str,
     schema: str,
-    columns: List[str],
-    dbname: str,
-    host: str,
-    port: int,
-    user: str,
-    check_duplicates: bool = True
-):
+    column_list: List[str],
+    check_duplicates: bool,
+    nullable_cols: Optional[List[str]] = None
+) -> str:
     """
-    Ingest selected columns from CSV into sidecar table.
+    Generate COPY/INSERT query for classifier output table.
     
-    Uses miller (mlr) to filter columns to a temp file, then PostgreSQL
-    COPY FROM for maximum throughput. No Python in the data path.
+    Mirrors the base table ingestion pattern exactly.
     
     Args:
-        csv_file: Path to CSV file
-        data_type: 'submissions' or 'comments'
-        sidecar_name: Name of the sidecar
+        table_name: Full table name (e.g., 'submissions_lingua')
         schema: Database schema name
-        columns: List of column names to ingest (including 'id')
-        dbname: Database name
-        host: Database host
-        port: Database port
-        user: Database user
+        column_list: List of column names in CSV order
         check_duplicates: Whether to handle duplicate IDs
+        nullable_cols: Columns that may have empty strings to treat as NULL
+        
+    Returns:
+        SQL query for data ingestion
     """
-    import subprocess
-    import os
-    
-    table_name = f"{data_type}_base_{sidecar_name}"
     full_table = f"{schema}.{table_name}"
     temp_table = f"temp_{table_name}"
-    columns_str = ", ".join(columns)
-    mlr_columns = ",".join(columns)
     
-    # Temp file in writable shared volume (postgres container needs access)
-    temp_dir = "/data/database/tmp"
-    os.makedirs(temp_dir, exist_ok=True)
-    csv_basename = os.path.basename(csv_file)
-    temp_csv = f"{temp_dir}/{csv_basename}.filtered.tmp"
+    columns = ", ".join(column_list)
     
-    # Fields to update on conflict (all except 'id')
-    update_fields = [col for col in columns if col != 'id']
-    update_set = ",\n                ".join(f"{col} = EXCLUDED.{col}" for col in update_fields)
+    # Build COPY options - FORCE_NULL for columns with empty values
+    copy_options = "FORMAT csv, HEADER true, DELIMITER ',', NULL ''"
+    if nullable_cols:
+        force_null_cols = ", ".join(nullable_cols)
+        copy_options += f", FORCE_NULL ({force_null_cols})"
     
-    try:
-        # Filter columns with miller (fast, native)
-        mlr_cmd = ['mlr', '--csv', 'cut', '-f', mlr_columns, csv_file]
-        with open(temp_csv, 'w') as f:
-            result = subprocess.run(mlr_cmd, stdout=f, stderr=subprocess.PIPE, check=True)
-        
-        # Verify file was created
-        if not os.path.exists(temp_csv):
-            raise RuntimeError(f"Miller failed to create temp file: {temp_csv}")
-        if os.path.getsize(temp_csv) == 0:
-            raise RuntimeError(f"Miller produced empty file: {temp_csv}")
-        
-        # Build ingestion query using PostgreSQL COPY FROM file
-        if not check_duplicates:
-            query = f"""
-                COPY {full_table}({columns_str})
-                FROM '{temp_csv}'
-                WITH (FORMAT csv, HEADER true);
+    # Fields to update on conflict (all except 'id' which is the primary key)
+    update_fields = [col for col in column_list if col != 'id']
+    update_set = ",\n                ".join(
+        f"{col} = EXCLUDED.{col}" for col in update_fields
+    )
+    
+    # Determine ORDER BY clause for deduplication
+    # Use retrieved_utc if available to prefer most recent version
+    if 'retrieved_utc' in column_list:
+        order_by = "id, retrieved_utc DESC"
+    else:
+        order_by = "id"
+    
+    if not check_duplicates:
+        return f"""
+            COPY {full_table}({columns})
+            FROM '%s'
+            WITH ({copy_options});
             """
+    else:
+        # Only add WHERE clause if retrieved_utc exists (for preferring newer versions)
+        if 'retrieved_utc' in column_list:
+            where_clause = f"""
+            WHERE
+                {full_table}.retrieved_utc < EXCLUDED.retrieved_utc"""
         else:
-            query = f"""
-                CREATE TEMPORARY TABLE {temp_table}
-                AS SELECT * FROM {full_table} LIMIT 0;
-
-                COPY {temp_table}({columns_str})
-                FROM '{temp_csv}'
-                WITH (FORMAT csv, HEADER true);
-
-                INSERT INTO {full_table}
-                    ({columns_str})
-                SELECT
-                    {columns_str}
-                FROM
-                    {temp_table}
-                ON CONFLICT (id) DO UPDATE SET
-                    {update_set};
-
-                DROP TABLE {temp_table};
-            """
+            where_clause = ""
         
-        execute_query(query, dbname, host, port, user)
-    finally:
-        # Clean up temp file
-        if os.path.exists(temp_csv):
-            os.remove(temp_csv)
+        return f"""
+            CREATE TEMPORARY TABLE {temp_table}
+            AS SELECT * FROM {full_table} LIMIT 0;
+
+            COPY {temp_table}({columns})
+            FROM '%s'
+            WITH ({copy_options});
+
+            WITH latest_rows AS (
+                SELECT DISTINCT ON (id)
+                    {columns}
+                FROM {temp_table}
+                ORDER BY {order_by}
+            )
+            INSERT INTO {full_table}
+                ({columns})
+            SELECT
+                {columns}
+            FROM
+                latest_rows
+            ON CONFLICT (id) DO UPDATE SET
+                {update_set}{where_clause};
+
+            DROP TABLE {temp_table};
+            """
 
 
-def get_sidecar_table_columns(
-    data_type: str,
-    sidecar_name: str,
+def get_table_column_list(
+    table_name: str,
     schema: str,
     dbname: str,
     host: str = '127.0.0.1',
@@ -877,11 +728,10 @@ def get_sidecar_table_columns(
     user: str = 'postgres'
 ) -> List[str]:
     """
-    Get column names for an existing sidecar table (excluding 'id').
+    Get column names for an existing table in ordinal position order.
     
     Args:
-        data_type: 'submissions' or 'comments'
-        sidecar_name: Name of the sidecar
+        table_name: Table name (e.g., 'submissions_lingua')
         schema: Database schema name
         dbname: Database name
         host: Database host
@@ -889,14 +739,13 @@ def get_sidecar_table_columns(
         user: Database user
         
     Returns:
-        List of column names (excluding 'id')
+        List of column names in table order
     """
-    table_name = f"{data_type}_base_{sidecar_name}"
     
     query = """
         SELECT column_name 
         FROM information_schema.columns 
-        WHERE table_schema = %s AND table_name = %s AND column_name != 'id'
+        WHERE table_schema = %s AND table_name = %s
         ORDER BY ordinal_position
     """
     
@@ -907,230 +756,99 @@ def get_sidecar_table_columns(
                 curr.execute(query, (schema, table_name))
                 columns = [row[0] for row in curr.fetchall()]
     except Exception as e:
-        print(f"[SIDECAR] Warning: Could not query columns for {table_name}: {e}")
+        print(f"[INGEST] Warning: Could not query columns for {table_name}: {e}")
     
     return columns
 
 
-def ingest_sidecar_csv(
+def ingest_classifier_csv(
     csv_file: str,
     data_type: str,
-    sidecar_name: str,
+    classifier_name: str,
     dbname: str,
     schema: str,
     host: str,
     port: int,
     user: str,
-    base_columns: List[str],
-    table_columns: Optional[List[str]] = None,
     check_duplicates: bool = True,
     type_inference_rows: int = 1000,
-    column_overrides: Optional[Dict[str, str]] = None
+    column_overrides: Optional[Dict[str, str]] = None,
+    use_foreign_key: bool = True,
+    suffix: Optional[str] = None
 ):
     """
-    Ingest a sidecar CSV file into PostgreSQL.
+    Ingest a classifier CSV file into PostgreSQL.
     
     Auto-infers column types from CSV data. Creates table if needed.
+    Ingests the full CSV file directly via COPY (identical to base table ingestion).
     
     Args:
         csv_file: Path to the CSV file
         data_type: 'submissions' or 'comments'
-        sidecar_name: Name of the sidecar (e.g., 'lingua')
+        classifier_name: Name of the classifier (e.g., 'lingua') - used for logging
         dbname: Database name
         schema: Schema name
         host: Database host
         port: Database port
         user: Database user
-        base_columns: List of base table column names (to identify classifier cols)
-        table_columns: Optional list of base columns to include (empty = classifier cols only)
         check_duplicates: Whether to handle duplicates
         type_inference_rows: Number of rows to sample for type inference
         column_overrides: Optional column type overrides
+        use_foreign_key: If True, add FK constraint to main table (default: True)
+        suffix: Suffix for table name (e.g., '_lingua'). If None, uses _{classifier_name}
     """
-    table_name = f"{data_type}_base_{sidecar_name}"
+    # Determine table suffix
+    if suffix is None:
+        suffix = f"_{classifier_name}"
     
-    print(f"[SIDECAR] Starting ingestion: {csv_file} -> {schema}.{table_name}")
+    # Table name: {data_type}{suffix} (e.g., submissions_lingua)
+    table_name = f"{data_type}{suffix}"
+    
+    print(f"[{classifier_name.upper()}] Starting ingestion: {csv_file} -> {schema}.{table_name}")
     
     # Ensure schema exists
     ensure_schema_exists(schema, dbname, host, port, user)
     
+    # Always infer schema to get nullable_cols for FORCE_NULL (even if table exists)
+    print(f"[{classifier_name.upper()}] Inferring schema from {type_inference_rows} rows...")
+    column_list, column_types, nullable_cols = infer_classifier_schema(
+        csv_file, type_inference_rows, column_overrides
+    )
+    
+    if nullable_cols:
+        print(f"[{classifier_name.upper()}] Columns with empty values (using FORCE_NULL): {nullable_cols}")
+    
     # Check if table exists
     if not table_exists(table_name, schema, dbname, host, port, user):
-        # Infer schema from CSV
-        print(f"[SIDECAR] Inferring schema from {type_inference_rows} rows...")
-        column_schema = infer_sidecar_schema(
-            csv_file, base_columns, table_columns, type_inference_rows, column_overrides
-        )
-        print(f"[SIDECAR] Inferred columns: {list(column_schema.keys())}")
+        print(f"[{classifier_name.upper()}] Inferred columns: {column_list}")
+        
+        # Check if main table exists when FK is requested
+        main_table_exists = table_exists(data_type, schema, dbname, host, port, user)
+        actual_use_fk = use_foreign_key and main_table_exists
+        
+        if use_foreign_key and not main_table_exists:
+            print(f"[{classifier_name.upper()}] Warning: Main table {schema}.{data_type} not found, creating without FK")
         
         # Create table
-        create_query = get_sidecar_create_table_query(
-            data_type, sidecar_name, schema, column_schema
+        create_query = get_classifier_create_table_query(
+            table_name, data_type, schema, column_list, column_types, 
+            use_foreign_key=actual_use_fk
         )
         execute_query(create_query, dbname, host, port, user)
-        print(f"[SIDECAR] Created table: {schema}.{table_name}")
-        
-        sidecar_columns = list(column_schema.keys())
+        fk_status = " (with FK)" if actual_use_fk else " (no FK)"
+        print(f"[{classifier_name.upper()}] Created table: {schema}.{table_name}{fk_status}")
     else:
-        # Get existing columns from database
-        sidecar_columns = get_sidecar_table_columns(
-            data_type, sidecar_name, schema, dbname, host, port, user
+        # Get existing columns from database (in table order)
+        column_list = get_table_column_list(
+            table_name, schema, dbname, host, port, user
         )
     
-    # Ingest data (id + sidecar columns only)
-    columns_to_ingest = ['id'] + sidecar_columns
-    ingest_sidecar_from_csv(
-        csv_file=csv_file,
-        data_type=data_type,
-        sidecar_name=sidecar_name,
-        schema=schema,
-        columns=columns_to_ingest,
-        dbname=dbname,
-        host=host,
-        port=port,
-        user=user,
-        check_duplicates=check_duplicates
+    # Ingest data (COPY entire CSV directly, just like base table)
+    ingest_query = get_classifier_ingest_query(
+        table_name, schema, column_list, check_duplicates, nullable_cols
     )
+    execute_query(ingest_query, dbname, host, port, user, args=[csv_file])
     
-    print(f"[SIDECAR] Ingestion complete: {schema}.{table_name}")
+    print(f"[{classifier_name.upper()}] Ingestion complete: {schema}.{table_name}")
 
 
-def rebuild_view_dynamic(
-    data_type: str,
-    schema: str,
-    dbname: str,
-    host: str,
-    port: int,
-    user: str,
-    sidecars_config: Optional[Dict] = None
-):
-    """
-    Rebuild views for a data type, dynamically discovering sidecar columns from DB.
-    
-    Creates individual views for each sidecar: {data_type}_{sidecar_name}
-    (e.g., submissions_lingua) that join base table with that sidecar's columns.
-    
-    Args:
-        data_type: 'submissions' or 'comments'
-        schema: Database schema name
-        dbname: Database name
-        host: Database host
-        port: Database port
-        user: Database user
-        sidecars_config: Optional config to check 'enabled' status and view_columns
-    """
-    sidecars_config = sidecars_config or {}
-    
-    # Check which sidecars actually exist in the database
-    existing_sidecars = get_existing_sidecars(
-        data_type, schema, dbname, host, port, user
-    )
-    
-    if existing_sidecars:
-        print(f"[VIEW] Found sidecars for {data_type}: {existing_sidecars}")
-    
-    base_table = f"{schema}.{data_type}_base"
-    
-    # Get base table columns to avoid duplicates in view
-    base_columns = set()
-    try:
-        query = """
-            SELECT column_name FROM information_schema.columns
-            WHERE table_schema = %s AND table_name = %s
-        """
-        with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
-            with conn.cursor() as curr:
-                curr.execute(query, (schema, f"{data_type}_base"))
-                base_columns = {row[0] for row in curr.fetchall()}
-    except Exception as e:
-        print(f"[VIEW] Warning: Could not get base columns: {e}")
-    
-    # Create individual view for each sidecar
-    for sidecar_name in existing_sidecars:
-        # Check if enabled in config (default: True)
-        cfg = sidecars_config.get(sidecar_name, {})
-        if not cfg.get('enabled', True):
-            continue
-        
-        sidecar_table = f"{schema}.{data_type}_base_{sidecar_name}"
-        view_name = f"{schema}.{data_type}_{sidecar_name}"
-        
-        # Get actual columns from database
-        db_columns = get_sidecar_table_columns(
-            data_type, sidecar_name, schema, dbname, host, port, user
-        )
-        
-        # Filter columns based on view_columns config (empty/missing = all columns)
-        view_columns = cfg.get('view_columns', [])
-        if view_columns:
-            # Only include columns that are both in config and exist in DB
-            columns = [col for col in view_columns if col in db_columns]
-        else:
-            # Include all columns from DB
-            columns = db_columns
-        
-        # Exclude columns already in base table (avoid duplicates since we use base.*)
-        columns = [col for col in columns if col not in base_columns]
-        
-        # Build select: base.* + sidecar columns (only non-base columns)
-        select_cols = ["base.*"]
-        for col in columns:
-            select_cols.append(f"sc.{col}")
-        
-        view_query = f"""
-            CREATE OR REPLACE VIEW {view_name} AS
-            SELECT {', '.join(select_cols)}
-            FROM {base_table} base
-            LEFT JOIN {sidecar_table} sc ON base.id = sc.id;
-        """
-        
-        print(f"[VIEW] Creating view: {view_name}")
-        execute_query(view_query, dbname, host, port, user)
-        print(f"[VIEW] View created: {view_name}")
-    
-    # Create main combined view joining all enabled sidecars
-    main_view_name = f"{schema}.{data_type}"
-    main_select_cols = ["base.*"]
-    main_joins = []
-    seen_columns = set(base_columns)  # Track columns already included
-    
-    for sidecar_name in existing_sidecars:
-        cfg = sidecars_config.get(sidecar_name, {})
-        if not cfg.get('enabled', True):
-            continue
-        
-        sidecar_table = f"{schema}.{data_type}_base_{sidecar_name}"
-        alias = sidecar_name[:3]
-        
-        # Get columns and filter by view_columns config
-        db_columns = get_sidecar_table_columns(
-            data_type, sidecar_name, schema, dbname, host, port, user
-        )
-        
-        view_columns = cfg.get('view_columns', [])
-        if view_columns:
-            columns = [col for col in view_columns if col in db_columns]
-        else:
-            columns = db_columns
-        
-        # Exclude already-seen columns (base columns + columns from previous sidecars)
-        columns = [col for col in columns if col not in seen_columns]
-        
-        for col in columns:
-            main_select_cols.append(f"{alias}.{col}")
-            seen_columns.add(col)
-        
-        main_joins.append(f"LEFT JOIN {sidecar_table} {alias} ON base.id = {alias}.id")
-    
-    if main_joins:
-        join_clause = '\n        '.join(main_joins)
-        main_view_query = f"""
-            CREATE OR REPLACE VIEW {main_view_name} AS
-            SELECT {', '.join(main_select_cols)}
-            FROM {base_table} base
-            {join_clause};
-        """
-        
-        print(f"[VIEW] Creating main view: {main_view_name}")
-        execute_query(main_view_query, dbname, host, port, user)
-        print(f"[VIEW] Main view created: {main_view_name}")

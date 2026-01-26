@@ -430,8 +430,9 @@ class TransformerClassifier:
         self.stride = classifier_config.get('stride', 64)
         self.top_k = classifier_config.get('top_k', 2)
         
-        # Output field control: minimal_fields removes dataset and body columns
-        self.minimal_fields = classifier_config.get('minimal_fields', global_config.get('minimal_fields', False))
+        # Output field control: fields list specifies which input columns to keep
+        # If not specified or empty, keeps all input columns
+        self.fields = classifier_config.get('fields', global_config.get('fields', None))
         
         # Store global config for text column lookup
         self.global_config = global_config
@@ -797,11 +798,14 @@ class TransformerClassifier:
                     df_out = df_out.with_columns(pl.Series(label_name, []))
                 df_out = df_out.drop(["_text", "_lang_ok", "_text_ok"])
             
-            # Drop dataset and body columns if minimal_fields is enabled
-            if self.minimal_fields:
-                cols_to_drop = [c for c in ['dataset', 'body'] if c in df_out.columns]
-                if cols_to_drop:
-                    df_out = df_out.drop(cols_to_drop)
+            # Filter to specified fields if configured
+            # Keep: specified fields + classifier output columns (id2label values)
+            if self.fields:
+                classifier_cols = set(id2label.values())
+                # Always keep 'id' for joining, plus specified fields and classifier outputs
+                cols_to_keep = ['id'] + [f for f in self.fields if f in df_out.columns and f != 'id']
+                cols_to_keep += [c for c in df_out.columns if c in classifier_cols]
+                df_out = df_out.select(cols_to_keep)
             
             # Write batch to temp file
             if first_batch:

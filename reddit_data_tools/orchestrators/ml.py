@@ -186,7 +186,7 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
             'lang2_fallback': get_required(config, 'lang2_fallback'),
             'min_tokens': get_required(config, 'min_tokens'),
             'tokenize_workers': get_required(config, 'tokenize_workers'),
-            'minimal_fields': get_required(config, 'minimal_fields'),
+            'fields': get_optional(config, 'fields', default=None),
         })
     
     # Build list of classifiers with merged config

@@ -1,39 +1,28 @@
-# Sidecar service definitions for ML classifier outputs
+# Classifier output table definitions
 # Column types are auto-inferred from CSV data (no manual column definitions needed)
 #
-# Each sidecar maps to a classifier output directory in /data/output/
-# Tables are created as: {data_type}_base_{sidecar_name} (e.g., submissions_base_lingua)
-# Views are auto-rebuilt to join base tables with sidecars
+# Each classifier maps to an output directory in /data/output/
+# Tables are created as: {data_type}{suffix} (e.g., submissions_lingua)
 #
-# table_columns: Base table columns to include in sidecar table (empty = none, classifier cols only)
-# view_columns: Columns to include in view (empty = all table columns)
+# The full CSV file is always ingested (field selection is done in the ML profile)
+#
+# Configuration options:
+#   enabled: true/false           # Whether to process this classifier
+#   source_dir: <dir>             # Directory under /data/output/ (default: classifier name)
+#   suffix: <suffix>              # File and table suffix (e.g., '_lingua')
 
-sidecars:
+classifiers:
   lingua:
     enabled: true
-    source_dir: lingua        # Directory under /data/output/
-    suffix: "_lingua"         # File suffix pattern (e.g., RS_2024-01_lingua.csv)
-    table_columns: []         # Base columns to keep (empty = classifier columns only)
-    view_columns:             # Columns to include in view (empty = all)
-      - lang
-      - lang2
+    source_dir: lingua            # Directory under /data/output/
+    suffix: "_lingua"             # File suffix pattern (e.g., RS_2024-01_lingua.csv)
   
   # toxic_roberta:
   #   enabled: true
   #   source_dir: toxic_roberta
   #   suffix: "_toxicity_en"
-  #   table_columns:          # Include these base columns in sidecar table
-  #     - subreddit
-  #     - author
-  #   view_columns: []        # Empty = include all columns
   
   # go_emotions:
   #   enabled: true
   #   source_dir: go_emotions
   #   suffix: "_emotions"
-  #   table_columns: []
-  #   view_columns:           # Specify which emotions to include in view
-  #     - joy
-  #     - sadness
-  #     - anger
-  #     - fear

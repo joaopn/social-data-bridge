@@ -1,5 +1,5 @@
-# PostgreSQL sidecar pipeline configuration
-# Ingests ML classifier outputs into sidecar tables
+# PostgreSQL ML pipeline configuration
+# Ingests ML classifier outputs into PostgreSQL tables
 
 database:
   host: postgres             # Docker service name
@@ -14,4 +14,6 @@ processing:
     - comments
   check_duplicates: true     # Handle duplicate IDs during ingestion
   type_inference_rows: 1000  # Rows to sample for column type inference
+  use_foreign_key: true      # Add foreign key constraint to main table (submissions/comments)
+                             # Requires main table to exist. Set false for independent ingestion.
   watch_interval: 0          # Check for new files every N minutes (0 = run once)

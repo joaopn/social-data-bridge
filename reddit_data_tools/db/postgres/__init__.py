@@ -7,13 +7,10 @@ from .ingest import (
     create_index,
     table_exists,
     analyze_table,
-    rebuild_view,
-    rebuild_view_dynamic,
     ensure_database_exists,
     ensure_schema_exists,
     get_column_list,
-    ingest_sidecar_csv,
-    load_services_config,
+    ingest_classifier_csv,
 )
 
 __all__ = [
@@ -21,11 +18,8 @@ __all__ = [
     'create_index',
     'table_exists',
     'analyze_table',
-    'rebuild_view',
-    'rebuild_view_dynamic',
     'ensure_database_exists',
     'ensure_schema_exists',
     'get_column_list',
-    'ingest_sidecar_csv',
-    'load_services_config',
+    'ingest_classifier_csv',
 ]

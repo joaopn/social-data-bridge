@@ -24,7 +24,7 @@ from ..core.config import (
     ConfigurationError,
 )
 from ..db.postgres.ingest import (
-    ingest_csv, create_index, table_exists, analyze_table, rebuild_view,
+    ingest_csv, create_index, table_exists, analyze_table,
     ensure_database_exists, ensure_schema_exists
 )
 
@@ -246,12 +246,10 @@ def run_pipeline(config_dir: str = "/app/config"):
         return
     
     # Check which tables exist before processing
-    table_suffix = get_required(config, 'database', 'table_suffix')
     tables_existed_before = {}
     for data_type in data_types:
-        base_table = f"{data_type}{table_suffix}"
         tables_existed_before[data_type] = table_exists(
-            table=base_table,
+            table=data_type,
             schema=db_config['schema'],
             dbname=db_config['name'],
             host=db_config['host'],
@@ -365,7 +363,6 @@ def run_pipeline(config_dir: str = "/app/config"):
         
         t_start = time.time()
         
-        table_suffix = get_required(config, 'database', 'table_suffix')
         parallel_ingestion = get_required(config, 'processing', 'parallel_ingestion')
         check_duplicates = get_required(config, 'processing', 'check_duplicates')
         cleanup_temp = get_required(config, 'processing', 'cleanup_temp')
@@ -405,13 +402,12 @@ def run_pipeline(config_dir: str = "/app/config"):
                 for csv_path, file_id, data_type in files_list:
                     try:
                         state.mark_in_progress(file_id)
-                        base_table = f"{data_type}{table_suffix}"
                         ingest_csv(
                             csv_file=csv_path,
                             data_type=data_type,
                             dbname=db_config['name'],
                             schema=db_config['schema'],
-                            table=base_table,
+                            table=data_type,
                             host=db_config['host'],
                             port=db_config['port'],
                             user=db_config['user'],
@@ -449,13 +445,12 @@ def run_pipeline(config_dir: str = "/app/config"):
             for csv_path, file_id, data_type in files_to_ingest:
                 try:
                     state.mark_in_progress(file_id)
-                    base_table = f"{data_type}{table_suffix}"
                     ingest_csv(
                         csv_file=csv_path,
                         data_type=data_type,
                         dbname=db_config['name'],
                         schema=db_config['schema'],
-                        table=base_table,
+                        table=data_type,
                         host=db_config['host'],
                         port=db_config['port'],
                         user=db_config['user'],
@@ -487,19 +482,17 @@ def run_pipeline(config_dir: str = "/app/config"):
         print("="*60)
         
         index_config = get_required(config, 'indexes')
-        table_suffix = get_required(config, 'database', 'table_suffix')
         
         t_start = time.time()
         for data_type in data_types:
-            base_table = f"{data_type}{table_suffix}"
             index_fields = get_required(config, 'indexes', data_type)
             
-            print(f"[INDEX] Creating indexes for {base_table}: {index_fields}")
+            print(f"[INDEX] Creating indexes for {data_type}: {index_fields}")
             for field in index_fields:
                 try:
                     created = create_index(
                         field=field,
-                        table=base_table,
+                        table=data_type,
                         schema=db_config['schema'],
                         dbname=db_config['name'],
                         host=db_config['host'],
@@ -507,7 +500,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                         user=db_config['user']
                     )
                     if not created:
-                        print(f"[INDEX] Already exists: idx_{base_table}_{field}")
+                        print(f"[INDEX] Already exists: idx_{data_type}_{field}")
                 except Exception as e:
                     print(f"[INDEX] Warning: Failed to create index on {field}: {e}")
         total_timings['indexing'] = time.time() - t_start
@@ -519,15 +512,13 @@ def run_pipeline(config_dir: str = "/app/config"):
         print("="*60)
         
         t_start = time.time()
-        table_suffix = get_required(config, 'database', 'table_suffix')
         
         print("[ANALYZE] Running ANALYZE")
         
         for data_type in data_types:
-            base_table = f"{data_type}{table_suffix}"
             try:
                 analyze_table(
-                    table=base_table,
+                    table=data_type,
                     schema=db_config['schema'],
                     dbname=db_config['name'],
                     host=db_config['host'],
@@ -535,30 +526,9 @@ def run_pipeline(config_dir: str = "/app/config"):
                     user=db_config['user']
                 )
             except Exception as e:
-                print(f"[ANALYZE] Warning: Failed to analyze {base_table}: {e}")
+                print(f"[ANALYZE] Warning: Failed to analyze {data_type}: {e}")
         
         total_timings['analyze'] = time.time() - t_start
-    
-    # Create/rebuild views
-    if success_count > 0:
-        print("\n" + "="*60)
-        print("CREATING VIEWS")
-        print("="*60)
-        
-        postgres_config_dir = f"{config_dir}/postgres"
-        for data_type in data_types:
-            try:
-                rebuild_view(
-                    data_type=data_type,
-                    schema=db_config['schema'],
-                    dbname=db_config['name'],
-                    host=db_config['host'],
-                    port=db_config['port'],
-                    user=db_config['user'],
-                    config_dir=postgres_config_dir
-                )
-            except Exception as e:
-                print(f"[VIEW] Warning: Failed to create view for {data_type}: {e}")
     
     # Final summary
     print("\n" + "="*60)

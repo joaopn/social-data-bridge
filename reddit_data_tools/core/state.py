@@ -86,9 +86,9 @@ class PipelineState:
                         return curr.fetchone() is not None
                     
                     # Check submissions table
-                    if table_exists('submissions_base'):
+                    if table_exists('submissions'):
                         curr.execute(f"""
-                            SELECT DISTINCT dataset FROM {schema}.submissions_base ORDER BY dataset
+                            SELECT DISTINCT dataset FROM {schema}.submissions ORDER BY dataset
                         """)
                         for row in curr.fetchall():
                             dataset = row[0].strip()  # dataset is char(7), may have trailing space
@@ -100,9 +100,9 @@ class PipelineState:
                         print("[STATE] Submissions table does not exist yet")
                     
                     # Check comments table
-                    if table_exists('comments_base'):
+                    if table_exists('comments'):
                         curr.execute(f"""
-                            SELECT DISTINCT dataset FROM {schema}.comments_base ORDER BY dataset
+                            SELECT DISTINCT dataset FROM {schema}.comments ORDER BY dataset
                         """)
                         comments_count = 0
                         for row in curr.fetchall():
