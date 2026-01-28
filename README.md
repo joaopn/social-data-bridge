@@ -337,14 +337,33 @@ database:
   schema: reddit
 
 processing:
-  check_duplicates: true  # Handle duplicate IDs (upsert)
-  create_indexes: true    # Create indexes after ingestion
-  parallel_ingestion: true # Ingest submissions/comments concurrently
+  check_duplicates: true    # Handle duplicate IDs (upsert)
+  create_indexes: true      # Create indexes after ingestion
+  parallel_ingestion: true  # Ingest submissions/comments concurrently
+  fast_initial_load: false  # Use optimized bulk load for initial ingestion (see below)
 
 indexes:
   submissions: [author, subreddit, domain, created_utc]
   comments: [author, subreddit, link_id, created_utc]
 ```
+
+#### Fast Initial Load
+
+When `fast_initial_load: true`, the pipeline uses an optimized bulk ingestion strategy for initial table creation:
+
+1. Creates UNLOGGED table (no WAL, faster writes)
+2. Blind COPY of all CSV files (no duplicate checking during load)
+3. In-place deduplication using ROW_NUMBER() window function
+4. Adds PRIMARY KEY constraint
+5. VACUUM FREEZE to update visibility maps
+6. Converts table to LOGGED (triggers WAL flush for durability)
+
+**Performance**: Significantly faster than the standard ON CONFLICT approach for large initial loads (billions of rows).
+
+**Limitations**:
+- **Recovery not possible**: If the process fails mid-load (crash, kill, OOM), the database will be in an inconsistent state and must be fully recreated. Drop the tables and restart from scratch.
+- **Only for initial load**: Once tables exist, subsequent ingestions always use the standard ON CONFLICT path regardless of this setting.
+- **Server tuning recommended**: For optimal performance, pre-configure `max_wal_size` (20GB+) and `checkpoint_timeout` (30min+) in `postgresql.conf` before running large bulk loads.
 
 #### config/postgres_ml/pipeline.yaml
 

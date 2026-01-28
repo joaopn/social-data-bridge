@@ -11,6 +11,11 @@ from .ingest import (
     ensure_schema_exists,
     get_column_list,
     ingest_classifier_csv,
+    # Fast initial load functions
+    create_fast_load_table,
+    fast_ingest_csv,
+    delete_duplicates,
+    finalize_fast_load_table,
 )
 
 __all__ = [
@@ -22,4 +27,9 @@ __all__ = [
     'ensure_schema_exists',
     'get_column_list',
     'ingest_classifier_csv',
+    # Fast initial load functions
+    'create_fast_load_table',
+    'fast_ingest_csv',
+    'delete_duplicates',
+    'finalize_fast_load_table',
 ]

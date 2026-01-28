@@ -25,7 +25,9 @@ from ..core.config import (
 )
 from ..db.postgres.ingest import (
     ingest_csv, create_index, table_exists, analyze_table,
-    ensure_database_exists, ensure_schema_exists
+    ensure_database_exists, ensure_schema_exists,
+    # Fast initial load functions
+    create_fast_load_table, fast_ingest_csv, delete_duplicates, finalize_fast_load_table
 )
 from .ml import detect_parsed_csv_files
 
@@ -474,6 +476,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         parallel_ingestion = get_required(config, 'processing', 'parallel_ingestion')
         check_duplicates = get_required(config, 'processing', 'check_duplicates')
         cleanup_temp = get_required(config, 'processing', 'cleanup_temp')
+        fast_initial_load = get_optional(config, 'processing', 'fast_initial_load', default=False)
         shared_config_dir = f"{config_dir}/shared"
         
         # Ensure database and schema exist
@@ -492,22 +495,174 @@ def run_pipeline(config_dir: str = "/app/config"):
         )
         
         data_types_with_files = set(dt for _, _, dt in files_to_ingest)
-        use_parallel_ingestion = (
-            parallel_ingestion
-            and 'submissions' in data_types_with_files
-            and 'comments' in data_types_with_files
-        )
         
-        if use_parallel_ingestion:
-            print("[INGEST] Parallel ingestion enabled")
+        # Determine which data types can use fast initial load
+        # Fast load only applies to data types where table doesn't exist yet
+        fast_load_types = set()
+        standard_load_types = set()
+        
+        if fast_initial_load:
+            for dt in data_types_with_files:
+                if not tables_existed_before.get(dt, True):
+                    fast_load_types.add(dt)
+                else:
+                    standard_load_types.add(dt)
             
-            submissions_csvs = [(p, fid, dt) for p, fid, dt in files_to_ingest if dt == 'submissions']
-            comments_csvs = [(p, fid, dt) for p, fid, dt in files_to_ingest if dt == 'comments']
+            if fast_load_types:
+                print(f"[INGEST] Fast initial load enabled for: {', '.join(sorted(fast_load_types))}")
+                print("[INGEST] WARNING: If process fails, database must be fully recreated!")
+            if standard_load_types:
+                print(f"[INGEST] Standard ON CONFLICT load for: {', '.join(sorted(standard_load_types))}")
+        else:
+            standard_load_types = data_types_with_files
+        
+        # =====================================================================
+        # FAST INITIAL LOAD PATH
+        # =====================================================================
+        if fast_load_types:
+            for data_type in sorted(fast_load_types):
+                type_files = [(p, fid, dt) for p, fid, dt in files_to_ingest if dt == data_type]
+                if not type_files:
+                    continue
+                
+                print(f"\n[FAST-LOAD] Processing {data_type}: {len(type_files)} files")
+                
+                # Get first CSV to determine lingua columns
+                first_csv = type_files[0][0]
+                
+                try:
+                    # Step 1: Create UNLOGGED table (no PK, no indexes)
+                    create_fast_load_table(
+                        data_type=data_type,
+                        dbname=db_config['name'],
+                        schema=db_config['schema'],
+                        table=data_type,
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user'],
+                        config_dir=shared_config_dir,
+                        csv_file=first_csv
+                    )
+                    
+                    # Step 2: Blind COPY all files
+                    for csv_path, file_id, dt in type_files:
+                        try:
+                            state.mark_in_progress(file_id)
+                            fast_ingest_csv(
+                                csv_file=csv_path,
+                                data_type=data_type,
+                                dbname=db_config['name'],
+                                schema=db_config['schema'],
+                                table=data_type,
+                                host=db_config['host'],
+                                port=db_config['port'],
+                                user=db_config['user'],
+                                config_dir=shared_config_dir
+                            )
+                            state.mark_completed(file_id)
+                            success_count += 1
+                            
+                            if cleanup_temp and os.path.exists(csv_path):
+                                os.remove(csv_path)
+                                print(f"[CLEANUP] Removed: {Path(csv_path).name}")
+                        except Exception as e:
+                            print(f"[FAST-LOAD] Error during COPY {file_id}: {e}")
+                            state.mark_failed(file_id, f"Fast ingestion failed: {e}")
+                            fail_count += 1
+                            raise  # Abort fast load on any failure
+                    
+                    # Step 3: Delete duplicates
+                    delete_duplicates(
+                        table=data_type,
+                        schema=db_config['schema'],
+                        dbname=db_config['name'],
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user']
+                    )
+                    
+                    # Step 4: Finalize (add PK, VACUUM FREEZE, SET LOGGED)
+                    finalize_fast_load_table(
+                        table=data_type,
+                        schema=db_config['schema'],
+                        dbname=db_config['name'],
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user']
+                    )
+                    
+                    print(f"[FAST-LOAD] Completed {data_type}")
+                    
+                except Exception as e:
+                    print(f"[FAST-LOAD] CRITICAL ERROR for {data_type}: {e}")
+                    print("[FAST-LOAD] Database may be in inconsistent state. Manual recovery required.")
+                    raise
+        
+        # =====================================================================
+        # STANDARD ON CONFLICT PATH
+        # =====================================================================
+        if standard_load_types:
+            standard_files = [(p, fid, dt) for p, fid, dt in files_to_ingest if dt in standard_load_types]
             
-            def ingest_data_type_files(files_list):
-                local_success = 0
-                local_fail = 0
-                for csv_path, file_id, data_type in files_list:
+            use_parallel_ingestion = (
+                parallel_ingestion
+                and 'submissions' in standard_load_types
+                and 'comments' in standard_load_types
+            )
+            
+            if use_parallel_ingestion:
+                print("[INGEST] Parallel ingestion enabled")
+                
+                submissions_csvs = [(p, fid, dt) for p, fid, dt in standard_files if dt == 'submissions']
+                comments_csvs = [(p, fid, dt) for p, fid, dt in standard_files if dt == 'comments']
+                
+                def ingest_data_type_files(files_list):
+                    local_success = 0
+                    local_fail = 0
+                    for csv_path, file_id, data_type in files_list:
+                        try:
+                            state.mark_in_progress(file_id)
+                            ingest_csv(
+                                csv_file=csv_path,
+                                data_type=data_type,
+                                dbname=db_config['name'],
+                                schema=db_config['schema'],
+                                table=data_type,
+                                host=db_config['host'],
+                                port=db_config['port'],
+                                user=db_config['user'],
+                                check_duplicates=check_duplicates,
+                                create_indexes=False,
+                                config_dir=shared_config_dir
+                            )
+                            
+                            state.mark_completed(file_id)
+                            local_success += 1
+                            
+                            if cleanup_temp and os.path.exists(csv_path):
+                                os.remove(csv_path)
+                                print(f"[CLEANUP] Removed: {Path(csv_path).name}")
+                                    
+                        except Exception as e:
+                            print(f"[INGEST] Error ingesting {file_id}: {e}")
+                            state.mark_failed(file_id, f"Ingestion failed: {e}")
+                            local_fail += 1
+                            if cleanup_temp and os.path.exists(csv_path):
+                                os.remove(csv_path)
+                    
+                    return local_success, local_fail
+                
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    future_submissions = executor.submit(ingest_data_type_files, submissions_csvs)
+                    future_comments = executor.submit(ingest_data_type_files, comments_csvs)
+                    
+                    sub_success, sub_fail = future_submissions.result()
+                    com_success, com_fail = future_comments.result()
+                    
+                    success_count += sub_success + com_success
+                    fail_count += sub_fail + com_fail
+            else:
+                for csv_path, file_id, data_type in standard_files:
                     try:
                         state.mark_in_progress(file_id)
                         ingest_csv(
@@ -525,60 +680,17 @@ def run_pipeline(config_dir: str = "/app/config"):
                         )
                         
                         state.mark_completed(file_id)
-                        local_success += 1
+                        success_count += 1
                         
                         if cleanup_temp and os.path.exists(csv_path):
                             os.remove(csv_path)
                             print(f"[CLEANUP] Removed: {Path(csv_path).name}")
-                                
                     except Exception as e:
                         print(f"[INGEST] Error ingesting {file_id}: {e}")
                         state.mark_failed(file_id, f"Ingestion failed: {e}")
-                        local_fail += 1
+                        fail_count += 1
                         if cleanup_temp and os.path.exists(csv_path):
                             os.remove(csv_path)
-                
-                return local_success, local_fail
-            
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_submissions = executor.submit(ingest_data_type_files, submissions_csvs)
-                future_comments = executor.submit(ingest_data_type_files, comments_csvs)
-                
-                sub_success, sub_fail = future_submissions.result()
-                com_success, com_fail = future_comments.result()
-                
-                success_count = sub_success + com_success
-                fail_count += sub_fail + com_fail
-        else:
-            for csv_path, file_id, data_type in files_to_ingest:
-                try:
-                    state.mark_in_progress(file_id)
-                    ingest_csv(
-                        csv_file=csv_path,
-                        data_type=data_type,
-                        dbname=db_config['name'],
-                        schema=db_config['schema'],
-                        table=data_type,
-                        host=db_config['host'],
-                        port=db_config['port'],
-                        user=db_config['user'],
-                        check_duplicates=check_duplicates,
-                        create_indexes=False,
-                        config_dir=shared_config_dir
-                    )
-                    
-                    state.mark_completed(file_id)
-                    success_count += 1
-                    
-                    if cleanup_temp and os.path.exists(csv_path):
-                        os.remove(csv_path)
-                        print(f"[CLEANUP] Removed: {Path(csv_path).name}")
-                except Exception as e:
-                    print(f"[INGEST] Error ingesting {file_id}: {e}")
-                    state.mark_failed(file_id, f"Ingestion failed: {e}")
-                    fail_count += 1
-                    if cleanup_temp and os.path.exists(csv_path):
-                        os.remove(csv_path)
         
         total_timings['ingestion'] = time.time() - t_start
     

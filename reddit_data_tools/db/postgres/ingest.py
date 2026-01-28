@@ -96,7 +96,9 @@ def get_create_table_query(
     schema: str, 
     table: str,
     config_dir: str,
-    csv_file: str = None
+    csv_file: str = None,
+    unlogged: bool = False,
+    include_pk: bool = True
 ) -> str:
     """
     Generate CREATE TABLE query dynamically from YAML configuration.
@@ -110,6 +112,8 @@ def get_create_table_query(
         table: Table name
         config_dir: Directory containing config files
         csv_file: Optional CSV file path - if contains 'lingua', lingua columns are included
+        unlogged: If True, create UNLOGGED table (faster, no WAL, no crash recovery)
+        include_pk: If True, include PRIMARY KEY on id column
         
     Returns:
         CREATE TABLE SQL query
@@ -131,7 +135,13 @@ def get_create_table_query(
     # Build column definitions
     col_defs = []
     for col in columns:
-        if col in MANDATORY_FIELD_SQL:
+        if col == 'id':
+            # Handle id column with optional PRIMARY KEY
+            if include_pk:
+                col_defs.append(f"    {col} {MANDATORY_FIELD_SQL[col]}")
+            else:
+                col_defs.append(f"    {col} character varying(7)")
+        elif col in MANDATORY_FIELD_SQL:
             col_defs.append(f"    {col} {MANDATORY_FIELD_SQL[col]}")
         elif col in field_types:
             sql_type = yaml_type_to_sql(field_types[col])
@@ -142,8 +152,11 @@ def get_create_table_query(
     
     columns_sql = ",\n".join(col_defs)
     
+    # Build CREATE statement
+    create_type = "UNLOGGED TABLE" if unlogged else "TABLE"
+    
     return f"""
-        CREATE TABLE IF NOT EXISTS {full_table}
+        CREATE {create_type} IF NOT EXISTS {full_table}
         (
 {columns_sql}
         );"""
@@ -310,6 +323,186 @@ def analyze_table(
     print(f"[ANALYZE] ANALYZE complete: {full_table}")
 
 
+# =============================================================================
+# Fast Initial Load Functions
+# =============================================================================
+
+def delete_duplicates(
+    table: str,
+    schema: str,
+    dbname: str,
+    host: str = '127.0.0.1',
+    port: int = 5432,
+    user: str = 'postgres'
+) -> int:
+    """
+    Delete duplicate rows keeping the one with highest retrieved_utc per id.
+    
+    Uses ctid + ROW_NUMBER() window function. No temporary index needed -
+    PostgreSQL's external merge sort handles this efficiently for rare duplicates.
+    
+    Args:
+        table: Table name
+        schema: Schema name
+        dbname: Database name
+        host: Database host
+        port: Database port
+        user: Database user
+        
+    Returns:
+        Number of rows deleted
+    """
+    full_table = f"{schema}.{table}"
+    
+    query = f"""
+        DELETE FROM {full_table}
+        WHERE ctid IN (
+            SELECT ctid FROM (
+                SELECT ctid, ROW_NUMBER() OVER (
+                    PARTITION BY id ORDER BY retrieved_utc DESC
+                ) as rn
+                FROM {full_table}
+            ) sub WHERE rn > 1
+        );
+    """
+    
+    print(f"[DEDUP] Removing duplicates from {full_table}...")
+    
+    with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
+        with conn.cursor() as curr:
+            curr.execute(query)
+            deleted_count = curr.rowcount
+            conn.commit()
+    
+    print(f"[DEDUP] Deleted {deleted_count} duplicate rows from {full_table}")
+    return deleted_count
+
+
+def finalize_fast_load_table(
+    table: str,
+    schema: str,
+    dbname: str,
+    host: str = '127.0.0.1',
+    port: int = 5432,
+    user: str = 'postgres'
+):
+    """
+    Finalize table after fast initial load: add PK, VACUUM FREEZE, SET LOGGED.
+    
+    Steps:
+    1. ADD PRIMARY KEY (id)
+    2. VACUUM FREEZE (mark all tuples as frozen, update visibility map)
+    3. SET LOGGED (ensure durability - triggers full WAL write)
+    
+    Args:
+        table: Table name
+        schema: Schema name
+        dbname: Database name
+        host: Database host
+        port: Database port
+        user: Database user
+    """
+    full_table = f"{schema}.{table}"
+    
+    # Add PRIMARY KEY
+    print(f"[FINALIZE] Adding PRIMARY KEY to {full_table}...")
+    add_pk_query = f"ALTER TABLE {full_table} ADD PRIMARY KEY (id);"
+    
+    with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
+        with conn.cursor() as curr:
+            curr.execute(add_pk_query)
+            conn.commit()
+    print(f"[FINALIZE] PRIMARY KEY added to {full_table}")
+    
+    # VACUUM FREEZE (requires autocommit)
+    print(f"[FINALIZE] Running VACUUM FREEZE on {full_table}...")
+    with psycopg.connect(dbname=dbname, user=user, host=host, port=port, autocommit=True) as conn:
+        with conn.cursor() as curr:
+            curr.execute(f"VACUUM FREEZE {full_table}")
+    print(f"[FINALIZE] VACUUM FREEZE complete on {full_table}")
+    
+    # SET LOGGED (ensure durability)
+    print(f"[FINALIZE] Setting table to LOGGED (WAL flush)...")
+    set_logged_query = f"ALTER TABLE {full_table} SET LOGGED;"
+    
+    with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
+        with conn.cursor() as curr:
+            curr.execute(set_logged_query)
+            conn.commit()
+    print(f"[FINALIZE] Table {full_table} is now LOGGED and durable")
+
+
+def fast_ingest_csv(
+    csv_file: str,
+    data_type: str,
+    dbname: str,
+    schema: str,
+    table: str,
+    host: str,
+    port: int,
+    user: str,
+    config_dir: str
+):
+    """
+    Fast ingest a single CSV file using blind COPY (no duplicate checking).
+    
+    Part of fast initial load - just appends data to existing UNLOGGED table.
+    Deduplication happens after all files are loaded.
+    
+    Args:
+        csv_file: Path to the CSV file
+        data_type: 'submissions' or 'comments'
+        dbname: Database name
+        schema: Schema name
+        table: Table name
+        host: Database host
+        port: Database port
+        user: Database user
+        config_dir: Directory containing YAML configuration files
+    """
+    print(f"[FAST-INGEST] COPY: {csv_file}")
+    
+    # Use existing get_ingest_query with check_duplicates=False for blind COPY
+    copy_query = get_ingest_query(data_type, schema, table, check_duplicates=False, config_dir=config_dir, csv_file=csv_file)
+    execute_query(copy_query, dbname, host, port, user, args=[csv_file])
+
+
+def create_fast_load_table(
+    data_type: str,
+    dbname: str,
+    schema: str,
+    table: str,
+    host: str,
+    port: int,
+    user: str,
+    config_dir: str,
+    csv_file: str = None
+):
+    """
+    Create UNLOGGED table for fast initial load (no PK, no indexes).
+    
+    Args:
+        data_type: 'submissions' or 'comments'
+        dbname: Database name
+        schema: Schema name
+        table: Table name
+        host: Database host
+        port: Database port
+        user: Database user
+        config_dir: Directory containing YAML configuration files
+        csv_file: Optional CSV file path for lingua column detection
+    """
+    print(f"[FAST-LOAD] Creating UNLOGGED table {schema}.{table} (no PK)...")
+    
+    # Ensure database and schema exist
+    ensure_database_exists(dbname, host, port, user)
+    ensure_schema_exists(schema, dbname, host, port, user)
+    
+    # Use existing get_create_table_query with unlogged=True, include_pk=False
+    create_query = get_create_table_query(data_type, schema, table, config_dir, csv_file, unlogged=True, include_pk=False)
+    execute_query(create_query, dbname, host, port, user)
+    
+    print(f"[FAST-LOAD] Created UNLOGGED table {schema}.{table}")
 
 
 def create_index(
