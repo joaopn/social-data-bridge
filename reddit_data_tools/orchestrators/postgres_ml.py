@@ -7,6 +7,7 @@ Expects classifier output CSVs to already exist (run ml/ml_cpu profiles first).
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
@@ -139,6 +140,7 @@ def main():
     output_dir = proc_config.get('output_dir', '/data/output')
     data_types = proc_config.get('data_types', ['submissions', 'comments'])
     check_duplicates = proc_config.get('check_duplicates', True)
+    parallel_ingestion = proc_config.get('parallel_ingestion', True)
     type_inference_rows = proc_config.get('type_inference_rows', 1000)
     use_foreign_key = proc_config.get('use_foreign_key', True)
     fast_initial_load = proc_config.get('fast_initial_load', False)
@@ -274,16 +276,25 @@ def main():
         # =====================================================================
         # FAST INITIAL LOAD PATH (for classifier tables)
         # =====================================================================
-        for dt in sorted(fast_load_types):
-            type_files = files_by_type[dt]
-            table_name = f"{dt}{suffix}"
+        if fast_load_types:
+            use_parallel_fast_load = (
+                parallel_ingestion
+                and 'submissions' in fast_load_types
+                and 'comments' in fast_load_types
+            )
             
-            print(f"\n[{classifier_name.upper()}] Fast loading {table_name}: {len(type_files)} files")
-            
-            # Get first CSV to infer schema
-            first_csv = type_files[0][0]
-            
-            try:
+            def fast_load_classifier_type(dt):
+                """Fast load a single classifier data type. Returns (success_count, fail_count)."""
+                type_files = files_by_type[dt]
+                table_name = f"{dt}{suffix}"
+                local_success = 0
+                local_fail = 0
+                
+                print(f"\n[{classifier_name.upper()}] Fast loading {table_name}: {len(type_files)} files")
+                
+                # Get first CSV to infer schema
+                first_csv = type_files[0][0]
+                
                 # Step 1: Infer schema from CSV
                 print(f"[{classifier_name.upper()}] Inferring schema from {type_inference_rows} rows...")
                 column_list, column_types, nullable_cols = infer_classifier_schema(
@@ -320,11 +331,11 @@ def main():
                             nullable_cols=nullable_cols
                         )
                         state.mark_completed(file_id)
-                        success_count += 1
+                        local_success += 1
                     except Exception as e:
                         print(f"[{classifier_name.upper()}] ERROR during COPY {file_id}: {e}")
                         state.mark_failed(file_id, str(e))
-                        fail_count += 1
+                        local_fail += 1
                         raise  # Abort fast load on any failure
                 
                 # Step 4: Delete duplicates
@@ -352,45 +363,97 @@ def main():
                 )
                 
                 print(f"[{classifier_name.upper()}] Fast load completed for {table_name}")
+                return local_success, local_fail
+            
+            if use_parallel_fast_load:
+                print(f"[{classifier_name.upper()}] Parallel ingestion enabled (submissions + comments concurrently)")
                 
-            except Exception as e:
-                print(f"[{classifier_name.upper()}] CRITICAL ERROR for {table_name}: {e}")
-                print(f"[{classifier_name.upper()}] Table may be in inconsistent state. Manual recovery required.")
-                raise
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    future_submissions = executor.submit(fast_load_classifier_type, 'submissions')
+                    future_comments = executor.submit(fast_load_classifier_type, 'comments')
+                    
+                    try:
+                        sub_success, sub_fail = future_submissions.result()
+                        com_success, com_fail = future_comments.result()
+                        success_count += sub_success + com_success
+                        fail_count += sub_fail + com_fail
+                    except Exception as e:
+                        print(f"[{classifier_name.upper()}] CRITICAL ERROR: {e}")
+                        print(f"[{classifier_name.upper()}] Tables may be in inconsistent state. Manual recovery required.")
+                        raise
+            else:
+                for dt in sorted(fast_load_types):
+                    try:
+                        local_success, local_fail = fast_load_classifier_type(dt)
+                        success_count += local_success
+                        fail_count += local_fail
+                    except Exception as e:
+                        print(f"[{classifier_name.upper()}] CRITICAL ERROR for {dt}{suffix}: {e}")
+                        print(f"[{classifier_name.upper()}] Table may be in inconsistent state. Manual recovery required.")
+                        raise
         
         # =====================================================================
         # STANDARD ON CONFLICT PATH
         # =====================================================================
-        for dt in sorted(standard_load_types):
-            type_files = files_by_type[dt]
+        if standard_load_types:
+            use_parallel_standard = (
+                parallel_ingestion
+                and 'submissions' in standard_load_types
+                and 'comments' in standard_load_types
+            )
             
-            for filepath, file_id in type_files:
-                try:
-                    state.mark_in_progress(file_id)
+            def ingest_classifier_type_files(dt):
+                """Ingest files for a single data type. Returns (success_count, fail_count)."""
+                type_files = files_by_type[dt]
+                local_success = 0
+                local_fail = 0
+                
+                for filepath, file_id in type_files:
+                    try:
+                        state.mark_in_progress(file_id)
+                        
+                        ingest_classifier_csv(
+                            csv_file=filepath,
+                            data_type=dt,
+                            classifier_name=classifier_name,
+                            dbname=db_config['name'],
+                            schema=db_config['schema'],
+                            host=db_config['host'],
+                            port=db_config['port'],
+                            user=db_config['user'],
+                            check_duplicates=check_duplicates,
+                            type_inference_rows=type_inference_rows,
+                            column_overrides=column_overrides,
+                            use_foreign_key=use_foreign_key,
+                            suffix=suffix
+                        )
+                        
+                        state.mark_completed(file_id)
+                        local_success += 1
+                        
+                    except Exception as e:
+                        state.mark_failed(file_id, str(e))
+                        print(f"[{classifier_name.upper()}] ERROR {file_id}: {e}")
+                        local_fail += 1
+                
+                return local_success, local_fail
+            
+            if use_parallel_standard:
+                print(f"[{classifier_name.upper()}] Parallel ingestion enabled (submissions + comments concurrently)")
+                
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    future_submissions = executor.submit(ingest_classifier_type_files, 'submissions')
+                    future_comments = executor.submit(ingest_classifier_type_files, 'comments')
                     
-                    ingest_classifier_csv(
-                        csv_file=filepath,
-                        data_type=dt,
-                        classifier_name=classifier_name,
-                        dbname=db_config['name'],
-                        schema=db_config['schema'],
-                        host=db_config['host'],
-                        port=db_config['port'],
-                        user=db_config['user'],
-                        check_duplicates=check_duplicates,
-                        type_inference_rows=type_inference_rows,
-                        column_overrides=column_overrides,
-                        use_foreign_key=use_foreign_key,
-                        suffix=suffix
-                    )
-                    
-                    state.mark_completed(file_id)
-                    success_count += 1
-                    
-                except Exception as e:
-                    state.mark_failed(file_id, str(e))
-                    print(f"[{classifier_name.upper()}] ERROR {file_id}: {e}")
-                    fail_count += 1
+                    sub_success, sub_fail = future_submissions.result()
+                    com_success, com_fail = future_comments.result()
+                    success_count += sub_success + com_success
+                    fail_count += sub_fail + com_fail
+            else:
+                for dt in sorted(standard_load_types):
+                    local_success, local_fail = ingest_classifier_type_files(dt)
+                    success_count += local_success
+                    fail_count += local_fail
         
         print(f"[{classifier_name.upper()}] Completed: {success_count} success, {skip_count} skipped, {fail_count} failed")
         

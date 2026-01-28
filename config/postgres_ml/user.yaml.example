@@ -11,6 +11,7 @@
 #     port: 5432
 #   processing:
 #     type_inference_rows: 500     # Fewer rows for faster inference
+#     parallel_ingestion: true     # Ingest submissions and comments concurrently
 #     use_foreign_key: true        # Add FK constraint to main table (default: true)
 #                                  # Set false for independent ingestion without main table
 #     watch_interval: 60           # Watch mode: check every 60 minutes

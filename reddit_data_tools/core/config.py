@@ -137,7 +137,7 @@ def load_profile_config(
         'parse': ['pipeline.yaml'],
         'ml_cpu': ['pipeline.yaml', 'cpu_classifiers.yaml'],
         'ml': ['pipeline.yaml', 'gpu_classifiers.yaml'],
-        'postgres_ingest': ['pipeline.yaml', 'services.yaml'],
+        'postgres_ingest': ['pipeline.yaml'],
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
     }
     

@@ -520,83 +520,115 @@ def run_pipeline(config_dir: str = "/app/config"):
         # FAST INITIAL LOAD PATH
         # =====================================================================
         if fast_load_types:
-            for data_type in sorted(fast_load_types):
+            use_parallel_fast_load = (
+                parallel_ingestion
+                and 'submissions' in fast_load_types
+                and 'comments' in fast_load_types
+            )
+            
+            def fast_load_data_type(data_type):
+                """Fast load a single data type. Returns (success_count, fail_count)."""
                 type_files = [(p, fid, dt) for p, fid, dt in files_to_ingest if dt == data_type]
                 if not type_files:
-                    continue
+                    return 0, 0
+                
+                local_success = 0
+                local_fail = 0
                 
                 print(f"\n[FAST-LOAD] Processing {data_type}: {len(type_files)} files")
                 
                 # Get first CSV to determine lingua columns
                 first_csv = type_files[0][0]
                 
-                try:
-                    # Step 1: Create UNLOGGED table (no PK, no indexes)
-                    create_fast_load_table(
-                        data_type=data_type,
-                        dbname=db_config['name'],
-                        schema=db_config['schema'],
-                        table=data_type,
-                        host=db_config['host'],
-                        port=db_config['port'],
-                        user=db_config['user'],
-                        config_dir=shared_config_dir,
-                        csv_file=first_csv
-                    )
+                # Step 1: Create UNLOGGED table (no PK, no indexes)
+                create_fast_load_table(
+                    data_type=data_type,
+                    dbname=db_config['name'],
+                    schema=db_config['schema'],
+                    table=data_type,
+                    host=db_config['host'],
+                    port=db_config['port'],
+                    user=db_config['user'],
+                    config_dir=shared_config_dir,
+                    csv_file=first_csv
+                )
+                
+                # Step 2: Blind COPY all files
+                for csv_path, file_id, dt in type_files:
+                    try:
+                        state.mark_in_progress(file_id)
+                        fast_ingest_csv(
+                            csv_file=csv_path,
+                            data_type=data_type,
+                            dbname=db_config['name'],
+                            schema=db_config['schema'],
+                            table=data_type,
+                            host=db_config['host'],
+                            port=db_config['port'],
+                            user=db_config['user'],
+                            config_dir=shared_config_dir
+                        )
+                        state.mark_completed(file_id)
+                        local_success += 1
+                        
+                        if cleanup_temp and os.path.exists(csv_path):
+                            os.remove(csv_path)
+                            print(f"[CLEANUP] Removed: {Path(csv_path).name}")
+                    except Exception as e:
+                        print(f"[FAST-LOAD] Error during COPY {file_id}: {e}")
+                        state.mark_failed(file_id, f"Fast ingestion failed: {e}")
+                        local_fail += 1
+                        raise  # Abort fast load on any failure
+                
+                # Step 3: Delete duplicates
+                delete_duplicates(
+                    table=data_type,
+                    schema=db_config['schema'],
+                    dbname=db_config['name'],
+                    host=db_config['host'],
+                    port=db_config['port'],
+                    user=db_config['user']
+                )
+                
+                # Step 4: Finalize (add PK, VACUUM FREEZE, SET LOGGED)
+                finalize_fast_load_table(
+                    table=data_type,
+                    schema=db_config['schema'],
+                    dbname=db_config['name'],
+                    host=db_config['host'],
+                    port=db_config['port'],
+                    user=db_config['user']
+                )
+                
+                print(f"[FAST-LOAD] Completed {data_type}")
+                return local_success, local_fail
+            
+            if use_parallel_fast_load:
+                print("[FAST-LOAD] Parallel ingestion enabled (submissions + comments concurrently)")
+                
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    future_submissions = executor.submit(fast_load_data_type, 'submissions')
+                    future_comments = executor.submit(fast_load_data_type, 'comments')
                     
-                    # Step 2: Blind COPY all files
-                    for csv_path, file_id, dt in type_files:
-                        try:
-                            state.mark_in_progress(file_id)
-                            fast_ingest_csv(
-                                csv_file=csv_path,
-                                data_type=data_type,
-                                dbname=db_config['name'],
-                                schema=db_config['schema'],
-                                table=data_type,
-                                host=db_config['host'],
-                                port=db_config['port'],
-                                user=db_config['user'],
-                                config_dir=shared_config_dir
-                            )
-                            state.mark_completed(file_id)
-                            success_count += 1
-                            
-                            if cleanup_temp and os.path.exists(csv_path):
-                                os.remove(csv_path)
-                                print(f"[CLEANUP] Removed: {Path(csv_path).name}")
-                        except Exception as e:
-                            print(f"[FAST-LOAD] Error during COPY {file_id}: {e}")
-                            state.mark_failed(file_id, f"Fast ingestion failed: {e}")
-                            fail_count += 1
-                            raise  # Abort fast load on any failure
-                    
-                    # Step 3: Delete duplicates
-                    delete_duplicates(
-                        table=data_type,
-                        schema=db_config['schema'],
-                        dbname=db_config['name'],
-                        host=db_config['host'],
-                        port=db_config['port'],
-                        user=db_config['user']
-                    )
-                    
-                    # Step 4: Finalize (add PK, VACUUM FREEZE, SET LOGGED)
-                    finalize_fast_load_table(
-                        table=data_type,
-                        schema=db_config['schema'],
-                        dbname=db_config['name'],
-                        host=db_config['host'],
-                        port=db_config['port'],
-                        user=db_config['user']
-                    )
-                    
-                    print(f"[FAST-LOAD] Completed {data_type}")
-                    
-                except Exception as e:
-                    print(f"[FAST-LOAD] CRITICAL ERROR for {data_type}: {e}")
-                    print("[FAST-LOAD] Database may be in inconsistent state. Manual recovery required.")
-                    raise
+                    try:
+                        sub_success, sub_fail = future_submissions.result()
+                        com_success, com_fail = future_comments.result()
+                        success_count += sub_success + com_success
+                        fail_count += sub_fail + com_fail
+                    except Exception as e:
+                        print(f"[FAST-LOAD] CRITICAL ERROR: {e}")
+                        print("[FAST-LOAD] Database may be in inconsistent state. Manual recovery required.")
+                        raise
+            else:
+                for data_type in sorted(fast_load_types):
+                    try:
+                        local_success, local_fail = fast_load_data_type(data_type)
+                        success_count += local_success
+                        fail_count += local_fail
+                    except Exception as e:
+                        print(f"[FAST-LOAD] CRITICAL ERROR for {data_type}: {e}")
+                        print("[FAST-LOAD] Database may be in inconsistent state. Manual recovery required.")
+                        raise
         
         # =====================================================================
         # STANDARD ON CONFLICT PATH

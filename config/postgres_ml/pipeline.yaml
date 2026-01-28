@@ -13,6 +13,7 @@ processing:
     - submissions
     - comments
   check_duplicates: true     # Handle duplicate IDs during ingestion
+  parallel_ingestion: true   # If true: ingest submissions and comments concurrently
   type_inference_rows: 1000  # Rows to sample for column type inference
   use_foreign_key: true      # Add foreign key constraint to main table (submissions/comments)
                              # Requires main table to exist. Set false for independent ingestion.
