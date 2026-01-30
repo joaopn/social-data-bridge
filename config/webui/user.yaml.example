@@ -1,0 +1,38 @@
+# WebUI profile user configuration
+# Copy this file to user.yaml and uncomment/modify settings as needed.
+#
+# Structure: Each key corresponds to a config file (without .yaml extension).
+# List values fully replace the base config (no merging).
+
+# pipeline:                        # Overrides pipeline.yaml
+#   llm:
+#     provider: "openai"           # Switch to remote provider
+#     model: "gpt-4o"              # Model name
+#     api_key: "sk-..."            # Your API key
+#     timeout: 120                 # Longer timeout for complex queries
+#
+#   # For local providers (LM Studio, Ollama, etc.)
+#   # llm:
+#   #   provider: "local"
+#   #   model: "qwen2.5-coder-32b"
+#   #   port: 1234                 # LM Studio default
+#   #   # port: 11434              # Ollama default
+#
+#   librechat:
+#     port: 3080                   # Change LibreChat port
+#
+#   redash:
+#     port: 5000                   # Change Redash port
+#     query_timeout: 600           # 10 minute timeout for heavy queries
+#
+#   database:
+#     readonly_password: "my_secure_password"  # Set specific password
+
+# prompts:                         # Overrides prompts.yaml
+#   # You can customize the system prompt to add domain-specific guidance
+#   # or restrict queries to specific subreddits/time ranges
+#   system_prompt: |
+#     You are a data analyst... (your custom prompt)
+#
+#   welcome_message: |
+#     Welcome to the custom Reddit analyzer...

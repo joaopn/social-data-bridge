@@ -8,6 +8,7 @@ Profiles:
 - postgres: Run PostgreSQL database server
 - postgres_ingest: Ingest base data into PostgreSQL
 - postgres_ml: Ingest ML classifier outputs into PostgreSQL
+- webui: LibreChat + Redash for no-code database querying
 """
 
 __version__ = "1.0.0"

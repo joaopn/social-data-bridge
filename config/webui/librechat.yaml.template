@@ -1,0 +1,85 @@
+# LibreChat Configuration Template
+# This file is processed by the webui orchestrator to generate the final librechat.yaml
+# Variables in ${VARIABLE} format are replaced with values from pipeline.yaml or environment
+
+version: 1.2.1
+
+cache: true
+
+# =============================================================================
+# Registration & Authentication
+# =============================================================================
+registration:
+  socialLogins: []
+  allowedDomains: []
+
+# Disable social login and registration for single-user/local deployment
+interface:
+  endpointsMenu: true
+  modelSelect: true
+  parameters: true
+  sidePanel: true
+  presets: true
+  prompts: true
+  bookmarks: true
+  multiConvo: true
+  agents: true
+
+# =============================================================================
+# Endpoints Configuration
+# =============================================================================
+endpoints:
+  # Custom endpoint for the configured LLM provider
+  custom:
+    - name: "${LLM_ENDPOINT_NAME}"
+      apiKey: "${LLM_API_KEY}"
+      baseURL: "${LLM_BASE_URL}"
+      models:
+        default: ["${LLM_MODEL}"]
+        fetch: false
+      titleConvo: true
+      titleModel: "${LLM_MODEL}"
+      summarize: false
+      summaryModel: "${LLM_MODEL}"
+      forcePrompt: false
+      modelDisplayLabel: "${LLM_ENDPOINT_NAME}"
+      dropParams:
+        - "user"
+
+# =============================================================================
+# MCP Servers Configuration
+# =============================================================================
+# The redash-mcp server runs as a child process via stdio.
+# Environment variables are inherited from the container (set in docker-compose).
+mcpServers:
+  redash:
+    type: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@suthio/redash-mcp"
+    env:
+      # These reference container environment variables (set in docker-compose.yml)
+      REDASH_URL: "${REDASH_URL}"
+      REDASH_API_KEY: "${REDASH_API_KEY}"
+      REDASH_TIMEOUT: "${REDASH_TIMEOUT}"
+      REDASH_MAX_RESULTS: "10000"
+    timeout: 300000
+    initTimeout: 30000
+    serverInstructions: |
+      ${MCP_INSTRUCTIONS}
+
+# =============================================================================
+# Rate Limiting (disabled for local use)
+# =============================================================================
+rateLimits:
+  fileUploads:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60
+  conversationsImport:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60

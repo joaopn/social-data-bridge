@@ -9,6 +9,7 @@ A unified monorepo for large-scale processing, classification, and database inge
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
 - [Docker Profiles](#docker-profiles)
+- [WebUI (LLM Chatbot Interface)](#webui-llm-chatbot-interface)
 - [Configuration](#configuration)
   - [Environment Variables](#environment-variables)
   - [Config Directory Structure](#config-directory-structure)
@@ -188,8 +189,168 @@ docker compose --profile postgres down
 | `postgres` | Run PostgreSQL database server | `postgres:18` | None |
 | `postgres_ingest` | Ingest CSVs into PostgreSQL main tables | `Dockerfile` | Requires postgres running, parsed CSVs |
 | `postgres_ml` | Ingest ML classifier outputs into PostgreSQL | `Dockerfile` | Requires postgres running, ML outputs |
+| `webui` | LLM chatbot interface (LibreChat + Redash) | Multiple images | Requires postgres running |
 
 **Note:** GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
+
+## WebUI (LLM Chatbot Interface)
+
+The `webui` profile provides a no-code interface for querying the Reddit database using natural language. It bundles:
+
+- **[LibreChat](https://github.com/danny-avila/LibreChat)**: Chat UI and LLM orchestrator
+- **[Redash](https://redash.io/)**: SQL engine, job queue, and dashboard for query execution
+- **[redash-mcp](https://github.com/suthio/redash-mcp)**: MCP server bridging the LLM to Redash
+
+### How It Works
+
+1. User asks a question in LibreChat (e.g., "Show me trending posts in r/datascience")
+2. LLM receives the question and uses the redash-mcp tool to understand the database schema
+3. LLM constructs an optimized SQL query following best practices for TB-scale data
+4. Query is submitted to Redash, which returns a Job ID and result URL
+5. User receives a link to track progress and download CSV results in Redash
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph webuiProfile [webui profile]
+        subgraph LibreChatContainer [LibreChat Container]
+            LC[LibreChat]
+            MCP[redash-mcp via stdio]
+        end
+        RS[Redash]
+        Mongo[(MongoDB)]
+        RedashPG[(Redash PostgreSQL)]
+        Redis[(Redis)]
+    end
+    
+    subgraph external [External]
+        LLM[LLM Provider]
+        DataPG[(Data PostgreSQL)]
+    end
+    
+    User --> LC
+    LC --> LLM
+    LC --> MCP
+    MCP --> RS
+    RS --> DataPG
+    LC --> Mongo
+    RS --> RedashPG
+    RS --> Redis
+```
+
+**Note:** The redash-mcp server runs **inside** the LibreChat container as a child process (stdio transport). LibreChat spawns `npx @suthio/redash-mcp` when the MCP tools are needed.
+
+### LLM Provider Configuration
+
+The webui profile does **NOT** bundle an LLM. You must provide either:
+
+- **Local**: OpenAI-compatible server (LM Studio, Ollama, vLLM, etc.)
+- **Remote**: OpenAI, Anthropic, or OpenRouter API
+
+Configure in `config/webui/pipeline.yaml` or `config/webui/user.yaml`:
+
+```yaml
+llm:
+  provider: "local"        # Options: local, openai, anthropic, openrouter
+  model: "qwen2.5-coder"   # Model name (REQUIRED)
+  port: 1234               # For local provider (1234=LM Studio, 11434=Ollama)
+  api_key: null            # Required for remote providers
+```
+
+### Quick Start
+
+**1. Ensure postgres profile is running:**
+
+```bash
+docker compose --profile postgres up -d
+```
+
+**2. Run the setup orchestrator:**
+
+```bash
+docker compose run --rm webui-setup
+```
+
+This generates configuration files and prints detailed setup instructions.
+
+**3. Copy secrets to your `.env` file:**
+
+```bash
+cat data/webui/secrets.env >> .env
+```
+
+**4. Create the read-only database user:**
+
+```bash
+# Connect to your data PostgreSQL
+psql -h localhost -U postgres -d datasets -f data/webui/create_readonly_user.sql
+```
+
+**5. Initialize Redash database (first time only):**
+
+```bash
+docker compose run --rm redash-server create_db
+```
+
+**6. Start the webui stack:**
+
+```bash
+docker compose --profile webui up -d
+```
+
+**7. Configure Redash:**
+
+1. Open Redash at `http://localhost:5000`
+2. Create an admin user (first time)
+3. Go to **Settings → API Keys → Create** and copy the key
+4. Add to `.env`: `REDASH_API_KEY=<your-key>`
+5. Go to **Settings → Data Sources → New Data Source**
+6. Choose PostgreSQL with settings:
+   - Host: `postgres`
+   - Port: `5432`
+   - Database: `datasets`
+   - User: `redash_readonly`
+   - Password: (from `data/webui/secrets.env`)
+
+**8. Access the interfaces:**
+
+- **LibreChat**: `http://localhost:3080`
+- **Redash**: `http://localhost:5000`
+
+### Read-Only Enforcement
+
+For safety with TB-scale data, queries are restricted to read-only:
+
+1. **Database Level**: Redash connects with a read-only PostgreSQL user
+2. **System Prompt**: LLM is instructed to only generate SELECT queries
+3. **Schema**: `redash_readonly` user has SELECT-only permissions
+
+### WebUI Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `LIBRECHAT_PORT` | LibreChat web UI port | `3080` |
+| `REDASH_PORT` | Redash web UI port | `5000` |
+| `REDASH_WEB_WORKERS` | Redash web workers | `2` |
+| `REDASH_QUERY_TIMEOUT` | Query timeout (seconds) | `300` |
+| `REDASH_API_KEY` | Redash API key for MCP | *(required after setup)* |
+
+### WebUI Configuration
+
+```
+config/webui/
+├── pipeline.yaml          # LLM provider, ports, database settings
+├── prompts.yaml           # System prompts for query guidance
+├── librechat.yaml.template # LibreChat config template
+└── user.yaml.example      # Override template
+```
+
+System prompts in `prompts.yaml` guide the LLM on:
+- Database schema discovery
+- Query optimization for TB-scale data (use indexes, avoid full scans)
+- The "handoff" pattern (return Job ID + URL, don't wait)
+- Read-only enforcement
 
 ## Configuration
 
@@ -205,6 +366,8 @@ docker compose --profile postgres down
 | `DB_NAME` | PostgreSQL database name | `datasets` |
 | `DB_SCHEMA` | PostgreSQL schema name | `reddit` |
 | `POSTGRES_PORT` | PostgreSQL port exposed to host | `5432` |
+| `LIBRECHAT_PORT` | LibreChat web UI port (webui profile) | `3080` |
+| `REDASH_PORT` | Redash web UI port (webui profile) | `5000` |
 
 ### Config Directory Structure
 
@@ -225,9 +388,13 @@ config/
 │   ├── pipeline.yaml              # Main table ingestion settings
 │   ├── postgresql.conf            # PostgreSQL tuning
 │   └── pg_hba.conf                # PostgreSQL authentication
-└── postgres_ml/
-    ├── pipeline.yaml              # ML classifier ingestion settings
-    └── services.yaml              # ML classifier definitions
+├── postgres_ml/
+│   ├── pipeline.yaml              # ML classifier ingestion settings
+│   └── services.yaml              # ML classifier definitions
+└── webui/
+    ├── pipeline.yaml              # LLM provider, ports, database settings
+    ├── prompts.yaml               # System prompts for query guidance
+    └── librechat.yaml.template    # LibreChat config template
 ```
 
 #### User Configuration Overrides
@@ -593,6 +760,31 @@ Verify NVIDIA Container Toolkit is installed:
 ```bash
 docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 ```
+
+### WebUI Issues
+
+```bash
+# Check all webui services
+docker compose --profile webui ps
+docker compose --profile webui logs
+
+# Check specific services
+docker compose logs librechat
+docker compose logs redash-server
+docker compose logs redash-worker
+
+# Verify Redash API key is set
+grep REDASH_API_KEY .env
+
+# Regenerate configuration
+docker compose run --rm webui-setup
+```
+
+**Common issues:**
+
+- **"REDASH_API_KEY not set"**: Create an API key in Redash UI and add to `.env`
+- **LLM not responding**: Check your LLM provider is running and accessible from Docker (use `host.docker.internal` for local providers)
+- **Queries timing out**: Increase `REDASH_QUERY_TIMEOUT` in `.env`
 
 ## License
 

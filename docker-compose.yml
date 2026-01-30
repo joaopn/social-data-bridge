@@ -7,6 +7,7 @@
 #   postgres        - PostgreSQL database server only
 #   postgres_ingest - Base table ingestion (requires postgres running)
 #   postgres_ml     - ML classifier table ingestion (requires postgres running)
+#   webui           - LibreChat + Redash for no-code database querying
 #
 # Usage:
 #   docker compose --profile parse up
@@ -19,6 +20,12 @@
 #   docker compose --profile postgres_ml up
 #   # Postgres keeps running for queries
 #   docker compose --profile postgres down
+#
+#   # WebUI workflow: requires postgres profile running
+#   docker compose --profile postgres up -d
+#   docker compose --profile webui up -d
+#   # Access LibreChat at http://localhost:3080
+#   # Access Redash at http://localhost:5000
 
 services:
   # ==========================================================================
@@ -151,3 +158,205 @@ services:
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ${DB_DATA_PATH:-./data/database}:/data/database
       - ./config:/app/config:ro
+
+  # ==========================================================================
+  # Profile: webui - LibreChat + Redash for no-code database querying
+  # Requires: postgres profile to be running
+  # ==========================================================================
+  
+  # --------------------------------------------------------------------------
+  # WebUI Setup - One-time initialization and config generation
+  # Run this first: docker compose run --rm webui-setup
+  # --------------------------------------------------------------------------
+  webui-setup:
+    profiles: [webui_setup]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: python -m reddit_data_tools.orchestrators.webui
+    environment:
+      - PYTHONUNBUFFERED=1
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - DB_NAME=${DB_NAME:-datasets}
+      - DB_SCHEMA=${DB_SCHEMA:-reddit}
+    volumes:
+      - ./config:/app/config
+      - ./data/webui:/data/webui
+      - ${DB_DATA_PATH:-./data/database}:/data/database
+
+  # --------------------------------------------------------------------------
+  # LibreChat - Chat UI and LLM Orchestrator
+  # --------------------------------------------------------------------------
+  # NOTE: The redash-mcp server runs INSIDE this container via stdio.
+  # LibreChat spawns `npx @suthio/redash-mcp` as a child process when needed.
+  # The npm cache is persisted to avoid re-downloading the package on restart.
+  # --------------------------------------------------------------------------
+  librechat:
+    profiles: [webui]
+    image: ghcr.io/danny-avila/librechat:latest
+    restart: unless-stopped
+    ports:
+      - "${LIBRECHAT_PORT:-3080}:3080"
+    # Note: LibreChat runs as non-root user, so we use named volumes to avoid permission issues
+    user: "0:0"  # Run as root to avoid permission issues with bind mounts
+    volumes:
+      - ./config/webui/librechat.yaml:/app/librechat.yaml:ro
+      - ./data/webui/librechat-data:/app/data
+      - ./data/webui/librechat-logs:/app/logs
+      - ./data/webui/npm-cache:/root/.npm  # Cache for npx MCP packages
+    environment:
+      - HOST=0.0.0.0
+      - PORT=3080
+      - MONGO_URI=mongodb://librechat-mongo:27017/LibreChat
+      - ALLOW_REGISTRATION=true
+      - ALLOW_SOCIAL_LOGIN=false
+      - ENDPOINTS=custom
+      # LibreChat security secrets
+      - JWT_SECRET=${LIBRECHAT_JWT_SECRET}
+      - CREDS_KEY=${LIBRECHAT_CREDS_KEY}
+      - CREDS_IV=${LIBRECHAT_CREDS_IV}
+      # MCP server environment (used by npx @suthio/redash-mcp)
+      - REDASH_URL=http://redash-server:5000
+      - REDASH_API_KEY=${REDASH_API_KEY:-}
+      - REDASH_TIMEOUT=300000
+    depends_on:
+      librechat-mongo:
+        condition: service_healthy
+      redash-server:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3080/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # --------------------------------------------------------------------------
+  # MongoDB - LibreChat's Database
+  # --------------------------------------------------------------------------
+  librechat-mongo:
+    profiles: [webui]
+    image: mongo:6
+    restart: unless-stopped
+    command: mongod --quiet --logpath /dev/null
+    logging:
+      driver: "none"  # Suppress all logs
+    volumes:
+      - ./data/webui/mongodb:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Redash Server - SQL Engine Web UI and API
+  # --------------------------------------------------------------------------
+  redash-server:
+    profiles: [webui]
+    image: redash/redash:10.1.0.b50633
+    restart: unless-stopped
+    command: server
+    ports:
+      - "${REDASH_PORT:-5000}:5000"
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDASH_LOG_LEVEL: "INFO"
+      REDASH_REDIS_URL: "redis://redash-redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://postgres:postgres@redash-postgres/redash"
+      REDASH_COOKIE_SECRET: "${REDASH_COOKIE_SECRET}"
+      REDASH_SECRET_KEY: "${REDASH_SECRET_KEY}"
+      REDASH_WEB_WORKERS: "${REDASH_WEB_WORKERS:-2}"
+      REDASH_ADHOC_QUERY_TIME_LIMIT: "${REDASH_QUERY_TIMEOUT:-300}"
+    depends_on:
+      redash-postgres:
+        condition: service_healthy
+      redash-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # --------------------------------------------------------------------------
+  # Redash Worker - Background Job Processing
+  # --------------------------------------------------------------------------
+  redash-worker:
+    profiles: [webui]
+    image: redash/redash:10.1.0.b50633
+    restart: unless-stopped
+    command: worker
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDASH_LOG_LEVEL: "INFO"
+      REDASH_REDIS_URL: "redis://redash-redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://postgres:postgres@redash-postgres/redash"
+      REDASH_COOKIE_SECRET: "${REDASH_COOKIE_SECRET}"
+      REDASH_SECRET_KEY: "${REDASH_SECRET_KEY}"
+      QUEUES: "queries,scheduled_queries,celery"
+      WORKERS_COUNT: "2"
+    depends_on:
+      redash-postgres:
+        condition: service_healthy
+      redash-redis:
+        condition: service_healthy
+
+  # --------------------------------------------------------------------------
+  # Redash Scheduler - Task Scheduling
+  # --------------------------------------------------------------------------
+  redash-scheduler:
+    profiles: [webui]
+    image: redash/redash:10.1.0.b50633
+    restart: unless-stopped
+    command: scheduler
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDASH_LOG_LEVEL: "INFO"
+      REDASH_REDIS_URL: "redis://redash-redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://postgres:postgres@redash-postgres/redash"
+      REDASH_COOKIE_SECRET: "${REDASH_COOKIE_SECRET}"
+      REDASH_SECRET_KEY: "${REDASH_SECRET_KEY}"
+    depends_on:
+      redash-postgres:
+        condition: service_healthy
+      redash-redis:
+        condition: service_healthy
+
+  # --------------------------------------------------------------------------
+  # Redash PostgreSQL - Redash's Metadata Database (separate from data DB)
+  # --------------------------------------------------------------------------
+  redash-postgres:
+    profiles: [webui]
+    image: postgres:14-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: redash
+    volumes:
+      - ./data/webui/redash-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d redash"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # --------------------------------------------------------------------------
+  # Redash Redis - Job Queue
+  # --------------------------------------------------------------------------
+  redash-redis:
+    profiles: [webui]
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - ./data/webui/redash-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

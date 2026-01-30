@@ -112,7 +112,7 @@ def load_profile_config(
     List values in user.yaml fully replace base values (no merging).
     
     Args:
-        profile: Profile name ('parse', 'ml_cpu', 'ml', 'postgres_ingest', 'postgres_ml')
+        profile: Profile name ('parse', 'ml_cpu', 'ml', 'postgres_ingest', 'postgres_ml', 'webui')
         config_dir: Base configuration directory
         quiet: If True, suppress informational output
         
@@ -139,6 +139,7 @@ def load_profile_config(
         'ml': ['pipeline.yaml', 'gpu_classifiers.yaml'],
         'postgres_ingest': ['pipeline.yaml'],
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
+        'webui': ['pipeline.yaml', 'prompts.yaml'],
     }
     
     if profile not in profile_configs:

@@ -1,0 +1,58 @@
+# WebUI profile pipeline configuration
+# Provides a no-code chatbot interface for querying the Reddit database
+# via LibreChat (LLM orchestrator) + Redash (SQL engine) + redash-mcp (bridge)
+
+# =============================================================================
+# LLM Provider Configuration
+# =============================================================================
+# The webui profile does NOT bundle an LLM. You must provide either:
+# - A local OpenAI-compatible server (LM Studio, Ollama, vLLM, etc.)
+# - A remote API provider (OpenAI, Anthropic, OpenRouter)
+#
+# Common local ports:
+#   - LM Studio: 1234
+#   - Ollama: 11434
+#   - vLLM: 8000
+
+llm:
+  provider: "local"              # Options: local, openai, anthropic, openrouter
+  model: "local-model"           # Model name (REQUIRED - change this!)
+  port: 1234                     # Port for local provider (ignored for remote)
+  api_key: null                  # API key (REQUIRED for remote providers)
+  timeout: 60                    # API timeout in seconds
+  # base_url: null               # Override base URL (auto-set for local based on port)
+
+# =============================================================================
+# LibreChat Configuration
+# =============================================================================
+librechat:
+  port: 3080                     # LibreChat web UI port (exposed to host)
+  allow_registration: false      # Disable user registration (single-user mode)
+  allow_social_login: false      # Disable social login
+
+# =============================================================================
+# Redash Configuration
+# =============================================================================
+# Redash serves as the SQL engine and job queue for executing queries
+redash:
+  port: 5000                     # Redash web UI port (exposed to host)
+  secret_key: null               # Auto-generated on first run if not set
+  cookie_secret: null            # Auto-generated on first run if not set
+  web_workers: 2                 # Number of web workers
+  query_timeout: 300             # Query timeout in seconds (5 minutes default)
+
+# =============================================================================
+# Database Connection (Read-Only)
+# =============================================================================
+# Redash connects to the data PostgreSQL with read-only credentials
+# This ensures the LLM cannot modify data, only query it
+database:
+  # Connection to data database (postgres profile)
+  host: postgres                 # Docker service name (must match postgres profile)
+  port: 5432                     # Override with POSTGRES_PORT env var
+  name: datasets                 # Override with DB_NAME env var
+  schema: reddit                 # Override with DB_SCHEMA env var
+  
+  # Read-only user credentials (created on first run)
+  readonly_user: "redash_readonly"
+  readonly_password: null        # Auto-generated on first run if not set

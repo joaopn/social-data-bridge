@@ -1,0 +1,83 @@
+# LibreChat Configuration
+# Generated for reddit-data-tools webui profile
+
+version: 1.2.1
+
+cache: true
+
+# Registration & Authentication
+registration:
+  socialLogins: []
+  allowedDomains: []
+
+interface:
+  endpointsMenu: true
+  modelSelect: true
+  parameters: true
+  sidePanel: true
+  presets: true
+  prompts: true
+  bookmarks: true
+  multiConvo: true
+  agents: true
+
+# Endpoints Configuration - Custom endpoint for LLM
+endpoints:
+  custom:
+    - name: "Local LLM"
+      apiKey: "dummy-key-for-local"
+      baseURL: "http://host.docker.internal:1234/v1"
+      models:
+        default: ["local-model"]
+        fetch: false
+      titleConvo: true
+      titleModel: "local-model"
+      summarize: false
+      summaryModel: "local-model"
+      forcePrompt: false
+      modelDisplayLabel: "Local LLM"
+      dropParams:
+        - "user"
+
+# MCP Servers Configuration
+mcpServers:
+  redash:
+    type: stdio
+    command: npx
+    args:
+      - "-y"
+      - "@suthio/redash-mcp"
+    env:
+      REDASH_URL: "${REDASH_URL}"
+      REDASH_API_KEY: "${REDASH_API_KEY}"
+      REDASH_TIMEOUT: "${REDASH_TIMEOUT}"
+      REDASH_MAX_RESULTS: "10000"
+    timeout: 300000
+    initTimeout: 30000
+    serverInstructions: |
+      Redash MCP Server for Reddit Database Analysis
+      
+      Connection: Read-only access to a TB-scale PostgreSQL database with Reddit data.
+      
+      Key tables (in 'reddit' schema):
+      - submissions: Reddit posts (title, selftext, author, subreddit, score, etc.)
+      - comments: Reddit comments (body, author, subreddit, link_id, score, etc.)
+      
+      IMPORTANT:
+      - Use execute-adhoc-query for all queries (data_source_id will be configured)
+      - Queries may take minutes for large result sets
+      - Always include indexed column filters (author, subreddit, created_utc)
+      - NEVER attempt write operations (INSERT, UPDATE, DELETE, etc.)
+
+# Rate Limiting (disabled for local use)
+rateLimits:
+  fileUploads:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60
+  conversationsImport:
+    ipMax: 100
+    ipWindowInMinutes: 60
+    userMax: 50
+    userWindowInMinutes: 60
