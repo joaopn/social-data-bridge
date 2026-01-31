@@ -7,6 +7,7 @@
 #   postgres        - PostgreSQL database server only
 #   postgres_ingest - Base table ingestion (requires postgres running)
 #   postgres_ml     - ML classifier table ingestion (requires postgres running)
+#   dashboard       - Redash analytics platform (requires postgres running)
 #
 # Usage:
 #   docker compose --profile parse up
@@ -19,6 +20,12 @@
 #   docker compose --profile postgres_ml up
 #   # Postgres keeps running for queries
 #   docker compose --profile postgres down
+#
+#   # Dashboard (Redash): requires postgres running
+#   docker compose --profile dashboard up
+#   # Auto-setup: creates DB, admin user, and data source on first run
+#   # Credentials printed in logs, also in data/redash/secrets.env
+#   # Access Redash UI at http://localhost:5000
 
 services:
   # ==========================================================================
@@ -151,3 +158,267 @@ services:
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ${DB_DATA_PATH:-./data/database}:/data/database
       - ./config:/app/config:ro
+
+  # ==========================================================================
+  # Profile: dashboard - Redash analytics platform + MCP server
+  # Requires: postgres profile to be running for data queries
+  # First time setup: docker compose run --rm redash-server create_db
+  # ==========================================================================
+
+  # Init container: generates secrets only (runs first, before postgres)
+  dashboard-init:
+    profiles: [dashboard]
+    image: alpine:3.21
+    volumes:
+      - ./data/redash:/data/redash
+    command:
+      - /bin/sh
+      - -c
+      - |
+        mkdir -p /data/redash
+        SECRETS=/data/redash/secrets.env
+        
+        gensec() { cat /dev/urandom | tr -dc 'a-zA-Z0-9' | head -c 32; }
+        
+        getval() {
+          val=$$(grep "^export $$1=" "$$SECRETS" 2>/dev/null | cut -d= -f2- | head -1)
+          [ -z "$$val" ] && val=$$(gensec) && echo "[init] Generated $$1" >&2
+          echo "$$val"
+        }
+        
+        COOKIE=$$(getval REDASH_COOKIE_SECRET)
+        SECRET=$$(getval REDASH_SECRET_KEY)
+        PASS=$$(getval REDASH_ADMIN_PASSWORD)
+        
+        echo "export REDASH_COOKIE_SECRET=$$COOKIE" > "$$SECRETS"
+        echo "export REDASH_SECRET_KEY=$$SECRET" >> "$$SECRETS"
+        echo "export REDASH_ADMIN_PASSWORD=$$PASS" >> "$$SECRETS"
+        chmod 666 "$$SECRETS"
+        
+        echo "[init] Secrets ready"
+
+  # Redash metadata database (separate from main data postgres)
+  redash-postgres:
+    profiles: [dashboard]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: redash
+    volumes:
+      - ./data/redash/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d redash"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redash job queue
+  redash-redis:
+    profiles: [dashboard]
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - ./data/redash/redis:/data
+
+  # Redash web UI and API
+  redash-server:
+    profiles: [dashboard]
+    image: redash/redash:25.8.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", ". /secrets/secrets.env && exec /app/bin/docker-entrypoint \"$$@\"", "--"]
+    command: ["server"]
+    volumes:
+      - ./data/redash:/secrets:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDASH_LOG_LEVEL: "WARNING"
+      REDASH_REDIS_URL: "redis://redash-redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://postgres:postgres@redash-postgres/redash"
+      REDASH_WEB_WORKERS: "2"
+      REDASH_ADHOC_QUERY_TIME_LIMIT: "300"
+    ports:
+      - "${REDASH_PORT:-5000}:5000"
+    depends_on:
+      dashboard-init:
+        condition: service_completed_successfully
+      redash-postgres:
+        condition: service_healthy
+      redash-redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # Redash query execution workers
+  redash-worker:
+    profiles: [dashboard]
+    image: redash/redash:25.8.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", ". /secrets/secrets.env && exec /app/bin/docker-entrypoint \"$$@\"", "--"]
+    command: ["worker"]
+    volumes:
+      - ./data/redash:/secrets:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDASH_LOG_LEVEL: "WARNING"
+      REDASH_REDIS_URL: "redis://redash-redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://postgres:postgres@redash-postgres/redash"
+      QUEUES: "queries,scheduled_queries,celery"
+      WORKERS_COUNT: "2"
+    depends_on:
+      dashboard-init:
+        condition: service_completed_successfully
+      redash-postgres:
+        condition: service_healthy
+      redash-redis:
+        condition: service_started
+
+  # Redash scheduled query execution
+  redash-scheduler:
+    profiles: [dashboard]
+    image: redash/redash:25.8.0
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c", ". /secrets/secrets.env && exec /app/bin/docker-entrypoint \"$$@\"", "--"]
+    command: ["scheduler"]
+    volumes:
+      - ./data/redash:/secrets:ro
+    environment:
+      PYTHONUNBUFFERED: "1"
+      REDASH_LOG_LEVEL: "WARNING"
+      REDASH_REDIS_URL: "redis://redash-redis:6379/0"
+      REDASH_DATABASE_URL: "postgresql://postgres:postgres@redash-postgres/redash"
+    depends_on:
+      dashboard-init:
+        condition: service_completed_successfully
+      redash-postgres:
+        condition: service_healthy
+      redash-redis:
+        condition: service_started
+
+  # Auto-setup: creates DB schema, admin user, and configures data source
+  redash-setup:
+    profiles: [dashboard]
+    image: redash/redash:25.8.0
+    volumes:
+      - ./data/redash:/secrets
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        . /secrets/secrets.env
+        export REDASH_DATABASE_URL="postgresql://postgres:postgres@redash-postgres/redash"
+        export REDASH_REDIS_URL="redis://redash-redis:6379/0"
+        
+        echo "[setup] Waiting for Redash server..."
+        until curl -sf http://redash-server:5000/ping >/dev/null 2>&1; do sleep 2; done
+        
+        echo "[setup] Checking database schema..."
+        TABLES_EXIST=$$(python -c "
+        from redash import create_app
+        from redash.models import db
+        app = create_app()
+        with app.app_context():
+            result = db.engine.execute(\"SELECT COUNT(*) FROM information_schema.tables WHERE table_name='users'\").scalar()
+            print('yes' if result > 0 else 'no')
+        " 2>/dev/null || echo "no")
+        
+        if [ "$$TABLES_EXIST" = "no" ]; then
+          echo "[setup] Creating database schema..."
+          /app/bin/docker-entrypoint create_db
+        else
+          echo "[setup] Database schema already exists"
+        fi
+        
+        echo "[setup] Checking admin user..."
+        ADMIN_EXISTS=$$(python -c "
+        from redash import create_app
+        from redash.models import User
+        app = create_app()
+        with app.app_context():
+            u = User.query.filter_by(email='admin@localhost').first()
+            print('yes' if u else 'no')
+        " 2>/dev/null || echo "no")
+        
+        if [ "$$ADMIN_EXISTS" = "no" ]; then
+          echo "[setup] Creating admin user..."
+          /app/bin/docker-entrypoint manage users create_root admin@localhost Admin --password "$$REDASH_ADMIN_PASSWORD"
+        fi
+        
+        echo "[setup] Getting API key..."
+        API_KEY=$$(python -c "
+        from redash import create_app
+        from redash.models import User
+        app = create_app()
+        with app.app_context():
+            u = User.query.filter_by(email='admin@localhost').first()
+            print(u.api_key if u else '')
+        " 2>/dev/null)
+        echo "[setup] API_KEY=$$API_KEY"
+        
+        if [ -n "$$API_KEY" ]; then
+          grep -q "^export REDASH_API_KEY=" /secrets/secrets.env 2>/dev/null || \
+            echo "export REDASH_API_KEY=$$API_KEY" >> /secrets/secrets.env
+          grep -q "^export REDASH_ADMIN_EMAIL=" /secrets/secrets.env 2>/dev/null || \
+            echo "export REDASH_ADMIN_EMAIL=admin@localhost" >> /secrets/secrets.env
+          
+          echo "[setup] Checking data source..."
+          DS_RESPONSE=$$(curl -sf "http://redash-server:5000/api/data_sources" \
+            -H "Authorization: Key $$API_KEY" || echo "[]")
+          echo "[setup] Current data sources: $$DS_RESPONSE"
+          
+          if ! echo "$$DS_RESPONSE" | grep -q '"Reddit Data"'; then
+            echo "[setup] Creating PostgreSQL data source..."
+            CREATE_RESPONSE=$$(curl -sf -X POST "http://redash-server:5000/api/data_sources" \
+              -H "Authorization: Key $$API_KEY" \
+              -H "Content-Type: application/json" \
+              -d '{"name":"Reddit Data","type":"pg","options":{"host":"postgres","port":5432,"dbname":"datasets","user":"postgres","password":"postgres","schema":"reddit"}}' || echo "FAILED")
+            echo "[setup] Create response: $$CREATE_RESPONSE"
+          fi
+          
+          # Get the data source ID (query again to be sure)
+          DS_INFO=$$(curl -sf "http://redash-server:5000/api/data_sources" \
+            -H "Authorization: Key $$API_KEY" || echo "[]")
+          DS_ID=$$(echo "$$DS_INFO" | python -c "import sys,json; ds=[d for d in json.load(sys.stdin) if d.get('name')=='Reddit Data']; print(ds[0]['id'] if ds else '')" 2>/dev/null)
+          
+          if [ -n "$$DS_ID" ]; then
+            echo "[setup] Refreshing schema for data source $$DS_ID..."
+            curl -sf -X POST "http://redash-server:5000/api/data_sources/$$DS_ID/schema" \
+              -H "Authorization: Key $$API_KEY" || true
+            echo "[setup] Waiting for schema to load..."
+            sleep 5
+            # Trigger schema fetch
+            curl -sf "http://redash-server:5000/api/data_sources/$$DS_ID/schema" \
+              -H "Authorization: Key $$API_KEY" >/dev/null 2>&1 || true
+          fi
+          
+          # Set default home page to dashboards
+          echo "[setup] Setting default home page to dashboards..."
+          python -c "
+          from redash import create_app
+          from redash.models import db, Organization
+          app = create_app()
+          with app.app_context():
+              org = Organization.query.first()
+              if org:
+                  org.settings['settings'] = org.settings.get('settings', {})
+                  org.settings['settings']['home_page'] = 'dashboards'
+                  db.session.commit()
+                  print('Home page set to dashboards')
+          " 2>/dev/null || echo "[setup] Could not set home page"
+        fi
+        
+        echo "[setup] Complete!"
+        echo "  Redash UI: http://localhost:5000"
+        echo "  Login: admin@localhost / $$REDASH_ADMIN_PASSWORD"
+    environment:
+      PYTHONUNBUFFERED: "1"
+    depends_on:
+      redash-server:
+        condition: service_healthy
+      redash-redis:
+        condition: service_started
+
