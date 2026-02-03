@@ -26,6 +26,7 @@
 #   # Auto-setup: creates DB, admin user, and data source on first run
 #   # Credentials printed in logs, also in data/redash/secrets.env
 #   # Access Redash UI at http://localhost:5000
+#   # MCP server for LLM integrations at http://localhost:3100
 
 services:
   # ==========================================================================
@@ -420,4 +421,44 @@ services:
         condition: service_healthy
       redash-redis:
         condition: service_started
+
+  # Redash MCP server - exposes Redash API for LLM tools
+  # Uses @suthio/redash-mcp via supergateway to expose as HTTP/SSE
+  redash-mcp:
+    profiles: [dashboard]
+    image: node:20-alpine
+    restart: unless-stopped
+    working_dir: /app
+    volumes:
+      - ./data/redash:/secrets:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "[mcp] Waiting for secrets..."
+        while [ ! -f /secrets/secrets.env ] || ! grep -q REDASH_API_KEY /secrets/secrets.env; do
+          sleep 2
+        done
+        . /secrets/secrets.env
+        
+        echo "[mcp] Installing dependencies..."
+        npm install -g supergateway
+        
+        echo "[mcp] Starting MCP server on port 3100..."
+        echo "[mcp] REDASH_URL=http://redash-server:5000"
+        
+        export REDASH_URL="http://redash-server:5000"
+        export REDASH_TIMEOUT="300000"
+        
+        supergateway --stdio "npx -y @suthio/redash-mcp" --port 3100 --healthEndpoint /health
+    ports:
+      - "${REDASH_MCP_PORT:-3100}:3100"
+    depends_on:
+      redash-setup:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3100/health || exit 0"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
 
