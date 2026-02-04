@@ -1,5 +1,5 @@
 """
-CSV to PostgreSQL ingestion for Reddit data.
+CSV to PostgreSQL ingestion for social_data_bridge.
 """
 
 import psycopg
@@ -63,8 +63,8 @@ def get_column_list(data_type: str, config_dir: str, csv_file: str = None) -> Li
     Order: [dataset, id, retrieved_utc, ...fields from YAML..., (lingua fields if applicable)]
     
     Args:
-        data_type: 'submissions' or 'comments'
-        config_dir: Directory containing reddit_field_list.yaml
+        data_type: Data type key (e.g., 'submissions', 'comments')
+        config_dir: Directory containing field_list.yaml (platform-specific config dir)
         csv_file: Optional CSV file path - if contains 'lingua', lingua columns are appended
         
     Returns:
@@ -73,9 +73,9 @@ def get_column_list(data_type: str, config_dir: str, csv_file: str = None) -> Li
     Raises:
         ConfigurationError: If config file is missing or data type not configured
     """
-    field_list = load_yaml_file(Path(config_dir) / "reddit_field_list.yaml")
+    field_list = load_yaml_file(Path(config_dir) / "field_list.yaml")
     if field_list is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/reddit_field_list.yaml")
+        raise ConfigurationError(f"Required config file not found: {config_dir}/field_list.yaml")
     
     yaml_fields = field_list.get(data_type, [])
     if not yaml_fields:
@@ -125,9 +125,9 @@ def get_create_table_query(
     full_table = f"{schema}.{table}"
     
     # Load field types
-    field_types = load_yaml_file(Path(config_dir) / "reddit_field_types.yaml")
+    field_types = load_yaml_file(Path(config_dir) / "field_types.yaml")
     if field_types is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/reddit_field_types.yaml")
+        raise ConfigurationError(f"Required config file not found: {config_dir}/field_types.yaml")
     
     # Get column list (includes lingua columns if csv_file is a lingua file)
     columns = get_column_list(data_type, config_dir, csv_file)
@@ -320,7 +320,7 @@ def analyze_table(
         with conn.cursor() as curr:
             curr.execute(f"ANALYZE {full_table}")
     
-    print(f"[ANALYZE] ANALYZE complete: {full_table}")
+    print(f"[sdb] ANALYZE complete: {full_table}")
 
 
 # =============================================================================
@@ -375,7 +375,7 @@ def delete_duplicates(
         );
     """
     
-    print(f"[DEDUP] Removing duplicates from {full_table}...")
+    print(f"[sdb] Removing duplicates from {full_table}...")
     
     with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
         with conn.cursor() as curr:
@@ -383,7 +383,7 @@ def delete_duplicates(
             deleted_count = curr.rowcount
             conn.commit()
     
-    print(f"[DEDUP] Deleted {deleted_count} duplicate rows from {full_table}")
+    print(f"[sdb] Deleted {deleted_count} duplicate rows from {full_table}")
     return deleted_count
 
 
@@ -417,20 +417,20 @@ def finalize_fast_load_table(
     full_table = f"{schema}.{table}"
     
     # Add PRIMARY KEY
-    print(f"[FINALIZE] Adding PRIMARY KEY to {full_table}...")
+    print(f"[sdb] Adding PRIMARY KEY to {full_table}...")
     add_pk_query = f"ALTER TABLE {full_table} ADD PRIMARY KEY (id);"
     
     with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
         with conn.cursor() as curr:
             curr.execute(add_pk_query)
             conn.commit()
-    print(f"[FINALIZE] PRIMARY KEY added to {full_table}")
+    print(f"[sdb] PRIMARY KEY added to {full_table}")
     
     # Add FOREIGN KEY (if reference table provided)
     if fk_reference_table:
         ref_table = f"{schema}.{fk_reference_table}"
         if table_exists(fk_reference_table, schema, dbname, host, port, user):
-            print(f"[FINALIZE] Adding FOREIGN KEY to {full_table} -> {ref_table}...")
+            print(f"[sdb] Adding FOREIGN KEY to {full_table} -> {ref_table}...")
             fk_name = f"fk_{table}_id"
             add_fk_query = f"ALTER TABLE {full_table} ADD CONSTRAINT {fk_name} FOREIGN KEY (id) REFERENCES {ref_table}(id);"
             
@@ -438,26 +438,26 @@ def finalize_fast_load_table(
                 with conn.cursor() as curr:
                     curr.execute(add_fk_query)
                     conn.commit()
-            print(f"[FINALIZE] FOREIGN KEY added to {full_table}")
+            print(f"[sdb] FOREIGN KEY added to {full_table}")
         else:
-            print(f"[FINALIZE] Warning: Reference table {ref_table} not found, skipping FK constraint")
+            print(f"[sdb] Warning: Reference table {ref_table} not found, skipping FK constraint")
     
     # VACUUM FREEZE (requires autocommit)
-    print(f"[FINALIZE] Running VACUUM FREEZE on {full_table}...")
+    print(f"[sdb] Running VACUUM FREEZE on {full_table}...")
     with psycopg.connect(dbname=dbname, user=user, host=host, port=port, autocommit=True) as conn:
         with conn.cursor() as curr:
             curr.execute(f"VACUUM FREEZE {full_table}")
-    print(f"[FINALIZE] VACUUM FREEZE complete on {full_table}")
+    print(f"[sdb] VACUUM FREEZE complete on {full_table}")
     
     # SET LOGGED (ensure durability)
-    print(f"[FINALIZE] Setting table to LOGGED (WAL flush)...")
+    print(f"[sdb] Setting table to LOGGED (WAL flush)...")
     set_logged_query = f"ALTER TABLE {full_table} SET LOGGED;"
     
     with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
         with conn.cursor() as curr:
             curr.execute(set_logged_query)
             conn.commit()
-    print(f"[FINALIZE] Table {full_table} is now LOGGED and durable")
+    print(f"[sdb] Table {full_table} is now LOGGED and durable")
 
 
 def fast_ingest_csv(
@@ -488,7 +488,7 @@ def fast_ingest_csv(
         user: Database user
         config_dir: Directory containing YAML configuration files
     """
-    print(f"[FAST-INGEST] COPY: {csv_file}")
+    print(f"[sdb] COPY: {csv_file}")
     
     # Use existing get_ingest_query with check_duplicates=False for blind COPY
     copy_query = get_ingest_query(data_type, schema, table, check_duplicates=False, config_dir=config_dir, csv_file=csv_file)
@@ -520,7 +520,7 @@ def create_fast_load_table(
         config_dir: Directory containing YAML configuration files
         csv_file: Optional CSV file path for lingua column detection
     """
-    print(f"[FAST-LOAD] Creating UNLOGGED table {schema}.{table} (no PK)...")
+    print(f"[sdb] Creating UNLOGGED table {schema}.{table} (no PK)...")
     
     # Ensure database and schema exist
     ensure_database_exists(dbname, host, port, user)
@@ -530,7 +530,7 @@ def create_fast_load_table(
     create_query = get_create_table_query(data_type, schema, table, config_dir, csv_file, unlogged=True, include_pk=False)
     execute_query(create_query, dbname, host, port, user)
     
-    print(f"[FAST-LOAD] Created UNLOGGED table {schema}.{table}")
+    print(f"[sdb] Created UNLOGGED table {schema}.{table}")
 
 
 def create_fast_load_classifier_table(
@@ -558,7 +558,7 @@ def create_fast_load_classifier_table(
         column_list: List of column names in CSV order
         column_types: Dict of column_name -> sql_type (excludes 'id')
     """
-    print(f"[FAST-LOAD] Creating UNLOGGED table {schema}.{table_name} (no PK, no FK)...")
+    print(f"[sdb] Creating UNLOGGED table {schema}.{table_name} (no PK, no FK)...")
     
     ensure_schema_exists(schema, dbname, host, port, user)
     
@@ -568,7 +568,7 @@ def create_fast_load_classifier_table(
     )
     execute_query(create_query, dbname, host, port, user)
     
-    print(f"[FAST-LOAD] Created UNLOGGED table {schema}.{table_name}")
+    print(f"[sdb] Created UNLOGGED table {schema}.{table_name}")
 
 
 def fast_ingest_classifier_csv(
@@ -596,7 +596,7 @@ def fast_ingest_classifier_csv(
         column_list: List of column names in table order
         nullable_cols: Columns that may have empty strings to treat as NULL
     """
-    print(f"[FAST-INGEST] COPY: {csv_file}")
+    print(f"[sdb] COPY: {csv_file}")
     
     copy_query = get_classifier_ingest_query(
         table_name, schema, column_list, check_duplicates=False, nullable_cols=nullable_cols
@@ -624,14 +624,14 @@ def create_index(
     
     query = f"CREATE INDEX IF NOT EXISTS {index_name} ON {full_table} ({field});"
     
-    print(f"[INDEX] Creating: {index_name}")
+    print(f"[sdb] Creating index: {index_name}")
     
     with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
         with conn.cursor() as curr:
             try:
                 curr.execute(query)
                 conn.commit()
-                print(f"[INDEX] Created: {index_name}")
+                print(f"[sdb] Created index: {index_name}")
                 return True
             except Exception as e:
                 logging.error("Exception occurred", exc_info=True)
@@ -661,7 +661,7 @@ def ensure_database_exists(
             )
             if curr.fetchone() is None:
                 curr.execute(f"CREATE DATABASE {dbname}")
-                print(f"[DB] Created database: {dbname}")
+                print(f"[sdb] Created database: {dbname}")
 
 
 def ensure_schema_exists(
@@ -725,7 +725,7 @@ def ingest_csv(
     if table is None:
         table = data_type
     
-    print(f"[INGEST] Starting ingestion: {csv_file} -> {schema}.{table}")
+    print(f"[sdb] Starting ingestion: {csv_file} -> {schema}.{table}")
     
     # Ensure database and schema exist
     ensure_database_exists(dbname, host, port, user)
@@ -742,16 +742,14 @@ def ingest_csv(
     # Create indexes if requested
     if create_indexes:
         if index_fields is None:
-            if data_type == 'submissions':
-                index_fields = ['author', 'subreddit', 'domain', 'created_utc']
-            else:
-                index_fields = ['author', 'subreddit', 'link_id', 'created_utc']
+            # No default index fields - must be configured per platform
+            index_fields = []
         
         for field in index_fields:
             try:
                 create_index(field, table, schema, dbname, host, port, user)
             except Exception as e:
-                print(f"[INDEX] Warning: Failed to create index on {field}: {e}")
+                print(f"[sdb] Warning: Failed to create index on {field}: {e}")
 
 
 
@@ -1071,7 +1069,7 @@ def get_table_column_list(
                 curr.execute(query, (schema, table_name))
                 columns = [row[0] for row in curr.fetchall()]
     except Exception as e:
-        print(f"[INGEST] Warning: Could not query columns for {table_name}: {e}")
+        print(f"[sdb] Warning: Could not query columns for {table_name}: {e}")
     
     return columns
 
@@ -1119,7 +1117,7 @@ def ingest_classifier_csv(
     # Table name: {data_type}{suffix} (e.g., submissions_lingua)
     table_name = f"{data_type}{suffix}"
     
-    print(f"[{classifier_name.upper()}] Starting ingestion: {csv_file} -> {schema}.{table_name}")
+    print(f"[sdb] Starting ingestion: {csv_file} -> {schema}.{table_name}")
     
     # Ensure schema exists
     ensure_schema_exists(schema, dbname, host, port, user)
@@ -1127,22 +1125,22 @@ def ingest_classifier_csv(
     # Check if table exists FIRST to avoid unnecessary CSV inference
     if not table_exists(table_name, schema, dbname, host, port, user):
         # Table doesn't exist - infer schema from CSV and create it
-        print(f"[{classifier_name.upper()}] Inferring schema from {type_inference_rows} rows...")
+        print(f"[sdb] Inferring schema from {type_inference_rows} rows...")
         column_list, column_types, nullable_cols = infer_classifier_schema(
             csv_file, type_inference_rows, column_overrides
         )
         
         if nullable_cols:
-            print(f"[{classifier_name.upper()}] Columns with empty values (using FORCE_NULL): {nullable_cols}")
+            print(f"[sdb] Columns with empty values (using FORCE_NULL): {nullable_cols}")
         
-        print(f"[{classifier_name.upper()}] Inferred columns: {column_list}")
+        print(f"[sdb] Inferred columns: {column_list}")
         
         # Check if main table exists when FK is requested
         main_table_exists = table_exists(data_type, schema, dbname, host, port, user)
         actual_use_fk = use_foreign_key and main_table_exists
         
         if use_foreign_key and not main_table_exists:
-            print(f"[{classifier_name.upper()}] Warning: Main table {schema}.{data_type} not found, creating without FK")
+            print(f"[sdb] Warning: Main table {schema}.{data_type} not found, creating without FK")
         
         # Create table
         create_query = get_classifier_create_table_query(
@@ -1151,7 +1149,7 @@ def ingest_classifier_csv(
         )
         execute_query(create_query, dbname, host, port, user)
         fk_status = " (with FK)" if actual_use_fk else " (no FK)"
-        print(f"[{classifier_name.upper()}] Created table: {schema}.{table_name}{fk_status}")
+        print(f"[sdb] Created table: {schema}.{table_name}{fk_status}")
     else:
         # Table exists - get schema from database (no CSV inference needed)
         column_list = get_table_column_list(
@@ -1166,6 +1164,4 @@ def ingest_classifier_csv(
     )
     execute_query(ingest_query, dbname, host, port, user, args=[csv_file])
     
-    print(f"[{classifier_name.upper()}] Ingestion complete: {schema}.{table_name}")
-
-
+    print(f"[sdb] Ingestion complete: {schema}.{table_name}")

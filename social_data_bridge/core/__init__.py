@@ -3,7 +3,14 @@ Core modules shared across all profiles.
 """
 
 from .decompress import decompress_zst
-from .parse_csv import parse_to_csv, parse_files_parallel
+from .parser import (
+    escape_string,
+    quote_field,
+    get_nested_data,
+    enforce_data_type,
+    flatten_record,
+    write_csv_row,
+)
 from .state import PipelineState
 from .config import (
     ConfigurationError,
@@ -20,8 +27,12 @@ from .config import (
 
 __all__ = [
     'decompress_zst',
-    'parse_to_csv',
-    'parse_files_parallel',
+    'escape_string',
+    'quote_field',
+    'get_nested_data',
+    'enforce_data_type',
+    'flatten_record',
+    'write_csv_row',
     'PipelineState',
     'ConfigurationError',
     'deep_merge',

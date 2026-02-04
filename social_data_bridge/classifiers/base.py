@@ -1,5 +1,5 @@
 """
-Classifier registry and base utilities for reddit_data_tools pipeline.
+Classifier registry and base utilities for social_data_bridge pipeline.
 
 Provides:
 - CLASSIFIER_REGISTRY: Dictionary of registered custom classifiers

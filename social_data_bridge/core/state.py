@@ -1,5 +1,5 @@
 """
-State management for reddit_data_tools pipeline.
+State management for social_data_bridge pipeline.
 Tracks processed files to enable resume capability.
 Supports database recovery for postgres_ingest profile.
 """
@@ -13,7 +13,8 @@ from datetime import datetime
 class PipelineState:
     """Manages pipeline state for resume capability."""
     
-    def __init__(self, state_file: str = "/data/output/pipeline_state.json", db_config: dict = None):
+    def __init__(self, state_file: str = "/data/output/pipeline_state.json", db_config: dict = None, 
+                 data_types: list = None, file_prefixes: dict = None):
         """
         Initialize pipeline state manager.
         
@@ -21,9 +22,13 @@ class PipelineState:
             state_file: Path to state JSON file
             db_config: Optional database config dict for recovery (postgres_ingest profile)
                       Expected keys: name, user, host, port, schema
+            data_types: Optional list of data types (table names) for database recovery
+            file_prefixes: Optional dict mapping data_type -> file prefix for recovery
         """
         self.state_file = Path(state_file)
         self.db_config = db_config
+        self.data_types = data_types or []
+        self.file_prefixes = file_prefixes or {}
         self._load_state()
     
     def _load_state(self):
@@ -40,7 +45,7 @@ class PipelineState:
                         self.state = json.loads(content)
                         return
             except (json.JSONDecodeError, IOError) as e:
-                print(f"[STATE] Warning: Could not read state file ({e}), starting fresh")
+                print(f"[sdb] Warning: Could not read state file ({e}), starting fresh")
         
         # Initialize empty state
         self.state = {
@@ -56,13 +61,13 @@ class PipelineState:
         Only applicable for postgres_ingest profile. Call this after database connection is available.
         """
         if not self.db_config:
-            print("[STATE] No database config provided, cannot recover from database")
+            print("[sdb] No database config provided, cannot recover from database")
             return
         
         try:
             import psycopg
         except ImportError:
-            print("[STATE] psycopg not available, cannot recover from database")
+            print("[sdb] psycopg not available, cannot recover from database")
             return
         
         recovered = []
@@ -85,46 +90,34 @@ class PipelineState:
                         """, (schema, table_name))
                         return curr.fetchone() is not None
                     
-                    # Check submissions table
-                    if table_exists('submissions'):
-                        curr.execute(f"""
-                            SELECT DISTINCT dataset FROM {schema}.submissions ORDER BY dataset
-                        """)
-                        for row in curr.fetchall():
-                            dataset = row[0].strip()  # dataset is char(7), may have trailing space
-                            file_id = f"RS_{dataset}"
-                            if file_id not in recovered:
-                                recovered.append(file_id)
-                        print(f"[STATE] Found {len(recovered)} datasets in submissions table")
-                    else:
-                        print("[STATE] Submissions table does not exist yet")
-                    
-                    # Check comments table
-                    if table_exists('comments'):
-                        curr.execute(f"""
-                            SELECT DISTINCT dataset FROM {schema}.comments ORDER BY dataset
-                        """)
-                        comments_count = 0
-                        for row in curr.fetchall():
-                            dataset = row[0].strip()
-                            file_id = f"RC_{dataset}"
-                            if file_id not in recovered:
-                                recovered.append(file_id)
-                                comments_count += 1
-                        print(f"[STATE] Found {comments_count} datasets in comments table")
-                    else:
-                        print("[STATE] Comments table does not exist yet")
+                    # Check each configured data type table
+                    for data_type in self.data_types:
+                        if table_exists(data_type):
+                            curr.execute(f"""
+                                SELECT DISTINCT dataset FROM {schema}.{data_type} ORDER BY dataset
+                            """)
+                            type_count = 0
+                            prefix = self.file_prefixes.get(data_type, f"{data_type}_")
+                            for row in curr.fetchall():
+                                dataset = row[0].strip()  # dataset is char(7), may have trailing space
+                                file_id = f"{prefix}{dataset}"
+                                if file_id not in recovered:
+                                    recovered.append(file_id)
+                                    type_count += 1
+                            print(f"[sdb] Found {type_count} datasets in {data_type} table")
+                        else:
+                            print(f"[sdb] {data_type} table does not exist yet")
                         
         except Exception as e:
-            print(f"[STATE] Error recovering from database: {e}")
+            print(f"[sdb] Error recovering from database: {e}")
             return
         
         if recovered:
             self.state["processed"] = recovered
             self._save_state()
-            print(f"[STATE] Recovered {len(recovered)} processed files from database")
+            print(f"[sdb] Recovered {len(recovered)} processed files from database")
         else:
-            print("[STATE] No existing data found in database, starting fresh")
+            print("[sdb] No existing data found in database, starting fresh")
             self._save_state()
     
     def _save_state(self):
@@ -153,7 +146,7 @@ class PipelineState:
         """Mark a file as currently being processed."""
         self.state["in_progress"] = filename
         self._save_state()
-        print(f"[STATE] Started processing: {filename}")
+        print(f"[sdb] Started processing: {filename}")
     
     def mark_completed(self, filename: str):
         """Mark a file as successfully processed."""
@@ -161,7 +154,7 @@ class PipelineState:
             self.state["processed"].append(filename)
         self.state["in_progress"] = None
         self._save_state()
-        print(f"[STATE] Completed: {filename}")
+        print(f"[sdb] Completed: {filename}")
     
     def mark_failed(self, filename: str, error: str):
         """Mark a file as failed with error details."""
@@ -177,12 +170,12 @@ class PipelineState:
         })
         self.state["in_progress"] = None
         self._save_state()
-        print(f"[STATE] Failed: {filename} - {error}")
+        print(f"[sdb] Failed: {filename} - {error}")
     
     def clear_in_progress(self):
         """Clear the in-progress marker (e.g., after crash recovery)."""
         if self.state["in_progress"]:
-            print(f"[STATE] Clearing stale in-progress: {self.state['in_progress']}")
+            print(f"[sdb] Clearing stale in-progress: {self.state['in_progress']}")
             self.state["in_progress"] = None
             self._save_state()
     

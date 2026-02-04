@@ -1,4 +1,4 @@
-# Reddit Data Tools - CPU Base Image
+# Social Data Bridge - CPU Base Image
 # Used for: parse, ml_cpu, postgres_ingest, postgres_ml profiles
 FROM python:3.13-slim
 
@@ -19,11 +19,11 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY reddit_data_tools/ ./reddit_data_tools/
+COPY social_data_bridge/ ./social_data_bridge/
 COPY config/ ./config/
 
 # Create directories
 RUN mkdir -p /data/dumps /data/extracted /data/csv /data/output /data/database
 
 # Default command (override per service)
-CMD ["python", "-m", "reddit_data_tools.orchestrators.parse"]
+CMD ["python", "-m", "social_data_bridge.orchestrators.parse"]

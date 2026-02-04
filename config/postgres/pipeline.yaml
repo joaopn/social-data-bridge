@@ -5,13 +5,11 @@ database:
   host: postgres             # Docker service name
   port: 5432                 # Override with POSTGRES_PORT env var
   name: datasets             # Override with DB_NAME env var
-  schema: reddit             # Override with DB_SCHEMA env var
+  schema: null               # Set via platform config (db_schema) or user.yaml
   user: postgres
 
 processing:
-  data_types:                # Which data types to process
-    - submissions
-    - comments
+  data_types: []             # Override in user.yaml or set via platform config
   parallel_mode: false       # If true: extract all -> parse parallel -> ingest all
   parallel_ingestion: true   # If true: ingest submissions and comments concurrently (requires parallel_mode = true)
   parse_workers: 12          # Number of parallel workers for CSV parsing
@@ -23,16 +21,5 @@ processing:
   fast_initial_load: true   # If true: use optimized bulk load for initial ingestion (UNLOGGED table, blind COPY, post-load dedup)
 
 # Index configuration (only used if create_indexes is true)
-indexes:
-  submissions:
-    - dataset
-    - author
-    - subreddit
-    - domain
-    - created_utc
-  comments:
-    - dataset
-    - author
-    - subreddit
-    - link_id
-    - created_utc
+# Override in user.yaml with platform-specific index fields
+indexes: {}  # Example for Reddit: {submissions: [dataset, author, subreddit], comments: [dataset, author, link_id]}

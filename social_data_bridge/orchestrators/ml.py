@@ -1,5 +1,5 @@
 """
-ML profile orchestrator for reddit_data_tools.
+ML profile orchestrator for social_data_bridge.
 Handles running classifiers (Lingua for CPU, transformers for GPU).
 Expects CSV files to already exist (run parse profile first).
 """
@@ -84,22 +84,7 @@ def _process_transformer_batch(args: Tuple[List[Tuple[str, str, str]], str, Dict
 
 
 def load_config(config_dir: str = "/app/config", profile: str = "ml_cpu", quiet: bool = False) -> Dict:
-    """
-    Load ML profile configuration (both pipeline and classifiers merged).
-    
-    Loads base config files and merges user.yaml overrides if present.
-    
-    Args:
-        config_dir: Base configuration directory
-        profile: 'ml_cpu' or 'ml'
-        quiet: If True, suppress informational output
-        
-    Returns:
-        Merged configuration dictionary containing both pipeline and classifier settings
-        
-    Raises:
-        ConfigurationError: If required config is missing
-    """
+    """Load ML profile configuration."""
     if profile not in ('ml_cpu', 'ml'):
         raise ConfigurationError(f"Invalid ML profile: {profile}. Must be 'ml_cpu' or 'ml'")
     
@@ -108,89 +93,88 @@ def load_config(config_dir: str = "/app/config", profile: str = "ml_cpu", quiet:
     return config
 
 
-def detect_parsed_csv_files(csv_dir: str, data_types: List[str]) -> List[Tuple[str, str, str]]:
-    """Detect parsed CSV files in the CSV directory."""
+def detect_parsed_csv_files(csv_dir: str, data_types: List[str], file_patterns: Dict = None) -> List[Tuple[str, str, str]]:
+    """
+    Detect parsed CSV files in the CSV directory.
+    
+    Args:
+        csv_dir: Directory containing CSV files
+        data_types: List of data types to search for
+        file_patterns: Optional dict of file patterns per data type.
+                      If None, uses simple *.csv glob for each data type.
+    """
     csv_base = Path(csv_dir)
     files = []
     
-    patterns = {
-        'submissions': re.compile(r'^RS_(\d{4}-\d{2})\.csv$'),
-        'comments': re.compile(r'^RC_(\d{4}-\d{2})\.csv$')
-    }
+    # Build patterns from platform config if provided
+    patterns = {}
+    if file_patterns:
+        for data_type in data_types:
+            if data_type in file_patterns and 'csv' in file_patterns[data_type]:
+                patterns[data_type] = re.compile(file_patterns[data_type]['csv'])
     
     for data_type in data_types:
-        if data_type not in patterns:
-            continue
-            
         type_dir = csv_base / data_type
         if not type_dir.is_dir():
             continue
             
         for filepath in type_dir.glob("*.csv"):
             filename = filepath.name
-            match = patterns[data_type].match(filename)
-            if match:
+            
+            # If we have a pattern for this data type, use it
+            if data_type in patterns:
+                match = patterns[data_type].match(filename)
+                if match:
+                    file_id = filepath.stem
+                    files.append((str(filepath), file_id, data_type, filename))
+            else:
+                # No pattern - accept all CSV files in the data type directory
                 file_id = filepath.stem
                 files.append((str(filepath), file_id, data_type, filename))
     
-    type_order = {'submissions': 0, 'comments': 1}
+    type_order = {dt: i for i, dt in enumerate(data_types)}
     files.sort(key=lambda x: (type_order.get(x[2], 99), x[3]))
     return [(f[0], f[1], f[2]) for f in files]
 
 
 def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", target_classifier: Optional[str] = None):
-    """
-    Run the ML classifier pipeline.
-    
-    Args:
-        profile: 'ml_cpu' for Lingua only, 'ml' for GPU transformers
-        config_dir: Base configuration directory
-        target_classifier: If set, run only up to this classifier
-    """
-    # Load configuration (merged pipeline + classifiers with user overrides)
+    """Run the ML classifier pipeline."""
     config = load_config(config_dir=config_dir, profile=profile)
     
     data_types = get_required(config, 'processing', 'data_types')
     
-    # Get list of classifiers to run
     if profile == "ml_cpu":
         classifiers_to_run = get_required(config, 'cpu_classifiers')
     else:
         classifiers_to_run = get_required(config, 'gpu_classifiers')
     
-    # Optional: CLASSIFIER env var to run only a single classifier
     single_classifier = os.environ.get('CLASSIFIER', '')
     if single_classifier:
         if single_classifier not in classifiers_to_run:
-            print(f"[ERROR] CLASSIFIER='{single_classifier}' not in classifiers list: {classifiers_to_run}")
+            print(f"[sdb] CLASSIFIER='{single_classifier}' not in classifiers list: {classifiers_to_run}")
             sys.exit(1)
         classifiers_to_run = [single_classifier]
-        print(f"[CONFIG] Running single classifier: {single_classifier}")
+        print(f"[sdb] Running single classifier: {single_classifier}")
     
-    # Extract global settings (required - must be in config files)
-    # Common settings for both profiles
     global_config = {
         'text_columns': get_required(config, 'text_columns'),
         'remove_strings': get_required(config, 'remove_strings'),
         'remove_patterns': get_required(config, 'remove_patterns'),
     }
     
-    # CPU-specific settings (for ml_cpu profile / lingua)
     if profile == "ml_cpu":
-        # Read prefer_lingua from postgres profile to control ingest output
         try:
             postgres_config = load_profile_config('postgres_ingest', config_dir, quiet=True)
             prefer_lingua = postgres_config.get('processing', {}).get('prefer_lingua', True)
         except Exception:
-            prefer_lingua = True  # Default to true if postgres config not found
+            prefer_lingua = True
         
         global_config.update({
             'prefer_lingua': prefer_lingua,
             'fields': get_optional(config, 'fields', default=[]),
         })
-        print(f"[CONFIG] Prefer lingua: {prefer_lingua} (from postgres profile)")
+        print(f"[sdb] Prefer lingua: {prefer_lingua}")
     
-    # GPU-specific settings (only required for ml profile)
     if profile == "ml":
         global_config.update({
             'batch_size': get_required(config, 'batch_size'),
@@ -204,66 +188,58 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
             'fields': get_optional(config, 'fields', default=None),
         })
     
-    # Build list of classifiers with merged config
     enabled_classifiers = []
     for name in classifiers_to_run:
         if name not in config:
-            print(f"[WARNING] Classifier '{name}' not configured, skipping")
+            print(f"[sdb] Classifier '{name}' not configured, skipping")
             continue
         
         cfg = config[name]
         if not isinstance(cfg, dict):
             cfg = {}
         
-        # Validate classifier config
         validate_classifier_config(cfg, name, profile)
-        
-        # Merge global config with classifier-specific config
         merged_cfg = {**global_config, **cfg}
         enabled_classifiers.append((name, merged_cfg))
         
         if target_classifier and name == target_classifier:
             break
     
-    print(f"[CONFIG] Profile: {profile}")
-    print(f"[CONFIG] Data types: {data_types}")
-    print(f"[CONFIG] Classifiers: {[name for name, _ in enabled_classifiers]}")
+    print(f"[sdb] Profile: {profile}")
+    print(f"[sdb] Data types: {data_types}")
+    print(f"[sdb] Classifiers: {[name for name, _ in enabled_classifiers]}")
     
     if profile == "ml":
-        print(f"[CONFIG] GPUs: {global_config['gpu_ids']}, file_workers: {global_config['file_workers']}")
+        print(f"[sdb] GPUs: {global_config['gpu_ids']}, file_workers: {global_config['file_workers']}")
     
-    # Initialize state manager
     state_file = f"/data/output/{profile}_state.json"
     state = PipelineState(state_file=state_file)
     
     stats = state.get_stats()
-    print(f"[STATE] Previously processed: {stats['processed_count']} files")
+    print(f"[sdb] Previously processed: {stats['processed_count']} files")
     
-    # Paths
     csv_dir = "/data/csv"
     output_dir = "/data/output"
     
-    # Detect input CSV files
     print("\n" + "="*60)
     print("INPUT DETECTION")
     print("="*60)
     
     parsed_csv_files = detect_parsed_csv_files(csv_dir, data_types)
-    print(f"[DETECT] Found {len(parsed_csv_files)} CSV files in csv directory")
+    print(f"[sdb] Found {len(parsed_csv_files)} CSV files")
     
     if not parsed_csv_files:
-        print("\n[PIPELINE] No input files found. Run 'parse' profile first.")
+        print("\n[sdb] No input files found. Run 'parse' profile first.")
         return
     
     if not enabled_classifiers:
-        print("\n[PIPELINE] No classifiers enabled. Exiting.")
+        print("\n[sdb] No classifiers enabled. Exiting.")
         return
     
     total_timings = {'classifiers': 0.0}
     success_count = 0
     fail_count = 0
     
-    # Run classifiers
     print("\n" + "="*60)
     print("RUNNING CLASSIFIERS")
     print("="*60)
@@ -273,22 +249,17 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
     for classifier_name, classifier_config in enabled_classifiers:
         is_lingua = classifier_name == 'lingua'
         
-        # Set RAYON_NUM_THREADS before importing Lingua
         if is_lingua:
-            workers = classifier_config['workers']  # Required for lingua
+            workers = classifier_config['workers']
             os.environ['RAYON_NUM_THREADS'] = str(workers)
         
         classifier_output_dir = Path(output_dir) / classifier_name
-        suffix = classifier_config['suffix']  # Required - validated earlier
+        suffix = classifier_config['suffix']
         
-        # Determine input source
-        # Lingua always uses CSV input directly
-        # GPU classifiers check use_lingua setting
         if is_lingua:
             input_files = parsed_csv_files
             input_source = "csv/"
         else:
-            # GPU classifier - check if we should use lingua output
             use_lingua = classifier_config.get('use_lingua', global_config['use_lingua'])
             supported_languages = classifier_config.get('supported_languages', None)
             
@@ -296,7 +267,6 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                 input_files = parsed_csv_files
                 input_source = "csv/"
             else:
-                # Read from Lingua output - get lingua suffix from config
                 lingua_config = config.get('lingua', {})
                 lingua_suffix = lingua_config.get('suffix', '_lingua')
                 lingua_output_dir = Path(output_dir) / 'lingua'
@@ -307,7 +277,6 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                         input_files.append((str(lingua_file), file_id, data_type))
                 input_source = "output/lingua/"
         
-        # Find files to process (skip existing outputs)
         files_for_classifier = []
         skipped_count = 0
         for csv_path, file_id, data_type in input_files:
@@ -318,23 +287,22 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                 files_for_classifier.append((csv_path, file_id, data_type))
         
         if not files_for_classifier:
-            print(f"[{classifier_name.upper()}] No new files to process (skipped {skipped_count})")
+            print(f"[sdb] {classifier_name}: No new files (skipped {skipped_count})")
             continue
         
-        print(f"[{classifier_name.upper()}] {len(files_for_classifier)} files to process ({skipped_count} skipped)")
+        print(f"[sdb] {classifier_name}: {len(files_for_classifier)} files ({skipped_count} skipped)")
         
         if is_lingua:
-            # Run Lingua (required config: languages, workers, file_workers)
             languages = classifier_config['languages']
             workers = classifier_config['workers']
             file_workers = classifier_config['file_workers']
-            print(f"[LINGUA] Languages: {len(languages)}, workers: {workers}, file_workers: {file_workers}")
+            print(f"[sdb] Lingua: {len(languages)} languages, {workers} workers, {file_workers} file_workers")
             
             from ..classifiers import lingua as classifier_module
             
             if file_workers > 1 and len(files_for_classifier) > 1:
                 workers_per_file = max(1, workers // file_workers)
-                print(f"[LINGUA] Parallel: {file_workers} files × {workers_per_file} threads")
+                print(f"[sdb] Parallel: {file_workers} files × {workers_per_file} threads")
                 
                 worker_args = []
                 for csv_path, file_id, data_type in files_for_classifier:
@@ -348,7 +316,7 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                     if success:
                         success_count += 1
                     else:
-                        print(f"[LINGUA] ERROR {file_id}: {error_msg}")
+                        print(f"[sdb] Lingua ERROR {file_id}: {error_msg}")
                         fail_count += 1
             else:
                 for csv_path, file_id, data_type in files_for_classifier:
@@ -362,22 +330,18 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                         )
                         success_count += 1
                     except Exception as e:
-                        print(f"[LINGUA] ERROR {file_id}: {e}")
+                        print(f"[sdb] Lingua ERROR {file_id}: {e}")
                         fail_count += 1
         else:
-            # Run transformer classifier
             from ..classifiers.base import get_classifier
             
-            # Use classifier-specific values or fall back to global config
             gpu_ids = classifier_config.get('gpu_ids', global_config['gpu_ids'])
-            model_id = classifier_config['model']  # Required for transformer classifiers
+            model_id = classifier_config['model']
             file_workers = classifier_config.get('file_workers', global_config['file_workers'])
             
-            print(f"[{classifier_name.upper()}] Model: {model_id}")
-            print(f"[{classifier_name.upper()}] GPUs: {gpu_ids}, file_workers: {file_workers}")
+            print(f"[sdb] {classifier_name}: Model {model_id}, GPUs {gpu_ids}")
             
             if file_workers > 1 and len(files_for_classifier) > 1:
-                # Parallel file processing
                 actual_workers = min(file_workers, len(files_for_classifier))
                 
                 worker_batches: List[List[Tuple[str, str, str]]] = [[] for _ in range(actual_workers)]
@@ -399,13 +363,13 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                         if success:
                             success_count += 1
                         else:
-                            print(f"[{classifier_name.upper()}] ERROR {file_id}: {error_msg}")
+                            print(f"[sdb] {classifier_name} ERROR {file_id}: {error_msg}")
                             fail_count += 1
             else:
                 classifier_instance = get_classifier(classifier_name, classifier_config, global_config)
                 
                 if classifier_instance is None:
-                    print(f"[{classifier_name.upper()}] Error: Could not create classifier instance")
+                    print(f"[sdb] {classifier_name}: Could not create classifier")
                     fail_count += len(files_for_classifier)
                     continue
                 
@@ -420,30 +384,26 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
                         )
                         success_count += 1
                     except Exception as e:
-                        print(f"[{classifier_name.upper()}] ERROR {file_id}: {e}")
+                        print(f"[sdb] {classifier_name} ERROR {file_id}: {e}")
                         fail_count += 1
     
     total_timings['classifiers'] = time.time() - t_start
     
-    # Final summary
     print("\n" + "="*60)
     print("PIPELINE COMPLETE")
     print("="*60)
-    print(f"Successful: {success_count}")
-    print(f"Failed: {fail_count}")
-    
-    print(f"\nTiming (hours):")
-    print(f"  Classifiers: {total_timings['classifiers'] / 3600:.2f}")
+    print(f"[sdb] Successful: {success_count}")
+    print(f"[sdb] Failed: {fail_count}")
+    print(f"[sdb] Timing: {total_timings['classifiers'] / 3600:.2f} hours")
 
 
 def main():
     """Main entry point."""
     config_dir = "/app/config"
     
-    # Determine profile from PROFILE env var
     profile = os.environ.get('PROFILE', 'ml_cpu')
     if profile not in ('ml_cpu', 'ml'):
-        print(f"[ERROR] PROFILE env var must be 'ml_cpu' or 'ml', got: '{profile}'")
+        print(f"[sdb] PROFILE env var must be 'ml_cpu' or 'ml', got: '{profile}'")
         sys.exit(1)
     
     target_classifier = None
@@ -454,16 +414,16 @@ def main():
     watch_interval = get_required(config, 'processing', 'watch_interval')
     
     if watch_interval > 0:
-        print(f"[WATCH] Watch mode enabled: checking every {watch_interval} minutes")
+        print(f"[sdb] Watch mode: checking every {watch_interval} minutes")
         interval_seconds = watch_interval * 60
         while True:
             try:
                 run_pipeline(profile=profile, config_dir=config_dir, target_classifier=target_classifier)
             except Exception as e:
-                print(f"[WATCH] Pipeline error: {e}")
-                print("[WATCH] Will retry next interval...")
+                print(f"[sdb] Pipeline error: {e}")
+                print("[sdb] Will retry next interval...")
             
-            print(f"\n[WATCH] Next check in {watch_interval} minutes...")
+            print(f"\n[sdb] Next check in {watch_interval} minutes...")
             time.sleep(interval_seconds)
     else:
         run_pipeline(profile=profile, config_dir=config_dir, target_classifier=target_classifier)

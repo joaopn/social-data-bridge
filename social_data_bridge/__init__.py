@@ -1,8 +1,10 @@
 """
-Reddit Data Tools - Unified pipeline for Reddit data processing.
+Social Data Bridge - Unified pipeline for social media data processing.
+
+Supports multiple platforms via the PLATFORM environment variable.
 
 Profiles:
-- parse: Extract and parse .zst dumps to CSV
+- parse: Extract and parse data dumps to CSV
 - ml_cpu: Run Lingua language detection (CPU only)
 - ml: Run GPU-based transformer classifiers
 - postgres: Run PostgreSQL database server
@@ -10,4 +12,4 @@ Profiles:
 - postgres_ml: Ingest ML classifier outputs into PostgreSQL
 """
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

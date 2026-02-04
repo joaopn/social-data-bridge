@@ -5,17 +5,15 @@ database:
   host: postgres             # Docker service name
   port: 5432                 # Override with POSTGRES_PORT env var
   name: datasets             # Override with DB_NAME env var
-  schema: reddit             # Override with DB_SCHEMA env var
+  schema: null               # Set via platform config (db_schema) or user.yaml
   user: postgres
 
 processing:
-  data_types:                # Which data types to process
-    - submissions
-    - comments
+  data_types: []             # Override in user.yaml or set via platform config
   check_duplicates: true     # Handle duplicate IDs during ingestion
   parallel_ingestion: true   # If true: ingest submissions and comments concurrently
   type_inference_rows: 1000  # Rows to sample for column type inference
-  use_foreign_key: true      # Add foreign key constraint to main table (submissions/comments)
+  use_foreign_key: true      # Add foreign key constraint to main table
                              # Requires main table to exist. Set false for independent ingestion.
   watch_interval: 0          # Check for new files every N minutes (0 = run once)
   fast_initial_load: true   # If true: use optimized bulk load for initial ingestion (UNLOGGED table, blind COPY, post-load dedup)

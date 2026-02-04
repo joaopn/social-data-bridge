@@ -6,7 +6,7 @@
 #   - Each field name maps directly to a JSON key in the dump files
 #   - Nested fields use dot notation: e.g., "_meta.removal_type" accesses data["_meta"]["removal_type"]
 #   - The order here determines column order in CSV and database tables
-#   - Field types are defined in reddit_field_types.yaml
+#   - Field types are defined in field_types.yaml
 #
 # Mandatory fields (always included, not listed here):
 #   - dataset: derived from filename (e.g., RS_2023-01 -> "2023-01")

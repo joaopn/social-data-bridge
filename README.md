@@ -1,6 +1,6 @@
-# reddit-data-tools
+# Social Data Bridge
 
-A unified monorepo for large-scale processing, classification, and database ingestion of [Reddit data dumps](https://github.com/ArthurHeitmann/arctic_shift). Combines and extends the functionality of [classifier_shift](https://github.com/joaopn/classifier_shift) and [db_shift](https://github.com/joaopn/db_shift).
+A Docker-based toolkit for large-scale processing, classification, and database ingestion of social media data dumps. Originally designed for [Reddit data dumps](https://github.com/ArthurHeitmann/arctic_shift), now supports multiple platforms through a configurable architecture.
 
 ## Table of Contents
 
@@ -8,7 +8,13 @@ A unified monorepo for large-scale processing, classification, and database inge
 - [Architecture](#architecture)
 - [Requirements](#requirements)
 - [Quick Start](#quick-start)
+  - [Reddit Data](#reddit-data)
+  - [Generic Platform Data](#generic-platform-data)
 - [Docker Profiles](#docker-profiles)
+- [Platform Support](#platform-support)
+  - [Reddit Platform](#reddit-platform)
+  - [Generic Platform](#generic-platform)
+  - [Adding New Platforms](#adding-new-platforms)
 - [Configuration](#configuration)
   - [Environment Variables](#environment-variables)
   - [Config Directory Structure](#config-directory-structure)
@@ -21,7 +27,7 @@ A unified monorepo for large-scale processing, classification, and database inge
 - [Adding Custom Classifiers](#adding-custom-classifiers)
 - [Input / Output](#input--output)
 - [Resume Capability](#resume-capability)
-- [Removal Detection](#removal-detection)
+- [Removal Detection (Reddit)](#removal-detection-reddit)
 - [Storage Requirements](#storage-requirements)
 - [FAQ](#faq)
 - [Troubleshooting](#troubleshooting)
@@ -29,16 +35,16 @@ A unified monorepo for large-scale processing, classification, and database inge
 
 ## Overview
 
-**reddit-data-tools** is a Docker-based monorepo that provides a complete pipeline for working with Reddit monthly data dumps:
+**Social Data Bridge** is a Docker-based monorepo that provides a complete pipeline for working with large-scale social media data dumps:
 
+- **Multi-platform support** - Reddit (with specialized features) or generic JSON/CSV processing
 - **Automatic detection and decompression** of `.zst` dump files
 - **Parsing** JSON to clean CSVs with configurable field extraction
 - **Modular classification** - CPU-based (Lingua) and GPU-based (transformers)
 - **Multi-GPU parallelization** for transformer classifiers
 - **Language filtering** - optionally classify only specific languages
 - **PostgreSQL ingestion** with optimized indexing and duplicate handling
-- **Removal detection** from various content removal fields
-- **Config-based** addition of new classifiers and database backends
+- **Config-based** addition of new classifiers, platforms, and database backends
 
 ## Architecture
 
@@ -51,7 +57,7 @@ flowchart TB
     subgraph Parse [parse profile]
         Extract["zstd decompress"]
         JSON["JSON"]
-        Parser["JSON → CSV"]
+        Parser["JSON → CSV\n(Reddit or Generic)"]
         CSV["csv/"]
     end
 
@@ -116,7 +122,9 @@ flowchart TB
 
 ## Quick Start
 
-### 1. Get monthly data dumps
+### Reddit Data
+
+#### 1. Get monthly data dumps
 
 Download the Reddit data dumps from [arctic_shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md). Place files in `data/dumps/`:
 
@@ -128,9 +136,9 @@ data/dumps/
 
 The pipeline also supports the torrent directory structure (`submissions/RS_YYYY-MM.zst` and `comments/RC_YYYY-MM.zst`).
 
-### 2. Configure
+#### 2. Configure
 
-Confirm or edit paths in the `.env` file. 
+Confirm or edit paths in the `.env` file:
 
 ```bash
 # Paths
@@ -146,13 +154,14 @@ DB_SCHEMA=reddit      # database schema for the tables
 POSTGRES_PORT=5432    # PostgreSQL port to connect to
 ```
 
-There are *extensive* configuration options in `config/` (see [Configuration](#configuration)). Create a `user.yaml` file in any profile directory to override defaults (check `user.yaml.example` for templates).
-
-### 3. Run
+#### 3. Run
 
 ```bash
-# Parse only (extract and convert to CSV)
+# Parse Reddit data (default platform)
 docker compose --profile parse up
+
+# Or explicitly specify Reddit platform
+PLATFORM=reddit docker compose --profile parse up
 
 # CPU classification (Lingua language detection)
 docker compose --profile ml_cpu up
@@ -168,15 +177,85 @@ docker compose --profile postgres_ingest up
 docker compose --profile postgres_ml up
 ```
 
-This runs everything and spawns the database. To shut it down
+### Generic Platform Data
+
+For processing arbitrary JSON/NDJSON data from other sources:
+
+#### 1. Prepare your data
+
+Place your `.zst` compressed NDJSON files in `data/extracted/{data_type}/`:
 
 ```bash
-# Shuts down database
-docker compose --profile postgres down
+data/extracted/
+├── posts/
+│   ├── data_2024-01
+│   └── data_2024-02
+└── users/
+    └── users_export
 ```
 
-> **Long classification runtime:** Due to sheer size the machine learning classification can take very long to run, especially the transformers classifiers (~1 month on a cluster with 4X L40S GPUs per classifier for the entire dumps). It is recommended to obtain the preprocessed files from somewhere else. You can estimate the runtime on your system by checking here: https://github.com/joaopn/gpu_benchmark_goemotions
+> **Note:** The generic platform currently requires pre-extracted files placed directly in `data/extracted/`. Automatic `.zst` detection uses Reddit-specific filename patterns (`RS_*.zst`, `RC_*.zst`).
 
+#### 2. Configure field list and types
+
+Create `config/platforms/generic/field_list.yaml` (see `field_list.yaml.example`):
+
+```yaml
+# Define your data types and fields to extract
+posts:
+  - id
+  - created_at
+  - author
+  - content
+  - likes
+
+users:
+  - id
+  - username
+  - email
+  - profile.bio        # Nested field access
+```
+
+Update `config/platforms/generic/field_types.yaml`:
+
+```yaml
+# Field type definitions for your data
+id: text
+created_at: integer
+author: text
+content: text
+likes: integer
+username: text
+email: text
+```
+
+#### 3. Update pipeline config
+
+Edit `config/parse/pipeline.yaml` to match your data types:
+
+```yaml
+processing:
+  data_types:
+    - posts
+    - users
+```
+
+#### 4. Run with generic platform
+
+```bash
+# Parse with generic platform
+PLATFORM=generic docker compose --profile parse up
+
+# Classification works the same way
+docker compose --profile ml_cpu up
+docker compose --profile ml up
+```
+
+The generic platform provides:
+- Simple JSON-to-CSV conversion without platform-specific logic
+- Dot-notation nested field access (e.g., `user.profile.name`)
+- Array indexing support (e.g., `items.0.id`)
+- Type enforcement from YAML configuration
 
 ## Docker Profiles
 
@@ -191,12 +270,64 @@ docker compose --profile postgres down
 
 **Note:** GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html).
 
+## Platform Support
+
+### Data Types Concept
+
+Each platform defines **data types** - different schemas for different kinds of data. For example:
+- Reddit uses `submissions` and `comments` (different JSON structures, different fields)
+- A generic social media platform might use `posts`, `users`, `comments`
+
+Data types are defined in `config/platforms/{platform}/field_list.yaml` and referenced in `config/parse/pipeline.yaml`.
+
+### Reddit Platform
+
+The Reddit platform (`PLATFORM=reddit`, default) includes specialized features:
+
+- **Data Types**: `submissions` (posts) and `comments`
+- **Waterfall Algorithm** - Multi-source deletion detection from various Reddit removal fields
+- **Base36 Conversion** - Reddit ID conversion for efficient storage
+- **Mandatory Fields** - `dataset`, `id`, `retrieved_utc` always included
+- **Format Compatibility** - Handles both old (`retrieved_on`) and new (`_meta.retrieved_2nd_on`) dump formats
+- **File Detection** - Automatic detection of `RS_*.zst` (submissions) and `RC_*.zst` (comments)
+
+Configuration files:
+- `config/platforms/reddit/field_list.yaml` - Fields to extract per data type (`submissions`, `comments`)
+- `config/platforms/reddit/field_types.yaml` - Field type definitions
+
+### Generic Platform
+
+The generic platform (`PLATFORM=generic`) provides simple JSON-to-CSV conversion:
+
+- **Data Types**: User-defined in `field_list.yaml`
+- No platform-specific transformation logic
+- Configurable field extraction via YAML
+- Supports nested fields with dot notation
+- Type enforcement from configuration
+
+Configuration files:
+- `config/platforms/generic/field_list.yaml` - Fields to extract per data type (create from `.example`)
+- `config/platforms/generic/field_types.yaml` - Field type definitions
+
+### Adding New Platforms
+
+1. Create `config/platforms/{platform}/`:
+   - `field_list.yaml` with data types and fields
+   - `field_types.yaml` with type definitions
+
+2. Create `social_data_bridge/platforms/{platform}/parser.py` with:
+   - `transform_json()` function for any custom logic
+   - Or use generic parser if no custom logic needed
+
+3. Update `social_data_bridge/orchestrators/parse.py` `get_platform_parser()` to handle new platform
+
 ## Configuration
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `PLATFORM` | Platform to use for parsing (`reddit` or `generic`) | `reddit` |
 | `DUMPS_PATH` | Directory containing `.zst` dump files | `./data/dumps` |
 | `EXTRACTED_PATH` | Storage for decompressed JSON files | `./data/extracted` |
 | `CSV_PATH` | Storage for parsed CSV files | `./data/csv` |
@@ -210,11 +341,17 @@ docker compose --profile postgres down
 
 ```
 config/
-├── shared/                        # Shared across all profiles
-│   ├── reddit_field_list.yaml     # Field list for parsing/database
+├── platforms/                     # Platform-specific configurations
+│   ├── reddit/
+│   │   ├── field_list.yaml        # Fields to extract per data type
+│   │   └── field_types.yaml       # Field type definitions
+│   └── generic/
+│       └── field_types.yaml       # Field type definitions
+├── shared/                        # Shared across profiles (legacy, for postgres)
+│   ├── reddit_field_list.yaml     # Field list for database ingestion
 │   └── reddit_field_types.yaml    # Field type definitions
 ├── parse/
-│   └── pipeline.yaml              # Parse-only settings
+│   └── pipeline.yaml              # Parse settings
 ├── ml_cpu/
 │   ├── pipeline.yaml              # CPU classifier settings
 │   └── cpu_classifiers.yaml       # Lingua configuration
@@ -256,14 +393,16 @@ Each profile has its own `pipeline.yaml`. Common settings:
 
 ```yaml
 processing:
-  data_types:          # What to process
-    - submissions
-    - comments
+  data_types:          # Data types to process (must match keys in field_list.yaml)
+    - submissions      # Reddit default: submissions and comments
+    - comments         # Generic: define your own (posts, users, etc.)
   parallel_mode: true  # Process files in parallel
   parse_workers: 4     # Parallel workers for CSV parsing
   cleanup_temp: false   # Delete temp files after processing
   watch_interval: 0    # 0 = run once, >0 = check every N minutes
 ```
+
+> **Note:** The `data_types` values must match the top-level keys in your platform's `field_list.yaml`. For Reddit, these are `submissions` and `comments`. For the generic platform, define your own data types.
 
 ### Classifier Configuration
 
@@ -455,7 +594,7 @@ gpu_classifiers:
 
 ### Custom Python
 
-Create `reddit_data_tools/classifiers/my_classifier.py`:
+Create `social_data_bridge/classifiers/my_classifier.py`:
 
 ```python
 from .base import register_classifier
@@ -475,8 +614,9 @@ class MyClassifier:
 
 ```
 DUMPS_PATH/
-├── RS_2024-01.zst
-└── RC_2024-01.zst
+├── RS_2024-01.zst      # Reddit submissions
+├── RC_2024-01.zst      # Reddit comments
+└── data_2024-01.zst    # Generic platform data
 ```
 
 ### Output
@@ -520,9 +660,9 @@ rm -rf data/output/
 rm -rf data/output/ data/csv/ data/extracted/
 ```
 
-## Removal Detection
+## Removal Detection (Reddit)
 
-The pipeline automatically detects deleted and removed content using a waterfall algorithm. The `removal_type` field contains canonical values:
+The Reddit platform automatically detects deleted and removed content using a waterfall algorithm. The `removal_type` field contains canonical values:
 
 | Value | Description |
 |-------|-------------|
@@ -537,7 +677,7 @@ The algorithm checks multiple fields in priority order: `_meta.removal_type` →
 
 ## Storage Requirements
 
-Storage needs depend on pipeline mode and selected fields:
+Storage needs depend on pipeline mode and selected fields (estimates for full Reddit dumps):
 
 | Component | Sequential Mode | Parallel Mode |
 |-----------|-----------------|---------------|
@@ -558,6 +698,14 @@ This project targets large-scale, Reddit-wide analysis. For queries not limited 
 ### Can I run classifiers without the database?
 
 Yes! Use `--profile ml_cpu` or `--profile ml` independently. The database profile is optional.
+
+### Can I use this for non-Reddit data?
+
+Yes! Use `PLATFORM=generic` to process arbitrary JSON/NDJSON data. Configure your field types in `config/platforms/generic/field_types.yaml`.
+
+### How do I add support for a new platform?
+
+See [Adding New Platforms](#adding-new-platforms). Create configuration files in `config/platforms/{platform}/` and optionally a custom parser in `social_data_bridge/platforms/{platform}/parser.py`.
 
 ## Troubleshooting
 

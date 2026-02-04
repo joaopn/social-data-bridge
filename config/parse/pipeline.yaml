@@ -1,10 +1,14 @@
 # Parse profile pipeline configuration
 # Host paths (DUMPS_PATH, EXTRACTED_PATH, CSV_PATH) are configured in .env
+#
+# Platform selection: Set PLATFORM env var (default: reddit)
+#   PLATFORM=reddit  - Reddit data dumps
+#   PLATFORM=generic - Generic JSON/NDJSON files
 
 processing:
-  data_types:                # Which data types to process
-    - submissions
-    - comments
+  # Data types to process - these map to keys in the platform's field_list.yaml
+  # Define your data types in config/platforms/<platform>/field_list.yaml
+  data_types: []  # Override in user.yaml or set via platform config
   parallel_mode: true       # If true: parse multiple files in parallel
   parse_workers: 8           # Number of parallel workers for CSV parsing
   cleanup_temp: false        # Delete intermediate files after processing

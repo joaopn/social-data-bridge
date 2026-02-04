@@ -18,12 +18,12 @@ classifiers:
     source_dir_ingest: lingua_ingest  # Directory for minimal ingest CSVs (used when prefer_lingua: false)
     suffix: "_lingua"             # File suffix pattern (e.g., RS_2024-01_lingua.csv)
   
-  # toxic_roberta:
-  #   enabled: true
-  #   source_dir: toxic_roberta
-  #   suffix: "_toxicity_en"
+  toxic_roberta:
+    enabled: true
+    source_dir: toxic_roberta
+    suffix: "_toxicity_en"
   
-  # go_emotions:
-  #   enabled: true
-  #   source_dir: go_emotions
-  #   suffix: "_emotions"
+  go_emotions:
+    enabled: true
+    source_dir: go_emotions
+    suffix: "_emotions"

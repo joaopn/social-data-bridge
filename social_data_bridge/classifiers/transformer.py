@@ -1,5 +1,5 @@
 """
-Config-driven transformer classifier for reddit_data_tools pipeline.
+Config-driven transformer classifier for social_data_bridge pipeline.
 
 Supports:
 - ONNX-fp16, ONNX, and PyTorch model backends

@@ -1,4 +1,4 @@
-# Reddit Data Tools - Docker Compose
+# Social Data Bridge - Docker Compose
 # 
 # Profiles:
 #   parse           - Extract .zst and parse to CSV
@@ -7,6 +7,10 @@
 #   postgres        - PostgreSQL database server only
 #   postgres_ingest - Base table ingestion (requires postgres running)
 #   postgres_ml     - ML classifier table ingestion (requires postgres running)
+#
+# Platform selection (for parse profile):
+#   PLATFORM=reddit docker compose --profile parse up   # Default
+#   PLATFORM=generic docker compose --profile parse up  # For arbitrary JSON/CSV
 #
 # Usage:
 #   docker compose --profile parse up
@@ -23,13 +27,14 @@
 services:
   # ==========================================================================
   # Profile: parse - Decompress and parse to CSV
+  # Platform selection: PLATFORM=reddit (default) | generic
   # ==========================================================================
   parse:
     profiles: [parse]
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m reddit_data_tools.orchestrators.parse
+    command: python -m social_data_bridge.orchestrators.parse
     volumes:
       - ${DUMPS_PATH:-./data/dumps}:/data/dumps:ro
       - ${EXTRACTED_PATH:-./data/extracted}:/data/extracted
@@ -37,6 +42,7 @@ services:
       - ${OUTPUT_PATH:-./data/output}:/data/output
       - ./config:/app/config:ro
     environment:
+      - PLATFORM=${PLATFORM:-reddit}
       - PYTHONUNBUFFERED=1
 
   # ==========================================================================
@@ -47,7 +53,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m reddit_data_tools.orchestrators.ml
+    command: python -m social_data_bridge.orchestrators.ml
     environment:
       - PROFILE=ml_cpu
       - PYTHONUNBUFFERED=1
@@ -64,7 +70,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.gpu
-    command: python -m reddit_data_tools.orchestrators.ml
+    command: python -m social_data_bridge.orchestrators.ml
     ipc: host  # Required for PyTorch/CUDA shared memory
     environment:
       - PROFILE=ml
@@ -118,12 +124,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m reddit_data_tools.orchestrators.postgres_ingest
+    command: python -m social_data_bridge.orchestrators.postgres_ingest
     environment:
       - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - DB_NAME=${DB_NAME:-datasets}
-      - DB_SCHEMA=${DB_SCHEMA:-reddit}
     volumes:
       - ${DUMPS_PATH:-./data/dumps}:/data/dumps:ro
       - ${EXTRACTED_PATH:-./data/extracted}:/data/extracted
@@ -141,12 +147,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: python -m reddit_data_tools.orchestrators.postgres_ml
+    command: python -m social_data_bridge.orchestrators.postgres_ml
     environment:
       - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - DB_NAME=${DB_NAME:-datasets}
-      - DB_SCHEMA=${DB_SCHEMA:-reddit}
     volumes:
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ${DB_DATA_PATH:-./data/database}:/data/database

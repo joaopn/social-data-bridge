@@ -1,5 +1,5 @@
 """
-Zstandard decompression for Reddit data dumps.
+Zstandard decompression for compressed data dumps.
 """
 
 import subprocess
@@ -41,10 +41,10 @@ def decompress_zst(input_path: str, output_dir: str) -> str:
     
     # Clean up any leftover temp file from interrupted run
     if temp_path.exists():
-        print(f"[DECOMPRESS] Removing incomplete temp file: {temp_path.name}")
+        print(f"[sdb] Removing incomplete temp file: {temp_path.name}")
         temp_path.unlink()
     
-    print(f"[DECOMPRESS] {input_path.name} -> {output_path}")
+    print(f"[sdb] Decompressing {input_path.name}")
     
     # Use zstd to decompress to temp file first
     # -d: decompress
@@ -62,9 +62,9 @@ def decompress_zst(input_path: str, output_dir: str) -> str:
     if result.returncode != 0:
         # Print the actual error from zstd
         if result.stderr:
-            print(f"[DECOMPRESS] zstd error: {result.stderr.strip()}")
+            print(f"[sdb] zstd error: {result.stderr.strip()}")
         if result.stdout:
-            print(f"[DECOMPRESS] zstd output: {result.stdout.strip()}")
+            print(f"[sdb] zstd output: {result.stdout.strip()}")
         # Clean up temp file on failure
         if temp_path.exists():
             temp_path.unlink()
@@ -83,6 +83,6 @@ def decompress_zst(input_path: str, output_dir: str) -> str:
     temp_path.rename(output_path)
     
     file_size = output_path.stat().st_size
-    print(f"[DECOMPRESS] Complete: {output_path.name} ({file_size / (1024**3):.2f} GB)")
+    print(f"[sdb] Decompressed: {output_path.name} ({file_size / (1024**3):.2f} GB)")
     
     return str(output_path)

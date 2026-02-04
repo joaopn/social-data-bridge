@@ -1,7 +1,9 @@
 """
-Parse profile orchestrator for reddit_data_tools.
+Parse profile orchestrator for social-data-bridge.
 Handles file detection, decompression, and JSON to CSV parsing.
 Does NOT run classifiers or database ingestion.
+
+Platform selection via PLATFORM env var (default: reddit).
 """
 
 import os
@@ -13,14 +15,57 @@ from typing import List, Dict, Tuple
 
 from ..core.state import PipelineState
 from ..core.decompress import decompress_zst
-from ..core.parse_csv import parse_to_csv, parse_files_parallel
 from ..core.config import (
     load_profile_config,
+    load_yaml_file,
     get_required,
     get_optional,
     validate_processing_config,
     ConfigurationError,
 )
+
+
+# Platform selection via environment variable
+PLATFORM = os.environ.get('PLATFORM', 'reddit')
+
+
+def get_platform_parser():
+    """
+    Get the appropriate parser module for the current platform.
+    
+    Returns:
+        Parser module with parse_to_csv and parse_files_parallel functions
+    """
+    if PLATFORM == 'reddit':
+        from ..platforms.reddit import parser
+        return parser
+    elif PLATFORM == 'generic':
+        from ..platforms.generic import parser
+        return parser
+    else:
+        raise ConfigurationError(f"Unknown platform: {PLATFORM}. Supported: reddit, generic")
+
+
+def get_platform_config_dir(config_dir: str) -> str:
+    """Get the platform-specific config directory."""
+    return f"{config_dir}/platforms/{PLATFORM}"
+
+
+def load_platform_config(config_dir: str) -> Dict:
+    """
+    Load platform-specific configuration (file patterns, data types).
+    
+    Args:
+        config_dir: Base configuration directory
+        
+    Returns:
+        Platform configuration dictionary
+    """
+    platform_config_path = Path(get_platform_config_dir(config_dir)) / "platform.yaml"
+    config = load_yaml_file(platform_config_path)
+    if config is None:
+        raise ConfigurationError(f"Platform config not found: {platform_config_path}")
+    return config
 
 
 def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
@@ -44,29 +89,28 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
     return config
 
 
-def detect_dump_files(dumps_dir: str, data_types: List[str]) -> List[Tuple[str, str]]:
+def detect_dump_files(dumps_dir: str, data_types: List[str], file_patterns: Dict) -> List[Tuple[str, str]]:
     """
     Detect .zst dump files in the dumps directory and subfolders.
     
     Searches in:
         - dumps_dir/ (root)
-        - dumps_dir/submissions/
-        - dumps_dir/comments/
+        - dumps_dir/<data_type>/
     
     Returns:
-        List of tuples (filepath, data_type) sorted: submissions first, then comments,
-        alphabetically within each type
+        List of tuples (filepath, data_type) sorted alphabetically
     """
     dumps_path = Path(dumps_dir)
     files = []
     
-    patterns = {
-        'submissions': re.compile(r'^RS_(\d{4}-\d{2})\.zst$'),
-        'comments': re.compile(r'^RC_(\d{4}-\d{2})\.zst$')
-    }
+    # Build patterns from platform config
+    patterns = {}
+    for data_type in data_types:
+        if data_type in file_patterns and 'zst' in file_patterns[data_type]:
+            patterns[data_type] = re.compile(file_patterns[data_type]['zst'])
     
     search_dirs = [dumps_path]
-    for subfolder in ['submissions', 'comments']:
+    for subfolder in data_types:
         subfolder_path = dumps_path / subfolder
         if subfolder_path.is_dir():
             search_dirs.append(subfolder_path)
@@ -86,21 +130,23 @@ def detect_dump_files(dumps_dir: str, data_types: List[str]) -> List[Tuple[str, 
                     files.append((str(filepath), data_type, filename))
                     break
     
-    type_order = {'submissions': 0, 'comments': 1}
+    # Sort by data type index then filename
+    type_order = {dt: i for i, dt in enumerate(data_types)}
     files.sort(key=lambda x: (type_order.get(x[1], 99), x[2]))
     
     return [(f[0], f[1]) for f in files]
 
 
-def detect_json_files(extracted_dir: str, data_types: List[str]) -> List[Tuple[str, str, str]]:
+def detect_json_files(extracted_dir: str, data_types: List[str], file_patterns: Dict) -> List[Tuple[str, str, str]]:
     """Detect decompressed JSON files in the extracted directory."""
     extracted_path = Path(extracted_dir)
     files = []
     
-    patterns = {
-        'submissions': re.compile(r'^RS_(\d{4}-\d{2})$'),
-        'comments': re.compile(r'^RC_(\d{4}-\d{2})$')
-    }
+    # Build patterns from platform config
+    patterns = {}
+    for data_type in data_types:
+        if data_type in file_patterns and 'json' in file_patterns[data_type]:
+            patterns[data_type] = re.compile(file_patterns[data_type]['json'])
     
     for data_type in data_types:
         if data_type not in patterns:
@@ -118,20 +164,21 @@ def detect_json_files(extracted_dir: str, data_types: List[str]) -> List[Tuple[s
                     file_id = filename
                     files.append((str(filepath), file_id, data_type, filename))
     
-    type_order = {'submissions': 0, 'comments': 1}
+    type_order = {dt: i for i, dt in enumerate(data_types)}
     files.sort(key=lambda x: (type_order.get(x[2], 99), x[3]))
     return [(f[0], f[1], f[2]) for f in files]
 
 
-def detect_parsed_csv_files(csv_dir: str, data_types: List[str]) -> List[Tuple[str, str, str]]:
+def detect_parsed_csv_files(csv_dir: str, data_types: List[str], file_patterns: Dict) -> List[Tuple[str, str, str]]:
     """Detect parsed CSV files in the CSV directory."""
     csv_base = Path(csv_dir)
     files = []
     
-    patterns = {
-        'submissions': re.compile(r'^RS_(\d{4}-\d{2})\.csv$'),
-        'comments': re.compile(r'^RC_(\d{4}-\d{2})\.csv$')
-    }
+    # Build patterns from platform config
+    patterns = {}
+    for data_type in data_types:
+        if data_type in file_patterns and 'csv' in file_patterns[data_type]:
+            patterns[data_type] = re.compile(file_patterns[data_type]['csv'])
     
     for data_type in data_types:
         if data_type not in patterns:
@@ -148,7 +195,7 @@ def detect_parsed_csv_files(csv_dir: str, data_types: List[str]) -> List[Tuple[s
                 file_id = filepath.stem
                 files.append((str(filepath), file_id, data_type, filename))
     
-    type_order = {'submissions': 0, 'comments': 1}
+    type_order = {dt: i for i, dt in enumerate(data_types)}
     files.sort(key=lambda x: (type_order.get(x[2], 99), x[3]))
     return [(f[0], f[1], f[2]) for f in files]
 
@@ -172,24 +219,39 @@ def run_pipeline(config_dir: str = "/app/config"):
     """
     # Load configuration
     config = load_config(config_dir)
+    platform_config = load_platform_config(config_dir)
+    
+    # Get platform-specific parser
+    parser = get_platform_parser()
+    platform_config_dir = get_platform_config_dir(config_dir)
     
     proc_config = config['processing']
-    data_types = get_required(config, 'processing', 'data_types')
     
-    print(f"[CONFIG] Profile: parse")
-    print(f"[CONFIG] Data types: {data_types}")
+    # Get data types from profile config, fall back to platform config
+    data_types = get_optional(config, 'processing', 'data_types', default=[])
+    if not data_types:
+        data_types = platform_config.get('data_types', [])
+    if not data_types:
+        raise ConfigurationError("No data_types configured. Set in user.yaml or platform config.")
+    
+    # Get file patterns from platform config
+    file_patterns = platform_config.get('file_patterns', {})
+    
+    print(f"[sdb] Profile: parse")
+    print(f"[sdb] Platform: {PLATFORM}")
+    print(f"[sdb] Data types: {data_types}")
     
     # Initialize state manager
     state = PipelineState(state_file="/data/output/parse_state.json")
     
     stats = state.get_stats()
-    print(f"[STATE] Previously processed: {stats['processed_count']} files")
-    print(f"[STATE] Previously failed: {stats['failed_count']} files")
+    print(f"[sdb] Previously processed: {stats['processed_count']} files")
+    print(f"[sdb] Previously failed: {stats['failed_count']} files")
     
     # Handle interrupted processing
     interrupted_file = state.get_in_progress()
     if interrupted_file:
-        print(f"[STATE] Found interrupted file: {interrupted_file} (will be retried)")
+        print(f"[sdb] Found interrupted file: {interrupted_file} (will be retried)")
         state.clear_in_progress()
     
     # Paths
@@ -202,23 +264,23 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("PHASE 1: INPUT DETECTION")
     print("="*60)
     
-    zst_files = detect_dump_files(dumps_dir, data_types)
-    print(f"[DETECT] Found {len(zst_files)} .zst files in {dumps_dir}")
+    zst_files = detect_dump_files(dumps_dir, data_types, file_patterns)
+    print(f"[sdb] Found {len(zst_files)} .zst files in {dumps_dir}")
     
-    json_files = detect_json_files(extracted_dir, data_types)
-    parsed_csv_files = detect_parsed_csv_files(csv_dir, data_types)
+    json_files = detect_json_files(extracted_dir, data_types, file_patterns)
+    parsed_csv_files = detect_parsed_csv_files(csv_dir, data_types, file_patterns)
     
-    print(f"[DETECT] Found {len(json_files)} JSON files in extracted directory")
-    print(f"[DETECT] Found {len(parsed_csv_files)} CSV files in csv directory")
+    print(f"[sdb] Found {len(json_files)} JSON files in extracted directory")
+    print(f"[sdb] Found {len(parsed_csv_files)} CSV files in csv directory")
     
     # Filter out already processed files
     pending_zst = [(p, dt) for p, dt in zst_files if not state.is_processed(get_file_identifier(p))]
     pending_json = [(p, fid, dt) for p, fid, dt in json_files if not state.is_processed(fid)]
     
-    print(f"[DETECT] Pending: {len(pending_zst)} .zst, {len(pending_json)} JSON")
+    print(f"[sdb] Pending: {len(pending_zst)} .zst, {len(pending_json)} JSON")
     
     if not (pending_zst or pending_json):
-        print("\n[PIPELINE] No files to process. Exiting.")
+        print("\n[sdb] No files to process. Exiting.")
         return
     
     total_timings = {'extraction': 0.0, 'parsing': 0.0}
@@ -243,14 +305,14 @@ def run_pipeline(config_dir: str = "/app/config"):
                     state.mark_in_progress(file_id)
                     decompress_zst(filepath, extract_dir)
                 except Exception as e:
-                    print(f"[EXTRACT] Error extracting {file_id}: {e}")
+                    print(f"[sdb] Error extracting {file_id}: {e}")
                     state.mark_failed(file_id, f"Extraction failed: {e}")
                     fail_count += 1
         
         total_timings['extraction'] = time.time() - t_start
     
     # Phase 3: Parse JSON files to CSV
-    json_files = detect_json_files(extracted_dir, data_types)  # Re-detect
+    json_files = detect_json_files(extracted_dir, data_types, file_patterns)  # Re-detect
     files_to_parse = []
     for json_path, file_id, data_type in json_files:
         expected_csv = Path(csv_dir) / data_type / f"{file_id}.csv"
@@ -267,16 +329,15 @@ def run_pipeline(config_dir: str = "/app/config"):
         parallel_mode = get_required(config, 'processing', 'parallel_mode')
         
         if parallel_mode and len(files_to_parse) > 1:
-            print(f"[PARSE] Parallel mode: {len(files_to_parse)} files with {workers} workers")
+            print(f"[sdb] Parallel mode: {len(files_to_parse)} files with {workers} workers")
             
             parse_input = [(json_path, data_type) for json_path, file_id, data_type in files_to_parse]
             
             try:
-                shared_config_dir = f"{config_dir}/shared"
-                parse_files_parallel(
+                parser.parse_files_parallel(
                     files=parse_input,
                     output_dir=csv_dir,
-                    config_dir=shared_config_dir,
+                    config_dir=platform_config_dir,
                     workers=workers
                 )
                 
@@ -288,24 +349,23 @@ def run_pipeline(config_dir: str = "/app/config"):
                     cleanup_temp = get_required(config, 'processing', 'cleanup_temp')
                     if cleanup_temp and os.path.exists(json_path):
                         os.remove(json_path)
-                        print(f"[CLEANUP] Removed: {Path(json_path).name}")
+                        print(f"[sdb] Removed: {Path(json_path).name}")
                             
             except Exception as e:
-                print(f"[PARSE] Error in parallel parsing: {e}")
+                print(f"[sdb] Error in parallel parsing: {e}")
                 for _, file_id, _ in files_to_parse:
                     state.mark_failed(file_id, f"Parsing failed: {e}")
                     fail_count += 1
         else:
             # Sequential parsing
-            shared_config_dir = f"{config_dir}/shared"
             for json_path, file_id, data_type in files_to_parse:
                 try:
                     state.mark_in_progress(file_id)
-                    parse_to_csv(
+                    parser.parse_to_csv(
                         input_file=json_path,
                         output_dir=csv_dir,
                         data_type=data_type,
-                        config_dir=shared_config_dir
+                        config_dir=platform_config_dir
                     )
                     
                     state.mark_completed(file_id)
@@ -314,10 +374,10 @@ def run_pipeline(config_dir: str = "/app/config"):
                     cleanup_temp = get_required(config, 'processing', 'cleanup_temp')
                     if cleanup_temp and os.path.exists(json_path):
                         os.remove(json_path)
-                        print(f"[CLEANUP] Removed: {Path(json_path).name}")
+                        print(f"[sdb] Removed: {Path(json_path).name}")
                         
                 except Exception as e:
-                    print(f"[PARSE] Error parsing {file_id}: {e}")
+                    print(f"[sdb] Error parsing {file_id}: {e}")
                     state.mark_failed(file_id, f"Parsing failed: {e}")
                     fail_count += 1
         
@@ -327,18 +387,18 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("\n" + "="*60)
     print("PIPELINE COMPLETE")
     print("="*60)
-    print(f"Successful: {success_count}")
-    print(f"Failed: {fail_count}")
+    print(f"[sdb] Successful: {success_count}")
+    print(f"[sdb] Failed: {fail_count}")
     
     final_stats = state.get_stats()
-    print(f"Total processed: {final_stats['processed_count']}")
-    print(f"Total failed: {final_stats['failed_count']}")
+    print(f"[sdb] Total processed: {final_stats['processed_count']}")
+    print(f"[sdb] Total failed: {final_stats['failed_count']}")
     
-    print(f"\nTiming (minutes):")
-    print(f"  Extraction: {total_timings['extraction'] / 60:.2f}")
-    print(f"  Parsing:    {total_timings['parsing'] / 60:.2f}")
+    print(f"\n[sdb] Timing (minutes):")
+    print(f"[sdb]   Extraction: {total_timings['extraction'] / 60:.2f}")
+    print(f"[sdb]   Parsing:    {total_timings['parsing'] / 60:.2f}")
     total_time = sum(total_timings.values())
-    print(f"  Total:      {total_time / 60:.2f}")
+    print(f"[sdb]   Total:      {total_time / 60:.2f}")
 
 
 def main():
@@ -347,17 +407,19 @@ def main():
     config = load_config(config_dir)
     watch_interval = get_required(config, 'processing', 'watch_interval')
     
+    print(f"[sdb] Platform: {PLATFORM}")
+    
     if watch_interval > 0:
-        print(f"[WATCH] Watch mode enabled: checking every {watch_interval} minutes")
+        print(f"[sdb] Watch mode enabled: checking every {watch_interval} minutes")
         interval_seconds = watch_interval * 60
         while True:
             try:
                 run_pipeline(config_dir)
             except Exception as e:
-                print(f"[WATCH] Pipeline error: {e}")
-                print("[WATCH] Will retry next interval...")
+                print(f"[sdb] Pipeline error: {e}")
+                print("[sdb] Will retry next interval...")
             
-            print(f"\n[WATCH] Next check in {watch_interval} minutes...")
+            print(f"\n[sdb] Next check in {watch_interval} minutes...")
             time.sleep(interval_seconds)
     else:
         run_pipeline(config_dir)

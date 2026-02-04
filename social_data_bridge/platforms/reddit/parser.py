@@ -1,5 +1,11 @@
 """
-JSON to CSV parsing for Reddit data dumps.
+Reddit-specific JSON to CSV parsing.
+
+This module contains Reddit-specific parsing logic including:
+- Waterfall algorithm for deletion/removal detection
+- Base-36 to base-10 ID conversion
+- Old/new Reddit data format compatibility
+- Mandatory fields (dataset, id, retrieved_utc)
 """
 
 import json
@@ -9,72 +15,16 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, List, Any, Optional, Tuple
 
-from .config import load_yaml_file, ConfigurationError
+from ...core.config import load_yaml_file, ConfigurationError
+from ...core.parser import (
+    escape_string,
+    quote_field,
+    get_nested_data,
+    enforce_data_type,
+)
 
 
-def escape_string(value: str) -> str:
-    """Escape special characters in a string value."""
-    if isinstance(value, str):
-        return value.replace('\\', '\\\\').replace('\n', '\\n').replace('\r', '\\r').replace('\u0000', '')
-    return value
-
-
-def quote_field(field: Any) -> str:
-    """Quote a field value for CSV formatting."""
-    if field is None:
-        return ''
-    elif isinstance(field, str) and field:
-        escaped_field = field.replace('"', '""')
-        return f'"{escaped_field}"'
-    return str(field)
-
-
-def get_nested_data(data: Dict, field: str) -> Any:
-    """Retrieve nested data from a dictionary using dot notation."""
-    fields = field.split('.')
-    for key in fields:
-        if data is not None and key in data:
-            data = data[key]
-        else:
-            return None
-    return data
-
-
-def enforce_data_type(key: str, value: Any, data_types: Dict) -> Any:
-    """Enforce a specific data type for a value based on the configuration."""
-    if not data_types:
-        return value
-
-    def cast_value(data_type, val):
-        if data_type in ('integer', 'bigint'):
-            try:
-                return int(val)
-            except (ValueError, TypeError):
-                return None
-        elif data_type == 'boolean':
-            return val in (True, 'True', 'true', 1)
-        elif data_type == 'float':
-            try:
-                return float(val)
-            except (ValueError, TypeError):
-                return None
-        elif data_type in ('char', 'varchar', 'text'):
-            val = str(val)
-            if data_type in ('char', 'varchar'):
-                max_length = data_types[key][1]
-                return val[:max_length]
-            return val
-        else:
-            return None
-
-    data_type = data_types.get(key)
-    if data_type:
-        return cast_value(data_type[0] if isinstance(data_type, list) else data_type, value)
-    else:
-        return value
-
-
-# Mandatory fields that are always included (not in YAML config)
+# Reddit-specific mandatory fields that are always included (not in YAML config)
 MANDATORY_FIELDS = ['id', 'retrieved_utc']
 MANDATORY_FIELD_TYPES = {
     'dataset': ['char', 7],
@@ -234,7 +184,7 @@ def get_all_columns(data_type: str, fields_to_extract: List[str]) -> List[str]:
 
 def transform_json(data: Dict, dataset: str, data_type_config: Dict, fields_to_extract: List[str]) -> List:
     """
-    Transform JSON data into a list of extracted values.
+    Transform Reddit JSON data into a list of extracted values.
     
     CSV column order: [dataset, id, retrieved_utc, ...fields from YAML...]
     
@@ -301,7 +251,7 @@ def process_single_file(
     fields_to_extract: List[str]
 ) -> tuple:
     """
-    Process a single JSON file and write to CSV with headers.
+    Process a single Reddit JSON file and write to CSV with headers.
     
     Uses a .temp file during writing and renames to final name on success.
     This ensures partial files from interrupted runs are not mistaken as complete.
@@ -324,7 +274,7 @@ def process_single_file(
     
     # Clean up any leftover temp file from interrupted run
     if temp_path.exists():
-        print(f"[PARSE] Removing incomplete temp file: {temp_path.name}")
+        print(f"[sdb] Removing incomplete temp file: {temp_path.name}")
         temp_path.unlink()
     
     line_count = 0
@@ -368,8 +318,8 @@ def process_single_file(
     input_size = os.path.getsize(input_file)
     output_size = os.path.getsize(output_file)
     
-    print(f"[PARSE] {Path(input_file).name} -> {Path(output_file).name}")
-    print(f"[PARSE] Rows: {line_count:,}, Errors: {error_count}, Output: {output_size / (1024**3):.2f} GB")
+    print(f"[sdb] {Path(input_file).name} -> {Path(output_file).name}")
+    print(f"[sdb] Rows: {line_count:,}, Errors: {error_count}, Output: {output_size / (1024**3):.2f} GB")
     
     return input_size, output_file
 
@@ -388,7 +338,7 @@ def parse_to_csv(
         input_file: Path to decompressed JSON file (e.g., RC_2023-01)
         output_dir: Directory for output CSV file (or base dir if use_type_subdir=True)
         data_type: 'submissions' or 'comments'
-        config_dir: Directory containing configuration files (shared config dir)
+        config_dir: Directory containing configuration files
         use_type_subdir: If True, output to output_dir/data_type/ (default: True)
         
     Returns:
@@ -404,13 +354,13 @@ def parse_to_csv(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Load configuration
-    field_types = load_yaml_file(config_dir / "reddit_field_types.yaml")
-    field_list = load_yaml_file(config_dir / "reddit_field_list.yaml")
+    field_types = load_yaml_file(config_dir / "field_types.yaml")
+    field_list = load_yaml_file(config_dir / "field_list.yaml")
     
     if field_types is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/reddit_field_types.yaml")
+        raise ConfigurationError(f"Required config file not found: {config_dir}/field_types.yaml")
     if field_list is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/reddit_field_list.yaml")
+        raise ConfigurationError(f"Required config file not found: {config_dir}/field_list.yaml")
     
     fields_to_extract = field_list.get(data_type, [])
     if not fields_to_extract:
@@ -469,12 +419,12 @@ def parse_files_parallel(
     workers: int
 ) -> List[Tuple[str, str]]:
     """
-    Parse multiple JSON files to CSV in parallel.
+    Parse multiple Reddit JSON files to CSV in parallel.
     
     Args:
         files: List of tuples (input_file, data_type)
         output_dir: Directory for output CSV files
-        config_dir: Directory containing configuration files (shared config dir)
+        config_dir: Directory containing configuration files
         workers: Number of parallel workers
         
     Returns:
@@ -483,7 +433,7 @@ def parse_files_parallel(
     if not files:
         return []
     
-    print(f"[PARSE] Starting parallel parsing with up to {workers} workers for {len(files)} files")
+    print(f"[sdb] Starting parallel parsing with up to {workers} workers for {len(files)} files")
     
     # Prepare arguments for workers
     worker_args = [
@@ -502,8 +452,8 @@ def parse_files_parallel(
                 input_file, csv_path, data_type = future.result()
                 results.append((csv_path, data_type))
             except Exception as e:
-                print(f"[PARSE] Error in parallel parsing: {e}")
+                print(f"[sdb] Error in parallel parsing: {e}")
                 raise
     
-    print(f"[PARSE] Parallel parsing complete: {len(results)} files processed")
+    print(f"[sdb] Parallel parsing complete: {len(results)} files processed")
     return results

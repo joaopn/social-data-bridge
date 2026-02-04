@@ -1,7 +1,9 @@
 """
-PostgreSQL ML profile orchestrator for reddit_data_tools.
+PostgreSQL ML profile orchestrator for social_data_bridge.
 Handles ingestion of ML classifier outputs into PostgreSQL tables.
 Expects classifier output CSVs to already exist (run ml/ml_cpu profiles first).
+
+Platform selection via PLATFORM env var (default: reddit).
 """
 
 import os
@@ -14,6 +16,7 @@ from typing import List, Dict, Tuple, Optional
 from ..core.state import PipelineState
 from ..core.config import (
     load_profile_config,
+    load_yaml_file,
     apply_env_overrides,
     validate_database_config,
     ConfigurationError,
@@ -25,25 +28,31 @@ from ..db.postgres.ingest import (
     create_fast_load_classifier_table, fast_ingest_classifier_csv,
     delete_duplicates, finalize_fast_load_table,
 )
-from ..core.config import load_yaml_file
 
 
-def load_services_config(config_dir: str) -> Dict:
+# Platform selection via environment variable
+PLATFORM = os.environ.get('PLATFORM', 'reddit')
+
+
+def get_platform_config_dir(config_dir: str) -> str:
+    """Get the platform-specific config directory."""
+    return f"{config_dir}/platforms/{PLATFORM}"
+
+
+def load_platform_config(config_dir: str) -> Dict:
     """
-    Load services.yaml configuration.
+    Load platform-specific configuration (file patterns, data types, db_schema).
     
     Args:
-        config_dir: Directory containing services.yaml (postgres_ml profile directory)
+        config_dir: Base configuration directory
         
     Returns:
-        Services configuration dictionary
-        
-    Raises:
-        ConfigurationError: If services.yaml is missing
+        Platform configuration dictionary
     """
-    config = load_yaml_file(Path(config_dir) / "services.yaml")
+    platform_config_path = Path(get_platform_config_dir(config_dir)) / "platform.yaml"
+    config = load_yaml_file(platform_config_path)
     if config is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/services.yaml")
+        raise ConfigurationError(f"Platform config not found: {platform_config_path}")
     return config
 
 
@@ -77,7 +86,8 @@ def detect_classifier_csvs(
     classifier_name: str,
     source_dir: str,
     suffix: str,
-    data_types: List[str]
+    data_types: List[str],
+    file_patterns: Dict = None
 ) -> List[Tuple[str, str, str]]:
     """
     Detect classifier CSV files for a given classifier.
@@ -88,6 +98,7 @@ def detect_classifier_csvs(
         source_dir: Subdirectory under output_dir
         suffix: File suffix pattern (e.g., '_lingua')
         data_types: List of data types to look for
+        file_patterns: Optional dict of file patterns per data type from platform config
         
     Returns:
         List of (filepath, data_type, file_id) tuples
@@ -95,24 +106,31 @@ def detect_classifier_csvs(
     base_path = Path(output_dir) / source_dir
     files = []
     
-    patterns = {
-        'submissions': re.compile(rf'^RS_(\d{{4}}-\d{{2}}){re.escape(suffix)}\.csv$'),
-        'comments': re.compile(rf'^RC_(\d{{4}}-\d{{2}}){re.escape(suffix)}\.csv$')
-    }
+    # Build patterns - use platform config if available, otherwise match any CSV with suffix
+    patterns = {}
+    for data_type in data_types:
+        if file_patterns and data_type in file_patterns and 'csv' in file_patterns[data_type]:
+            # Modify the platform pattern to include the classifier suffix
+            base_pattern = file_patterns[data_type]['csv']
+            # Replace .csv$ with {suffix}.csv$
+            suffix_pattern = base_pattern.replace(r'\.csv$', rf'{re.escape(suffix)}\.csv$')
+            patterns[data_type] = re.compile(suffix_pattern)
+        else:
+            # Fallback: match any file ending with suffix.csv
+            patterns[data_type] = re.compile(rf'^.+{re.escape(suffix)}\.csv$')
     
     for data_type in data_types:
-        if data_type not in patterns:
-            continue
-            
         type_dir = base_path / data_type
         if not type_dir.is_dir():
             continue
             
-        pattern = patterns[data_type]
+        pattern = patterns.get(data_type)
+        if not pattern:
+            continue
+            
         for filepath in type_dir.glob("*.csv"):
             match = pattern.match(filepath.name)
             if match:
-                date_str = match.group(1)
                 file_id = f"{classifier_name}/{filepath.stem}"
                 files.append((str(filepath), data_type, file_id))
     
@@ -128,20 +146,34 @@ def run_pipeline(config_dir: str = "/app/config"):
     """
     # Load configuration
     config = load_config(config_dir)
+    platform_config = load_platform_config(config_dir)
     
     # Print config summary
     print("="*60)
     print("POSTGRES ML INGESTION")
     print("="*60)
-    print(f"[CONFIG] Profile: postgres_ml")
+    print(f"[sdb] Profile: postgres_ml")
+    print(f"[sdb] Platform: {PLATFORM}")
     
     # Extract configuration
     db_config = config.get('database', {})
     proc_config = config.get('processing', {})
     classifiers_config = config.get('classifiers', {})
     
+    # Get db_schema from profile config, fall back to platform config
+    db_schema = db_config.get('schema')
+    if not db_schema:
+        db_schema = platform_config.get('db_schema')
+    if not db_schema:
+        raise ConfigurationError("No db_schema configured. Set in platform config or user.yaml.")
+    db_config['schema'] = db_schema
+    
     output_dir = proc_config.get('output_dir', '/data/output')
-    data_types = proc_config.get('data_types', ['submissions', 'comments'])
+    
+    # Get data types from profile config, fall back to platform config
+    data_types = proc_config.get('data_types', [])
+    if not data_types:
+        data_types = platform_config.get('data_types', [])
     check_duplicates = proc_config.get('check_duplicates', True)
     parallel_ingestion = proc_config.get('parallel_ingestion', True)
     type_inference_rows = proc_config.get('type_inference_rows', 1000)
@@ -155,14 +187,14 @@ def run_pipeline(config_dir: str = "/app/config"):
     except Exception:
         prefer_lingua = True  # Default to true if postgres config not found
     
-    print(f"[CONFIG] Database: {db_config.get('name')}@{db_config.get('host')}:{db_config.get('port')}")
-    print(f"[CONFIG] Schema: {db_config.get('schema')}")
-    print(f"[CONFIG] Output dir: {output_dir}")
-    print(f"[CONFIG] Data types: {data_types}")
-    print(f"[CONFIG] Classifiers: {list(classifiers_config.keys())}")
-    print(f"[CONFIG] Use foreign key: {use_foreign_key}")
-    print(f"[CONFIG] Fast initial load: {fast_initial_load}")
-    print(f"[CONFIG] Prefer lingua: {prefer_lingua} (from postgres profile)")
+    print(f"[sdb] Database: {db_config.get('name')}@{db_config.get('host')}:{db_config.get('port')}")
+    print(f"[sdb] Schema: {db_config.get('schema')}")
+    print(f"[sdb] Output dir: {output_dir}")
+    print(f"[sdb] Data types: {data_types}")
+    print(f"[sdb] Classifiers: {list(classifiers_config.keys())}")
+    print(f"[sdb] Use foreign key: {use_foreign_key}")
+    print(f"[sdb] Fast initial load: {fast_initial_load}")
+    print(f"[sdb] Prefer lingua: {prefer_lingua} (from postgres profile)")
     
     # Ensure database and schema exist
     ensure_database_exists(
@@ -192,14 +224,14 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Process each classifier
     for classifier_name, classifier_cfg in classifiers_config.items():
         if not classifier_cfg.get('enabled', True):
-            print(f"\n[{classifier_name.upper()}] Skipped (disabled)")
+            print(f"\n[sdb] {classifier_name}: Skipped (disabled)")
             continue
         
         # Handle lingua classifier specially based on prefer_lingua setting
         if classifier_name == 'lingua':
             if prefer_lingua:
                 # Lingua data is already in main table via postgres profile
-                print(f"\n[{classifier_name.upper()}] Skipped (prefer_lingua=true, data in main table)")
+                print(f"\n[sdb] {classifier_name}: Skipped (prefer_lingua=true, data in main table)")
                 continue
             else:
                 # Use lingua_ingest folder (minimal CSV for independent ingestion)
@@ -213,24 +245,24 @@ def run_pipeline(config_dir: str = "/app/config"):
         print(f"\n{'='*60}")
         print(f"PROCESSING: {classifier_name}")
         print(f"{'='*60}")
-        print(f"[{classifier_name.upper()}] Source: {output_dir}/{source_dir}")
-        print(f"[{classifier_name.upper()}] Suffix: {suffix}")
+        print(f"[sdb] Source: {output_dir}/{source_dir}")
+        print(f"[sdb] Suffix: {suffix}")
         
         # Detect CSV files
         files = detect_classifier_csvs(output_dir, classifier_name, source_dir, suffix, data_types)
         
         if not files:
-            print(f"[{classifier_name.upper()}] No CSV files found")
+            print(f"[sdb] {classifier_name}: No CSV files found")
             continue
         
-        print(f"[{classifier_name.upper()}] Found {len(files)} CSV files")
+        print(f"[sdb] {classifier_name}: Found {len(files)} CSV files")
         
         # Filter out already processed files
         pending_files = [(fp, dt, fid) for fp, dt, fid in files if not state.is_processed(fid)]
         skip_count = len(files) - len(pending_files)
         
         if not pending_files:
-            print(f"[{classifier_name.upper()}] All files already processed, skipping")
+            print(f"[sdb] {classifier_name}: All files already processed, skipping")
             total_skipped += skip_count
             continue
         
@@ -266,10 +298,10 @@ def run_pipeline(config_dir: str = "/app/config"):
                     standard_load_types.add(dt)
             
             if fast_load_types:
-                print(f"[{classifier_name.upper()}] Fast initial load for: {', '.join(sorted(fast_load_types))}")
-                print(f"[{classifier_name.upper()}] WARNING: If process fails, tables must be recreated!")
+                print(f"[sdb] Fast initial load for: {', '.join(sorted(fast_load_types))}")
+                print(f"[sdb] WARNING: If process fails, tables must be recreated!")
             if standard_load_types:
-                print(f"[{classifier_name.upper()}] Standard ON CONFLICT for: {', '.join(sorted(standard_load_types))}")
+                print(f"[sdb] Standard ON CONFLICT for: {', '.join(sorted(standard_load_types))}")
         else:
             standard_load_types = set(files_by_type.keys())
         
@@ -293,17 +325,17 @@ def run_pipeline(config_dir: str = "/app/config"):
                 local_success = 0
                 local_fail = 0
                 
-                print(f"\n[{classifier_name.upper()}] Fast loading {table_name}: {len(type_files)} files")
+                print(f"\n[sdb] Fast loading {table_name}: {len(type_files)} files")
                 
                 # Get first CSV to infer schema
                 first_csv = type_files[0][0]
                 
                 # Step 1: Infer schema from CSV
-                print(f"[{classifier_name.upper()}] Inferring schema from {type_inference_rows} rows...")
+                print(f"[sdb] Inferring schema from {type_inference_rows} rows...")
                 column_list, column_types, nullable_cols = infer_classifier_schema(
                     first_csv, type_inference_rows, column_overrides
                 )
-                print(f"[{classifier_name.upper()}] Inferred columns: {column_list}")
+                print(f"[sdb] Inferred columns: {column_list}")
                 
                 # Step 2: Create UNLOGGED table (no PK, no FK)
                 create_fast_load_classifier_table(
@@ -336,7 +368,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                         state.mark_completed(file_id)
                         local_success += 1
                     except Exception as e:
-                        print(f"[{classifier_name.upper()}] ERROR during COPY {file_id}: {e}")
+                        print(f"[sdb] ERROR during COPY {file_id}: {e}")
                         state.mark_failed(file_id, str(e))
                         local_fail += 1
                         raise  # Abort fast load on any failure
@@ -365,11 +397,11 @@ def run_pipeline(config_dir: str = "/app/config"):
                     fk_reference_table=dt if use_foreign_key else None
                 )
                 
-                print(f"[{classifier_name.upper()}] Fast load completed for {table_name}")
+                print(f"[sdb] Fast load completed for {table_name}")
                 return local_success, local_fail
             
             if use_parallel_fast_load:
-                print(f"[{classifier_name.upper()}] Parallel ingestion enabled (submissions + comments concurrently)")
+                print(f"[sdb] Parallel ingestion enabled (submissions + comments concurrently)")
                 
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     future_submissions = executor.submit(fast_load_classifier_type, 'submissions')
@@ -381,8 +413,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                         success_count += sub_success + com_success
                         fail_count += sub_fail + com_fail
                     except Exception as e:
-                        print(f"[{classifier_name.upper()}] CRITICAL ERROR: {e}")
-                        print(f"[{classifier_name.upper()}] Tables may be in inconsistent state. Manual recovery required.")
+                        print(f"[sdb] CRITICAL ERROR: {e}")
+                        print(f"[sdb] Tables may be in inconsistent state. Manual recovery required.")
                         raise
             else:
                 for dt in sorted(fast_load_types):
@@ -391,8 +423,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                         success_count += local_success
                         fail_count += local_fail
                     except Exception as e:
-                        print(f"[{classifier_name.upper()}] CRITICAL ERROR for {dt}{suffix}: {e}")
-                        print(f"[{classifier_name.upper()}] Table may be in inconsistent state. Manual recovery required.")
+                        print(f"[sdb] CRITICAL ERROR for {dt}{suffix}: {e}")
+                        print(f"[sdb] Table may be in inconsistent state. Manual recovery required.")
                         raise
         
         # =====================================================================
@@ -436,13 +468,13 @@ def run_pipeline(config_dir: str = "/app/config"):
                         
                     except Exception as e:
                         state.mark_failed(file_id, str(e))
-                        print(f"[{classifier_name.upper()}] ERROR {file_id}: {e}")
+                        print(f"[sdb] ERROR {file_id}: {e}")
                         local_fail += 1
                 
                 return local_success, local_fail
             
             if use_parallel_standard:
-                print(f"[{classifier_name.upper()}] Parallel ingestion enabled (submissions + comments concurrently)")
+                print(f"[sdb] Parallel ingestion enabled (submissions + comments concurrently)")
                 
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     future_submissions = executor.submit(ingest_classifier_type_files, 'submissions')
@@ -458,7 +490,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     success_count += local_success
                     fail_count += local_fail
         
-        print(f"[{classifier_name.upper()}] Completed: {success_count} success, {skip_count} skipped, {fail_count} failed")
+        print(f"[sdb] {classifier_name}: {success_count} success, {skip_count} skipped, {fail_count} failed")
         
         total_success += success_count
         total_fail += fail_count
@@ -482,16 +514,16 @@ def main():
     watch_interval = config.get('processing', {}).get('watch_interval', 0)
     
     if watch_interval > 0:
-        print(f"[WATCH] Watch mode enabled: checking every {watch_interval} minutes")
+        print(f"[sdb] Watch mode enabled: checking every {watch_interval} minutes")
         interval_seconds = watch_interval * 60
         while True:
             try:
                 run_pipeline(config_dir)
             except Exception as e:
-                print(f"[WATCH] Pipeline error: {e}")
-                print("[WATCH] Will retry next interval...")
+                print(f"[sdb] Pipeline error: {e}")
+                print("[sdb] Will retry next interval...")
             
-            print(f"\n[WATCH] Next check in {watch_interval} minutes...")
+            print(f"\n[sdb] Next check in {watch_interval} minutes...")
             time.sleep(interval_seconds)
     else:
         run_pipeline(config_dir)

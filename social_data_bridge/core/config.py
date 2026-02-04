@@ -1,5 +1,5 @@
 """
-Unified configuration loader for reddit_data_tools.
+Unified configuration loader for social_data_bridge.
 
 Supports profile-based configuration with user overrides.
 Each profile can have a user.yaml that overrides base config values.
@@ -150,7 +150,7 @@ def load_profile_config(
     has_user_config = user_config is not None
     
     if has_user_config and not quiet:
-        print(f"[CONFIG] Using user override: {profile}/user.yaml")
+        print(f"[sdb] Using user override: {profile}/user.yaml")
     
     # Load each base config file and apply user overrides
     merged_config = {}
