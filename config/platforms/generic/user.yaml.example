@@ -1,0 +1,61 @@
+# Generic platform user configuration
+# Copy this file to user.yaml and uncomment/modify settings as needed.
+#
+# Structure: Each key corresponds to a config file (without .yaml extension).
+# List values fully replace the base config (no merging).
+
+# platform:                      # Overrides platform.yaml
+#   db_schema: my_platform       # Database schema for this platform (required)
+#   data_types:                  # Data types available for this platform
+#     - posts
+#     - comments
+#   file_patterns:               # File patterns for detecting input files
+#     posts:
+#       zst: '^posts_(\d{4}-\d{2})\.zst$'
+#       json: '^posts_(\d{4}-\d{2})$'
+#       csv: '^posts_(\d{4}-\d{2})\.csv$'
+#       prefix: 'posts_'
+#     comments:
+#       zst: '^comments_(\d{4}-\d{2})\.zst$'
+#       json: '^comments_(\d{4}-\d{2})$'
+#       csv: '^comments_(\d{4}-\d{2})\.csv$'
+#       prefix: 'comments_'
+#   indexes:                     # Default index fields for database tables
+#     posts:
+#       - dataset
+#       - author
+#       - created_at
+#     comments:
+#       - dataset
+#       - author
+#       - created_at
+
+# field_types:                   # Overrides field_types.yaml
+#   id: text
+#   created_at: integer
+#   timestamp: integer
+#   text: text
+#   content: text
+#   author: text
+#   title: text
+#   url: text
+#   score: integer
+#   count: integer
+
+# field_list:                    # Overrides field_list.yaml
+#   posts:
+#     - id
+#     - created_at
+#     - author
+#     - content
+#     - likes
+#     - shares
+#     - is_public
+#   users:
+#     - id
+#     - username
+#     - email
+#     - created_at
+#     - profile.bio
+#     - profile.location
+#     - followers_count

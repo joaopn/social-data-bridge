@@ -26,4 +26,4 @@ classifiers:
   go_emotions:
     enabled: true
     source_dir: go_emotions
-    suffix: "_emotions"
+    suffix: "_emotions_en"

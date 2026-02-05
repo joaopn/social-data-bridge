@@ -1,0 +1,68 @@
+# ML GPU profile user configuration
+# Copy this file to user.yaml and uncomment/modify settings as needed.
+#
+# Structure: Each key corresponds to a config file (without .yaml extension).
+# List values fully replace the base config (no merging).
+
+# pipeline:                      # Overrides pipeline.yaml
+#   processing:
+#     data_types:                # Which data types to process
+#       - submissions
+#       - comments
+#     watch_interval: 0          # Check for new files every N minutes (0 = run once)
+#   gpu_classifiers:             # List of GPU classifiers to run (replaces default list)
+#     - toxic_roberta
+#     - go_emotions
+
+# gpu_classifiers:               # Overrides gpu_classifiers.yaml
+#   text_columns:                # Columns to use for classification (per data type)
+#     submissions:
+#       - title
+#       - selftext
+#     comments:
+#       - body
+#   remove_strings:              # Exact strings removed from text (replaces default list)
+#     - "[deleted]"
+#     - "[removed]"
+#     - "[unavailable]"
+#   remove_patterns:             # Regex patterns removed from text (replaces default list)
+#     - 'https?://\S+'
+#     - 'r/\w+'
+#     - 'u/\w+'
+#   gpu_ids: [0]                 # List of GPU IDs to parallelize across
+#   file_workers: 1              # Number of files to process in parallel
+#   tokenize_workers: 4          # Parallel workers for tokenization (0 = single-threaded)
+#   batch_size: 2000000          # Rows per disk I/O batch
+#   classifier_batch_size: 32    # Batch size per GPU for inference
+#   use_lingua: true             # Use 'lang' column from Lingua output for filtering
+#   lang2_fallback: false        # If true, classify if either lang OR lang2 matches
+#   min_tokens: 0                # Global minimum token count (0 = no filter)
+#   fields:                      # Additional columns to keep from input CSV
+#     - author
+#     - subreddit
+#   toxic_roberta:               # Toxicity detection classifier
+#     suffix: "_toxicity_en"
+#     type: onnx_fp16
+#     model: "joaopn/unbiased-toxic-roberta-onnx-fp16"
+#     file_name: "model.onnx"
+#     activation: sigmoid
+#     supported_languages: [en]
+#     classifier_batch_size: 8
+#     max_length: 512
+#     chunking_strategy: chunk
+#     stride: 256
+#     top_k: 1
+#     min_tokens: 1
+#   go_emotions:                 # Emotion detection classifier
+#     suffix: "_emotions_en"
+#     type: onnx_fp16
+#     model: "joaopn/roberta-base-go_emotions-onnx-fp16"
+#     file_name: "model.onnx"
+#     activation: sigmoid
+#     supported_languages: [en]
+#     classifier_batch_size: 8
+#     max_length: 512
+#     chunking_strategy: chunk
+#     stride: 256
+#     top_k: 3
+#     min_tokens: 1

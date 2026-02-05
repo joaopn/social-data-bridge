@@ -1,0 +1,117 @@
+# Reddit platform user configuration
+# Copy this file to user.yaml and uncomment/modify settings as needed.
+#
+# Structure: Each key corresponds to a config file (without .yaml extension).
+# List values fully replace the base config (no merging).
+
+# platform:                      # Overrides platform.yaml
+#   db_schema: reddit            # Database schema for this platform
+#   data_types:                  # Data types available for this platform
+#     - submissions
+#     - comments
+#   file_patterns:               # File patterns for detecting input files
+#     submissions:
+#       zst: '^RS_(\d{4}-\d{2})\.zst$'
+#       json: '^RS_(\d{4}-\d{2})$'
+#       csv: '^RS_(\d{4}-\d{2})\.csv$'
+#       prefix: 'RS_'
+#     comments:
+#       zst: '^RC_(\d{4}-\d{2})\.zst$'
+#       json: '^RC_(\d{4}-\d{2})$'
+#       csv: '^RC_(\d{4}-\d{2})\.csv$'
+#       prefix: 'RC_'
+#   indexes:                     # Default index fields for database tables
+#     submissions:
+#       - dataset
+#       - author
+#       - subreddit
+#       - domain
+#       - created_utc
+#     comments:
+#       - dataset
+#       - author
+#       - subreddit
+#       - link_id
+#       - created_utc
+
+# field_types:                   # Overrides field_types.yaml
+#   created_utc: integer
+#   author_created_utc: integer
+#   score: integer
+#   stickied: boolean
+#   distinguished: text
+#   gilded: integer
+#   is_submitter: boolean
+#   controversiality: integer
+#   total_awards_received: integer
+#   link_id: ['varchar', 10]
+#   parent_id: ['varchar', 10]
+#   author: text
+#   author_flair_text: text
+#   subreddit: text
+#   body: text
+#   is_deleted: boolean
+#   removal_type: text
+#   num_comments: integer
+#   upvote_ratio: float
+#   num_crossposts: integer
+#   subreddit_subscribers: integer
+#   locked: boolean
+#   quarantine: boolean
+#   over_18: boolean
+#   link_flair_text: text
+#   domain: text
+#   url: text
+#   title: text
+#   selftext: text
+#   id10: bigint
+#   lang: ['varchar', 2]
+#   lang_prob: float
+#   lang2: ['varchar', 2]
+#   lang2_prob: float
+
+# field_list:                    # Overrides field_list.yaml
+#   submissions:
+#     - created_utc
+#     - id10
+#     - score
+#     - upvote_ratio
+#     - num_comments
+#     - num_crossposts
+#     - total_awards_received
+#     - subreddit
+#     - subreddit_subscribers
+#     - stickied
+#     - gilded
+#     - distinguished
+#     - locked
+#     - quarantine
+#     - over_18
+#     - is_deleted
+#     - removal_type
+#     - author
+#     - author_flair_text
+#     - author_created_utc
+#     - link_flair_text
+#     - domain
+#     - url
+#     - title
+#     - selftext
+#   comments:
+#     - created_utc
+#     - link_id
+#     - parent_id
+#     - score
+#     - controversiality
+#     - total_awards_received
+#     - subreddit
+#     - stickied
+#     - gilded
+#     - distinguished
+#     - is_deleted
+#     - removal_type
+#     - author
+#     - author_flair_text
+#     - author_created_utc
+#     - is_submitter
+#     - body
