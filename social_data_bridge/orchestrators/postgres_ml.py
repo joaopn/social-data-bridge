@@ -210,10 +210,15 @@ def run_pipeline(config_dir: str = "/app/config"):
         port=db_config['port'],
         user=db_config['user']
     )
-    
-    # Initialize state
-    state_file = f"{proc_config.get('state_dir', '/data/database')}/postgres_ml_state.json"
-    state = PipelineState(state_file)
+
+    # Initialize state files per data_type
+    state_dir = f"{proc_config.get('state_dir', '/data/database')}/state_tracking"
+    os.makedirs(state_dir, exist_ok=True)
+
+    states = {}
+    for dt in data_types:
+        state_file = f"{state_dir}/{PLATFORM}_postgres_ml_{dt}.json"
+        states[dt] = PipelineState(state_file)
     
     total_success = 0
     total_fail = 0
@@ -258,7 +263,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         print(f"[sdb] {classifier_name}: Found {len(files)} CSV files")
         
         # Filter out already processed files
-        pending_files = [(fp, dt, fid) for fp, dt, fid in files if not state.is_processed(fid)]
+        pending_files = [(fp, dt, fid) for fp, dt, fid in files if not states[dt].is_processed(fid)]
         skip_count = len(files) - len(pending_files)
         
         if not pending_files:
@@ -353,7 +358,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                 # Step 3: Blind COPY all files
                 for filepath, file_id in type_files:
                     try:
-                        state.mark_in_progress(file_id)
+                        states[dt].mark_in_progress(file_id)
                         fast_ingest_classifier_csv(
                             csv_file=filepath,
                             table_name=table_name,
@@ -365,11 +370,11 @@ def run_pipeline(config_dir: str = "/app/config"):
                             column_list=column_list,
                             nullable_cols=nullable_cols
                         )
-                        state.mark_completed(file_id)
+                        states[dt].mark_completed(file_id)
                         local_success += 1
                     except Exception as e:
                         print(f"[sdb] ERROR during COPY {file_id}: {e}")
-                        state.mark_failed(file_id, str(e))
+                        states[dt].mark_failed(file_id, str(e))
                         local_fail += 1
                         raise  # Abort fast load on any failure
                 
@@ -442,11 +447,11 @@ def run_pipeline(config_dir: str = "/app/config"):
                 type_files = files_by_type[dt]
                 local_success = 0
                 local_fail = 0
-                
+
                 for filepath, file_id in type_files:
                     try:
-                        state.mark_in_progress(file_id)
-                        
+                        states[dt].mark_in_progress(file_id)
+
                         ingest_classifier_csv(
                             csv_file=filepath,
                             data_type=dt,
@@ -462,15 +467,15 @@ def run_pipeline(config_dir: str = "/app/config"):
                             use_foreign_key=use_foreign_key,
                             suffix=suffix
                         )
-                        
-                        state.mark_completed(file_id)
+
+                        states[dt].mark_completed(file_id)
                         local_success += 1
-                        
+
                     except Exception as e:
-                        state.mark_failed(file_id, str(e))
+                        states[dt].mark_failed(file_id, str(e))
                         print(f"[sdb] ERROR {file_id}: {e}")
                         local_fail += 1
-                
+
                 return local_success, local_fail
             
             if use_parallel_standard:

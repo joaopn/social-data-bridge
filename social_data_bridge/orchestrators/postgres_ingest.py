@@ -309,35 +309,45 @@ def run_pipeline(config_dir: str = "/app/config"):
     for dt in data_types:
         if dt in file_patterns and 'prefix' in file_patterns[dt]:
             file_prefixes[dt] = file_patterns[dt]['prefix']
-    
-    # Initialize state manager with database config for recovery
-    state = PipelineState(
-        state_file="/data/database/pipeline_state.json",
-        db_config={
-            'name': db_config['name'],
-            'user': db_config['user'],
-            'host': db_config['host'],
-            'port': db_config['port'],
-            'schema': db_config['schema']
-        },
-        data_types=data_types,
-        file_prefixes=file_prefixes
-    )
-    
-    # If state is empty, try to recover from database
-    if state.get_stats()['processed_count'] == 0:
-        print("[sdb] No state file found, attempting to recover from database...")
-        state.recover_from_database()
-    
-    stats = state.get_stats()
-    print(f"[sdb] Previously processed: {stats['processed_count']} files")
-    print(f"[sdb] Previously failed: {stats['failed_count']} files")
-    
-    # Handle interrupted processing
-    interrupted_file = state.get_in_progress()
-    if interrupted_file:
-        print(f"[sdb] Found interrupted file: {interrupted_file} (will be retried)")
-        state.clear_in_progress()
+
+    # Initialize state managers - one per data_type for isolation
+    state_dir = "/data/database/state_tracking"
+    states = {}
+    total_processed = 0
+    total_failed = 0
+
+    for dt in data_types:
+        state_file = f"{state_dir}/{PLATFORM}_postgres_ingest_{dt}.json"
+        states[dt] = PipelineState(
+            state_file=state_file,
+            db_config={
+                'name': db_config['name'],
+                'user': db_config['user'],
+                'host': db_config['host'],
+                'port': db_config['port'],
+                'schema': db_config['schema']
+            },
+            data_types=[dt],
+            file_prefixes={dt: file_prefixes.get(dt)}
+        )
+
+        # If state is empty, try to recover from database
+        if states[dt].get_stats()['processed_count'] == 0:
+            print(f"[sdb] No state for {dt}, attempting to recover from database...")
+            states[dt].recover_from_database()
+
+        stats = states[dt].get_stats()
+        total_processed += stats['processed_count']
+        total_failed += stats['failed_count']
+
+        # Handle interrupted processing
+        interrupted_file = states[dt].get_in_progress()
+        if interrupted_file:
+            print(f"[sdb] Found interrupted file: {interrupted_file} (will be retried)")
+            states[dt].clear_in_progress()
+
+    print(f"[sdb] Previously processed: {total_processed} files")
+    print(f"[sdb] Previously failed: {total_failed} files")
     
     # Paths
     dumps_dir = "/data/dumps"
@@ -353,7 +363,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     skipped_count = 0
     for filepath, data_type in files:
         file_id = get_file_identifier(filepath)
-        if state.is_processed(file_id):
+        if states[data_type].is_processed(file_id):
             skipped_count += 1
         else:
             pending_zst_files.append((filepath, data_type))
@@ -384,7 +394,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     else:
         csv_files = detect_csv_files(csv_dir, data_types, file_patterns)
     
-    pending_csv_files = [f for f in csv_files if not state.is_processed(f[1])]
+    pending_csv_files = [f for f in csv_files if not states[f[2]].is_processed(f[1])]
     
     print(f"[sdb] Found {len(json_files)} JSON files in extracted directory")
     print(f"[sdb] Found {len(pending_csv_files)} unprocessed CSV files to ingest")
@@ -435,7 +445,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     decompress_zst(filepath, extract_type_dir)
                 except Exception as e:
                     print(f"[sdb] Error extracting {file_id}: {e}")
-                    state.mark_failed(file_id, f"Extraction failed: {e}")
+                    states[data_type].mark_failed(file_id, f"Extraction failed: {e}")
                     fail_count += 1
         
         total_timings['extraction'] = time.time() - t_start
@@ -479,8 +489,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                             print(f"[sdb] Removed: {Path(json_path).name}")
             except Exception as e:
                 print(f"[sdb] Error in parallel parsing: {e}")
-                for _, file_id, _ in files_to_parse:
-                    state.mark_failed(file_id, f"Parsing failed: {e}")
+                for _, file_id, data_type in files_to_parse:
+                    states[data_type].mark_failed(file_id, f"Parsing failed: {e}")
                     fail_count += 1
         else:
             cleanup_temp = get_required(config, 'processing', 'cleanup_temp')
@@ -498,7 +508,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                         print(f"[sdb] Removed: {Path(json_path).name}")
                 except Exception as e:
                     print(f"[sdb] Error parsing {file_id}: {e}")
-                    state.mark_failed(file_id, f"Parsing failed: {e}")
+                    states[data_type].mark_failed(file_id, f"Parsing failed: {e}")
                     fail_count += 1
         
         total_timings['parsing'] = time.time() - t_start
@@ -509,7 +519,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         csv_files, csv_source_map = detect_lingua_csv_files(data_types, lingua_config)
     else:
         csv_files = detect_csv_files(csv_dir, data_types, file_patterns)
-    files_to_ingest = [(p, fid, dt) for p, fid, dt in csv_files if not state.is_processed(fid)]
+    files_to_ingest = [(p, fid, dt) for p, fid, dt in csv_files if not states[dt].is_processed(fid)]
     
     if files_to_ingest:
         print("\n" + "="*60)
@@ -606,7 +616,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                 # Step 2: Blind COPY all files
                 for csv_path, file_id, dt in type_files:
                     try:
-                        state.mark_in_progress(file_id)
+                        states[data_type].mark_in_progress(file_id)
                         fast_ingest_csv(
                             csv_file=csv_path,
                             data_type=data_type,
@@ -618,15 +628,15 @@ def run_pipeline(config_dir: str = "/app/config"):
                             user=db_config['user'],
                             config_dir=platform_config_dir
                         )
-                        state.mark_completed(file_id)
+                        states[data_type].mark_completed(file_id)
                         local_success += 1
-                        
+
                         if cleanup_temp and os.path.exists(csv_path):
                             os.remove(csv_path)
                             print(f"[sdb] Removed: {Path(csv_path).name}")
                     except Exception as e:
                         print(f"[sdb] Error during COPY {file_id}: {e}")
-                        state.mark_failed(file_id, f"Fast ingestion failed: {e}")
+                        states[data_type].mark_failed(file_id, f"Fast ingestion failed: {e}")
                         local_fail += 1
                         raise  # Abort fast load on any failure
                 
@@ -703,7 +713,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     local_fail = 0
                     for csv_path, file_id, data_type in files_list:
                         try:
-                            state.mark_in_progress(file_id)
+                            states[data_type].mark_in_progress(file_id)
                             ingest_csv(
                                 csv_file=csv_path,
                                 data_type=data_type,
@@ -717,21 +727,21 @@ def run_pipeline(config_dir: str = "/app/config"):
                                 create_indexes=False,
                                 config_dir=platform_config_dir
                             )
-                            
-                            state.mark_completed(file_id)
+
+                            states[data_type].mark_completed(file_id)
                             local_success += 1
-                            
+
                             if cleanup_temp and os.path.exists(csv_path):
                                 os.remove(csv_path)
                                 print(f"[sdb] Removed: {Path(csv_path).name}")
-                                    
+
                         except Exception as e:
                             print(f"[sdb] Error ingesting {file_id}: {e}")
-                            state.mark_failed(file_id, f"Ingestion failed: {e}")
+                            states[data_type].mark_failed(file_id, f"Ingestion failed: {e}")
                             local_fail += 1
                             if cleanup_temp and os.path.exists(csv_path):
                                 os.remove(csv_path)
-                    
+
                     return local_success, local_fail
                 
                 with ThreadPoolExecutor(max_workers=2) as executor:
@@ -746,7 +756,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             else:
                 for csv_path, file_id, data_type in standard_files:
                     try:
-                        state.mark_in_progress(file_id)
+                        states[data_type].mark_in_progress(file_id)
                         ingest_csv(
                             csv_file=csv_path,
                             data_type=data_type,
@@ -760,16 +770,16 @@ def run_pipeline(config_dir: str = "/app/config"):
                             create_indexes=False,
                             config_dir=platform_config_dir
                         )
-                        
-                        state.mark_completed(file_id)
+
+                        states[data_type].mark_completed(file_id)
                         success_count += 1
-                        
+
                         if cleanup_temp and os.path.exists(csv_path):
                             os.remove(csv_path)
                             print(f"[sdb] Removed: {Path(csv_path).name}")
                     except Exception as e:
                         print(f"[sdb] Error ingesting {file_id}: {e}")
-                        state.mark_failed(file_id, f"Ingestion failed: {e}")
+                        states[data_type].mark_failed(file_id, f"Ingestion failed: {e}")
                         fail_count += 1
                         if cleanup_temp and os.path.exists(csv_path):
                             os.remove(csv_path)
@@ -847,10 +857,12 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("="*60)
     print(f"Successful: {success_count}")
     print(f"Failed: {fail_count}")
-    
-    final_stats = state.get_stats()
-    print(f"Total processed: {final_stats['processed_count']}")
-    print(f"Total failed: {final_stats['failed_count']}")
+
+    # Aggregate stats from all state managers
+    total_processed = sum(states[dt].get_stats()['processed_count'] for dt in data_types)
+    total_failed = sum(states[dt].get_stats()['failed_count'] for dt in data_types)
+    print(f"Total processed: {total_processed}")
+    print(f"Total failed: {total_failed}")
     
     print(f"\nTiming (minutes):")
     print(f"  Extraction: {total_timings['extraction'] / 60:.2f}")
