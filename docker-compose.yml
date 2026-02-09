@@ -76,6 +76,7 @@ services:
       - PROFILE=ml
       - CLASSIFIER=${CLASSIFIER:-}
       - PYTHONUNBUFFERED=1
+      - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - ${CSV_PATH:-./data/csv}:/data/csv:ro
       - ${OUTPUT_PATH:-./data/output}:/data/output

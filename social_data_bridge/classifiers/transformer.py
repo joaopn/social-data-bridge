@@ -456,9 +456,18 @@ class TransformerClassifier:
         """
         if self._executors:
             return
-        
+
         _lazy_import_deps()
-        
+
+        # Pre-cache the entire model repo before workers try to load it.
+        # Without this, N workers × M file_workers can fire simultaneous
+        # HuggingFace API calls, causing 429 rate limits and partial
+        # downloads of large sidecar files (e.g. model.onnx.data).
+        from huggingface_hub import snapshot_download
+        if not quiet:
+            print(f"[sdb] Pre-caching model: {self.model_id}")
+        snapshot_download(self.model_id)
+
         # Create one executor per GPU, each with initializer that loads model
         for gpu_id in self.gpu_ids:
             executor = ThreadPoolExecutor(
