@@ -463,17 +463,24 @@ class TransformerClassifier:
         # Without this, N workers × M file_workers can fire simultaneous
         # HuggingFace API calls, causing 429 rate limits and partial
         # downloads of large sidecar files (e.g. model.onnx.data).
+        #
+        # Uses local_dir to get real files instead of symlinks. HF cache
+        # stores snapshots as symlinks to blobs/, which causes ONNX Runtime
+        # (>=1.18) to reject external data files with "escapes model directory".
         from huggingface_hub import snapshot_download
         if not quiet:
             print(f"[sdb] Pre-caching model: {self.model_id}")
-        snapshot_download(self.model_id)
+        hf_home = os.environ.get('HF_HOME', os.path.expanduser('~/.cache/huggingface'))
+        model_dir = os.path.join(hf_home, 'sdb_models', self.model_id.replace('/', '--'))
+        snapshot_download(self.model_id, local_dir=model_dir)
+        self._model_path = model_dir
 
         # Create one executor per GPU, each with initializer that loads model
         for gpu_id in self.gpu_ids:
             executor = ThreadPoolExecutor(
                 max_workers=1,
                 initializer=_worker_init,
-                initargs=(gpu_id, self.model_id, self.model_type, self.file_name, quiet),
+                initargs=(gpu_id, self._model_path, self.model_type, self.file_name, quiet),
             )
             self._executors[gpu_id] = executor
         
@@ -502,7 +509,7 @@ class TransformerClassifier:
         
         # Cache tokenizer for main thread (from first worker's thread-local)
         # We need our own copy since thread-local is per-thread
-        self._tokenizer = AutoTokenizer.from_pretrained(self.model_id)
+        self._tokenizer = AutoTokenizer.from_pretrained(self._model_path)
     
     def shutdown(self):
         """Shutdown all worker executors. Call when done with classifier."""
