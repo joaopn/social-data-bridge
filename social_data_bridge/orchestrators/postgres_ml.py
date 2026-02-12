@@ -27,6 +27,7 @@ from ..db.postgres.ingest import (
     # Fast initial load functions
     create_fast_load_classifier_table, fast_ingest_classifier_csv,
     delete_duplicates, finalize_fast_load_table,
+    restore_alter_system_if_needed,
 )
 
 
@@ -216,6 +217,15 @@ def run_pipeline(config_dir: str = "/app/config"):
     state_dir = f"{pgdata_path}/state_tracking"
     os.makedirs(state_dir, exist_ok=True)
 
+    # Restore any ALTER SYSTEM settings left over from a previous crash
+    restore_alter_system_if_needed(
+        pgdata_path=pgdata_path,
+        dbname=db_config['name'],
+        host=db_config['host'],
+        port=db_config['port'],
+        user=db_config['user']
+    )
+
     states = {}
     for dt in data_types:
         state_file = f"{state_dir}/{PLATFORM}_postgres_ml_{dt}.json"
@@ -400,7 +410,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                     host=db_config['host'],
                     port=db_config['port'],
                     user=db_config['user'],
-                    fk_reference_table=dt if use_foreign_key else None
+                    fk_reference_table=dt if use_foreign_key else None,
+                    pgdata_path=pgdata_path
                 )
                 
                 print(f"[sdb] Fast load completed for {table_name}")

@@ -2,8 +2,12 @@
 CSV to PostgreSQL ingestion for social_data_bridge.
 """
 
+import json
+import os
+import threading
 import psycopg
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict
 
@@ -99,6 +103,241 @@ def configure_ingestion_session(
             print(f"      [!] max_wal_size = {max_wal_size} (consider {recommended_wal_gb}GB in postgresql.conf)")
 
     return settings
+
+
+# =============================================================================
+# ALTER SYSTEM Management for SET LOGGED
+# =============================================================================
+# SET LOGGED writes an entire UNLOGGED table to WAL. For multi-TB tables this
+# can exceed max_wal_size many times over, triggering a checkpoint storm that
+# crashes the server. These functions temporarily bump max_wal_size and
+# checkpoint_timeout via ALTER SYSTEM, using a disk flag file to guarantee
+# original settings are always restored — even after crashes.
+#
+# Flag file lifecycle:
+#   1. Pipeline startup → check for flag → restore if found (crash recovery)
+#   2. Before ALTER SYSTEM → write flag with original values
+#   3. After SET LOGGED → restore original values → delete flag
+#   4. On crash → next startup handles step 1
+# =============================================================================
+
+_ALTER_SYSTEM_FLAG = '.alter_system_pending.json'
+_SAFE_ALTER_SYSTEM_PARAMS = frozenset({'max_wal_size', 'checkpoint_timeout'})
+_set_logged_lock = threading.Lock()
+
+
+def _get_flag_path(pgdata_path: str) -> str:
+    """Get path to the ALTER SYSTEM flag file in the shared state directory."""
+    state_dir = os.path.join(pgdata_path, 'state_tracking')
+    os.makedirs(state_dir, exist_ok=True)
+    return os.path.join(state_dir, _ALTER_SYSTEM_FLAG)
+
+
+def _restore_settings_from_flag(
+    flag_path: str,
+    dbname: str,
+    host: str,
+    port: int,
+    user: str
+):
+    """
+    Read a flag file, restore original settings via ALTER SYSTEM, reload config,
+    and delete the flag file.
+    """
+    with open(flag_path, 'r') as f:
+        flag_data = json.load(f)
+
+    original = flag_data.get('original_settings', {})
+    if not original:
+        os.remove(flag_path)
+        return
+
+    with psycopg.connect(dbname=dbname, user=user, host=host, port=port, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            for param, value in original.items():
+                if param not in _SAFE_ALTER_SYSTEM_PARAMS:
+                    continue
+                safe_value = str(value).replace("'", "''")
+                cur.execute(f"ALTER SYSTEM SET {param} = '{safe_value}'")
+            cur.execute("SELECT pg_reload_conf()")
+
+    os.remove(flag_path)
+
+
+def restore_alter_system_if_needed(
+    pgdata_path: str,
+    dbname: str,
+    host: str = '127.0.0.1',
+    port: int = 5432,
+    user: str = 'postgres'
+) -> bool:
+    """
+    Check for ALTER SYSTEM flag file and restore original settings if found.
+
+    Call at pipeline startup to handle crashes that left modified server
+    settings. Safe to call multiple times — no-ops when no flag exists.
+
+    Returns True if settings were restored. Raises on failure to restore
+    (flag file is preserved for manual recovery).
+    """
+    flag_path = _get_flag_path(pgdata_path)
+    if not os.path.exists(flag_path):
+        return False
+
+    try:
+        with open(flag_path, 'r') as f:
+            flag_data = json.load(f)
+    except (json.JSONDecodeError, IOError):
+        print("[sdb] WARNING: Corrupt ALTER SYSTEM flag file, removing")
+        try:
+            os.remove(flag_path)
+        except OSError:
+            pass
+        return False
+
+    original = flag_data.get('original_settings', {})
+    if not original:
+        try:
+            os.remove(flag_path)
+        except OSError:
+            pass
+        return False
+
+    table = flag_data.get('table', 'unknown')
+    timestamp = flag_data.get('timestamp', 'unknown')
+    print(f"[sdb] ALTER SYSTEM flag found (crash during SET LOGGED on {table} at {timestamp})")
+    print(f"[sdb] Restoring original PostgreSQL settings:")
+    for param, value in original.items():
+        if param in _SAFE_ALTER_SYSTEM_PARAMS:
+            print(f"      {param} = {value}")
+
+    try:
+        _restore_settings_from_flag(flag_path, dbname, host, port, user)
+        print("[sdb] Settings restored successfully")
+        return True
+    except Exception as e:
+        print(f"[sdb] ERROR: Failed to restore settings: {e}")
+        print(f"[sdb] Flag file: {flag_path}")
+        print(f"[sdb] Manual fix: check postgresql.auto.conf, then SELECT pg_reload_conf()")
+        raise
+
+
+def _prepare_wal_for_set_logged(
+    full_table: str,
+    pgdata_path: str,
+    dbname: str,
+    host: str,
+    port: int,
+    user: str
+) -> Optional[str]:
+    """
+    Check table size and temporarily adjust WAL settings for SET LOGGED.
+
+    If the estimated WAL output exceeds the current max_wal_size, temporarily
+    bumps max_wal_size and checkpoint_timeout via ALTER SYSTEM to prevent
+    checkpoint storms. Writes a flag file with original settings BEFORE any
+    changes for crash recovery.
+
+    Returns:
+        Flag file path if settings were changed, None if no changes needed.
+
+    Raises:
+        RuntimeError: If insufficient disk space for estimated WAL.
+    """
+    with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_total_relation_size(%s)", (full_table,))
+            table_size = cur.fetchone()[0]
+
+            cur.execute("""
+                SELECT
+                    pg_size_bytes(current_setting('max_wal_size')),
+                    current_setting('max_wal_size'),
+                    current_setting('checkpoint_timeout'),
+                    EXTRACT(EPOCH FROM current_setting('checkpoint_timeout')::interval)::bigint
+            """)
+            wal_bytes, wal_setting, timeout_setting, timeout_secs = cur.fetchone()
+
+    table_gb = table_size / (1024**3)
+
+    # SET LOGGED writes the full table to WAL. With wal_compression=zstd
+    # (set by configure_ingestion_session), expect 2-4x compression on text.
+    # Use 2x as conservative lower bound for headroom.
+    estimated_wal = table_size // 2
+    estimated_wal_gb = estimated_wal / (1024**3)
+
+    print(f"[sdb] Pre-flight for SET LOGGED on {full_table}:")
+    print(f"      Table size: {table_gb:.1f} GB")
+    print(f"      Estimated WAL (zstd): ~{estimated_wal_gb:.0f} GB")
+    print(f"      Current max_wal_size: {wal_setting}")
+
+    if estimated_wal <= wal_bytes:
+        print("      max_wal_size sufficient, no adjustment needed")
+        return None
+
+    # Check available disk space (WAL lives on the same partition as pgdata)
+    stat = os.statvfs(pgdata_path)
+    available = stat.f_bavail * stat.f_frsize
+    available_gb = available / (1024**3)
+    print(f"      Available disk: {available_gb:.0f} GB")
+
+    if estimated_wal > int(available * 0.8):
+        raise RuntimeError(
+            f"Insufficient disk for SET LOGGED on {full_table}.\n"
+            f"  Table: {table_gb:.1f} GB, estimated WAL: ~{estimated_wal_gb:.0f} GB\n"
+            f"  Available: {available_gb:.0f} GB (need ~{estimated_wal_gb / 0.8:.0f} GB)\n"
+            f"  Options:\n"
+            f"    1. Free disk space or use a larger volume\n"
+            f"    2. Set fast_initial_load: false in postgres pipeline config\n"
+            f"       (uses standard ON CONFLICT ingestion — slower but no SET LOGGED needed)"
+        )
+
+    # New max_wal_size = estimated WAL (allows ~1 size-triggered checkpoint)
+    new_wal_mb = int(estimated_wal / (1024**2))
+    new_wal_setting = f'{new_wal_mb}MB'
+
+    # Scale checkpoint_timeout proportionally to prevent time-based storms
+    scale = estimated_wal / max(1, wal_bytes)
+    new_timeout_secs = int(timeout_secs * scale)
+    new_timeout_min = max(1, new_timeout_secs // 60)
+    new_timeout_setting = f'{new_timeout_min}min'
+
+    print(f"      Adjusting: max_wal_size {wal_setting} -> {new_wal_setting}")
+    print(f"      Adjusting: checkpoint_timeout {timeout_setting} -> {new_timeout_setting}")
+
+    # Write flag file BEFORE any ALTER SYSTEM changes
+    flag_path = _get_flag_path(pgdata_path)
+    flag_data = {
+        'original_settings': {
+            'max_wal_size': wal_setting,
+            'checkpoint_timeout': timeout_setting,
+        },
+        'applied_settings': {
+            'max_wal_size': new_wal_setting,
+            'checkpoint_timeout': new_timeout_setting,
+        },
+        'table': full_table,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    }
+    with open(flag_path, 'w') as f:
+        json.dump(flag_data, f, indent=2)
+
+    # Apply via ALTER SYSTEM + reload
+    try:
+        with psycopg.connect(dbname=dbname, user=user, host=host, port=port, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"ALTER SYSTEM SET max_wal_size = '{new_wal_setting}'")
+                cur.execute(f"ALTER SYSTEM SET checkpoint_timeout = '{new_timeout_setting}'")
+                cur.execute("SELECT pg_reload_conf()")
+        print("      Settings applied, configuration reloaded")
+        return flag_path
+    except Exception as e:
+        print(f"[sdb] WARNING: ALTER SYSTEM failed ({e}), proceeding with current settings")
+        try:
+            os.remove(flag_path)
+        except OSError:
+            pass
+        return None
 
 
 def yaml_type_to_sql(type_def) -> str:
@@ -471,7 +710,8 @@ def finalize_fast_load_table(
     host: str = '127.0.0.1',
     port: int = 5432,
     user: str = 'postgres',
-    fk_reference_table: Optional[str] = None
+    fk_reference_table: Optional[str] = None,
+    pgdata_path: Optional[str] = None
 ):
     """
     Finalize table after fast initial load: add PK, optionally add FK, VACUUM FREEZE, SET LOGGED.
@@ -529,16 +769,43 @@ def finalize_fast_load_table(
     print(f"[sdb] VACUUM FREEZE complete on {full_table}")
 
     # SET LOGGED (ensure durability - triggers full WAL write)
-    # Configure session for wal_compression=zstd (3-4x smaller WAL)
-    print(f"[sdb] Setting table to LOGGED (WAL flush)...")
+    # For large tables, temporarily adjust server WAL settings to prevent
+    # checkpoint storms that can crash the server and destroy UNLOGGED data.
+    # A threading lock serializes SET LOGGED across concurrent data types
+    # (parallel SET LOGGED would double I/O pressure with no benefit).
     set_logged_query = f"ALTER TABLE {full_table} SET LOGGED;"
 
-    with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
-        with conn.cursor() as curr:
-            configure_ingestion_session(curr)
-            curr.execute(set_logged_query)
-            conn.commit()
-    print(f"[sdb] Table {full_table} is now LOGGED and durable")
+    if pgdata_path:
+        with _set_logged_lock:
+            restore_alter_system_if_needed(pgdata_path, dbname, host, port, user)
+            flag_path = _prepare_wal_for_set_logged(
+                full_table, pgdata_path, dbname, host, port, user
+            )
+
+            print(f"[sdb] Setting table to LOGGED (WAL flush)...")
+            try:
+                with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
+                    with conn.cursor() as curr:
+                        configure_ingestion_session(curr)
+                        curr.execute(set_logged_query)
+                        conn.commit()
+                print(f"[sdb] Table {full_table} is now LOGGED and durable")
+            finally:
+                if flag_path and os.path.exists(flag_path):
+                    try:
+                        _restore_settings_from_flag(flag_path, dbname, host, port, user)
+                        print("[sdb] WAL settings restored to original values")
+                    except Exception as e:
+                        print(f"[sdb] WARNING: Failed to restore settings: {e}")
+                        print(f"[sdb] Flag file preserved: {flag_path}")
+    else:
+        print(f"[sdb] Setting table to LOGGED (WAL flush)...")
+        with psycopg.connect(dbname=dbname, user=user, host=host, port=port) as conn:
+            with conn.cursor() as curr:
+                configure_ingestion_session(curr)
+                curr.execute(set_logged_query)
+                conn.commit()
+        print(f"[sdb] Table {full_table} is now LOGGED and durable")
 
 
 def fast_ingest_csv(

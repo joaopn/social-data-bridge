@@ -20,6 +20,9 @@ processing:
   watch_interval: 0          # check for new files every N minutes (0 = run once)
   prefer_lingua: true        # If true: ingest lingua CSVs (from ml_cpu output) instead of original CSVs; falls back to original if not found
   fast_initial_load: true   # If true: use optimized bulk load for initial ingestion (UNLOGGED table, blind COPY, post-load dedup)
+  # WARNING: If fast_initial_load fails mid-ingestion for a data type, you must manually:
+  #   1. DROP the failed table (e.g. DROP TABLE reddit.comments;)
+  #   2. Delete its state tracking file: $PGDATA_PATH/state_tracking/<PLATFORM>_postgres_ingest_<data_type>.json
 
 # Index configuration (only used if create_indexes is true)
 # Override in user.yaml with platform-specific index fields
