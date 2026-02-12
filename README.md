@@ -252,6 +252,10 @@ Verify NVIDIA Container Toolkit is installed:
 docker run --rm --gpus all nvidia/cuda:12.1.1-base-ubuntu22.04 nvidia-smi
 ```
 
+## AI disclaimer
+
+Most of the orchestration and dockerization glue code was written by LLMs, under human planning and code review. The algorithms and ingestion structure are a merge of a number of private repos developed over a period of almost 4 years.
+
 ## License
 
 See LICENSE file.
