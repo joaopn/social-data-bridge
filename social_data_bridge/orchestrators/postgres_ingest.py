@@ -30,7 +30,6 @@ from ..db.postgres.ingest import (
     ensure_database_exists, ensure_schema_exists,
     # Fast initial load functions
     create_fast_load_table, fast_ingest_csv, delete_duplicates, finalize_fast_load_table,
-    restore_alter_system_if_needed
 )
 from .ml import detect_parsed_csv_files
 
@@ -316,16 +315,6 @@ def run_pipeline(config_dir: str = "/app/config"):
     state_dir = f"{pgdata_path}/state_tracking"
     os.makedirs(state_dir, exist_ok=True)
 
-    # Restore any ALTER SYSTEM settings left over from a previous crash
-    # (e.g., inflated max_wal_size from an interrupted SET LOGGED operation)
-    restore_alter_system_if_needed(
-        pgdata_path=pgdata_path,
-        dbname=db_config['name'],
-        host=db_config['host'],
-        port=db_config['port'],
-        user=db_config['user']
-    )
-
     states = {}
     total_processed = 0
     total_failed = 0
@@ -584,9 +573,6 @@ def run_pipeline(config_dir: str = "/app/config"):
             
             if fast_load_types:
                 print(f"[sdb] Fast initial load enabled for: {', '.join(sorted(fast_load_types))}")
-                print("[sdb] WARNING: If process fails mid-ingestion for a data type, you must manually:")
-                print("[sdb]   1. DROP the failed table")
-                print(f"[sdb]   2. Delete its state tracking file: {state_dir}/{PLATFORM}_postgres_ingest_<data_type>.json")
             if standard_load_types:
                 print(f"[sdb] Standard ON CONFLICT load for: {', '.join(sorted(standard_load_types))}")
         else:
@@ -616,7 +602,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                 # Get first CSV to determine lingua columns
                 first_csv = type_files[0][0]
                 
-                # Step 1: Create UNLOGGED table (no PK, no indexes)
+                # Step 1: Create table (no PK)
                 create_fast_load_table(
                     data_type=data_type,
                     dbname=db_config['name'],
@@ -666,7 +652,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     user=db_config['user']
                 )
                 
-                # Step 4: Finalize (add PK, VACUUM FREEZE, SET LOGGED)
+                # Step 4: Finalize (add PK)
                 finalize_fast_load_table(
                     table=data_type,
                     schema=db_config['schema'],
@@ -674,7 +660,6 @@ def run_pipeline(config_dir: str = "/app/config"):
                     host=db_config['host'],
                     port=db_config['port'],
                     user=db_config['user'],
-                    pgdata_path=pgdata_path
                 )
                 
                 print(f"[sdb] Completed {data_type}")

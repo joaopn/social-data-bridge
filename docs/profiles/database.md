@@ -91,22 +91,14 @@ When `fast_initial_load: false` or when the table already exists:
 
 When `fast_initial_load: true` (default) and the table does not exist yet, the pipeline uses an optimized bulk ingestion strategy:
 
-1. **CREATE UNLOGGED TABLE** — No WAL overhead, significantly faster writes
+1. **CREATE TABLE (no PK)** — Table created without primary key to avoid per-row index maintenance
 2. **Blind COPY** — All CSV files loaded without duplicate checking
-3. **Deduplication** — In-place `ROW_NUMBER()` window function removes duplicates by `(dataset, id)`, keeping the row with the latest `retrieved_utc`
-4. **PRIMARY KEY** — Adds `(dataset, id)` primary key constraint
-5. **VACUUM FREEZE** — Updates visibility maps for query performance
-6. **SET LOGGED** — Converts table to LOGGED, triggering WAL flush for durability
+3. **Deduplication** — In-place `ROW_NUMBER()` window function removes duplicates by `id`, keeping the row with the latest `retrieved_utc`
+4. **PRIMARY KEY** — Adds primary key constraint in a single index build after all data is loaded
 
-**Performance**: Significantly faster than ON CONFLICT for initial loads with billions of rows.
-
-**Dynamic WAL Management**: During SET LOGGED, the pipeline temporarily increases `max_wal_size` and `checkpoint_timeout` via ALTER SYSTEM to handle the WAL burst, then restores original values.
+**Performance**: Faster than ON CONFLICT for initial loads with billions of rows. The speedup comes from deferring index maintenance until after all data is loaded.
 
 **Limitations**:
-- **No crash recovery**: If the process fails mid-load (crash, kill, OOM), the table is in an inconsistent state. You must:
-  1. `DROP TABLE schema.table_name;`
-  2. Delete state file: `$PGDATA_PATH/state_tracking/{PLATFORM}_postgres_ingest_{data_type}.json`
-  3. Restart the ingestion
 - **Initial load only**: Once the table exists, subsequent ingestions always use ON CONFLICT regardless of this setting
 
 ### Indexing
@@ -164,15 +156,11 @@ Ingests ML classifier outputs into separate PostgreSQL tables.
 
 Same algorithm as postgres_ingest, with an additional step:
 
-1. CREATE UNLOGGED TABLE (no PK, no FK)
+1. CREATE TABLE (no PK, no FK)
 2. Blind COPY of all classifier CSV files
 3. Deduplication
 4. Add PRIMARY KEY
 5. **Add FOREIGN KEY** (validates all IDs exist in the main table)
-6. VACUUM FREEZE
-7. SET LOGGED
-
-Same limitations apply: failed mid-load requires dropping the table and restarting.
 
 ### Classifier Table Definitions
 

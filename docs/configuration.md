@@ -296,7 +296,7 @@ processing:
   cleanup_temp: false        # Delete intermediate files
   watch_interval: 0          # Run once (0) or poll every N minutes
   prefer_lingua: true        # Ingest lingua CSVs instead of original
-  fast_initial_load: true    # Optimized bulk load (UNLOGGED, blind COPY)
+  fast_initial_load: true    # Optimized bulk load (deferred PK, blind COPY)
 
 indexes: {}                  # Per-data-type index fields (set via platform config)
 ```
@@ -318,12 +318,8 @@ indexes: {}                  # Per-data-type index fields (set via platform conf
 | **processing.cleanup_temp** | Delete intermediate files after ingestion. | `false` |
 | **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
 | **processing.prefer_lingua** | Ingest lingua CSVs (from `ml_cpu` output) instead of original CSVs. Falls back to original if not found. | `true` |
-| **processing.fast_initial_load** | Optimized bulk load: uses `UNLOGGED` tables, blind `COPY`, post-load dedup. | `true` |
+| **processing.fast_initial_load** | Optimized bulk load: deferred PK, blind `COPY`, post-load dedup. | `true` |
 | **indexes** | Index fields per data type (e.g., `{submissions: [dataset, author, subreddit]}`). | `{}` |
-
-**Warning:** If `fast_initial_load` fails mid-ingestion for a data type, you must manually:
-1. `DROP` the failed table (e.g., `DROP TABLE reddit.comments;`)
-2. Delete its state tracking file: `$PGDATA_PATH/state_tracking/<PLATFORM>_postgres_ingest_<data_type>.json`
 
 #### ML Table Ingestion: `config/postgres_ml/pipeline.yaml`
 
