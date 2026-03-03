@@ -42,6 +42,7 @@ data/
 *.local.yaml
 config/*/user.yaml
 config/*/*/user.yaml
+docker-compose.override.yml
 
 # Logs
 *.log

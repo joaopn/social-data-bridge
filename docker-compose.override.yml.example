@@ -1,0 +1,16 @@
+# Docker Compose override file for user-specific settings.
+# Copy to docker-compose.override.yml and edit — Compose merges it automatically.
+#
+# Add tablespace volumes to put PostgreSQL tables/indexes on separate disks.
+# Each host path should be a directory on the target disk. The container path (right side)
+# is what you pass to CREATE TABLESPACE LOCATION inside PostgreSQL.
+#
+# Example:
+#   CREATE TABLESPACE fast_disk LOCATION '/data/tablespace/nvme';
+#   ALTER TABLE reddit.comments SET TABLESPACE fast_disk;
+
+services:
+  postgres:
+    volumes:
+      # - /mnt/nvme/pg-tablespace:/data/tablespace/nvme
+      # - /mnt/hdd/pg-tablespace:/data/tablespace/hdd
