@@ -40,9 +40,11 @@ data/
 
 # Local config overrides
 *.local.yaml
+*.local.conf
 config/*/user.yaml
 config/*/*/user.yaml
 docker-compose.override.yml
+*.bak
 
 # Logs
 *.log

@@ -76,13 +76,21 @@ data/dumps/
     └── RC_2024-02.zst
 ```
 
-#### 2. Configure variables (optional)
+#### 2. Configure (recommended)
 
-Edit `.env` to set data paths, database name, and port. The defaults work for local use.
+Run the interactive setup script to auto-detect your hardware and generate all user configuration files:
 
-The `config/` directory contains extensive YAML configuration for each profile. Each profile directory also supports a `user.yaml` file to override settings without modifying tracked files. For the database profiles, please generate tuned PostgreSQL settings with [PGTune](https://pgtune.leopard.in.ua/) (DB Type: Data Warehouse, Storage: SSD) and append them to `config/postgres/postgresql.conf`. See [Configuration Reference](docs/configuration.md) for details.
+```bash
+python setup.py
+```
+
+The script detects your CPU, RAM, and GPUs, then walks you through every setting with sensible defaults — press Enter to accept or type to override. It generates `.env`, `user.yaml` for each profile, and `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration). 
+
+For manual configuration or to understand what each setting does, see the [Configuration Reference](docs/configuration.md).
 
 #### 3. Run
+
+Run the profiles in order. The setup script prints the commands for your selection, but the full pipeline is:
 
 ```bash
 # Parse Reddit data to CSV
