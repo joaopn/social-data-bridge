@@ -2,6 +2,8 @@
 
 The Reddit platform (`PLATFORM=reddit`) is the default and includes specialized features for processing Reddit data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift).
 
+---
+
 ## Data Types
 
 | Type | File Pattern | Description |
@@ -21,6 +23,8 @@ File patterns (from `config/platforms/reddit/platform.yaml`):
 
 Supports both flat directory and torrent directory structure (`submissions/RS_*.zst`, `comments/RC_*.zst`).
 
+---
+
 ## Mandatory Fields
 
 These fields are always included regardless of field_list.yaml:
@@ -37,6 +41,8 @@ The `retrieved_utc` field handles multiple Reddit dump formats:
 - **Old format**: Uses `retrieved_on` field if `retrieved_utc` is missing
 - **New format** (2023-11+): Uses `_meta.retrieved_2nd_on` when available (second retrieval is more reliable)
 
+---
+
 ## Computed Fields
 
 ### id10 (Base-36 Conversion)
@@ -49,7 +55,8 @@ Include `id10` in your `field_list.yaml` to enable this conversion.
 
 The parser automatically detects deleted and removed content using a waterfall algorithm. The algorithm checks multiple data sources in priority order — the first match wins.
 
-#### Priority Order
+<details>
+<summary><strong>Priority Order</strong></summary>
 
 | Priority | Source Field | Era | Detection |
 |----------|-------------|-----|-----------|
@@ -62,7 +69,10 @@ The parser automatically detects deleted and removed content using a waterfall a
 | 7 | Text content | All | `[deleted]` or `[removed]` markers in body/selftext |
 | 8 | `author` | All | `author == '[deleted]'` |
 
-#### Canonical removal_type Values
+</details>
+
+<details>
+<summary><strong>Canonical removal_type Values</strong></summary>
 
 | Value | Description |
 |-------|-------------|
@@ -75,7 +85,10 @@ The parser automatically detects deleted and removed content using a waterfall a
 | `community_ops` | Reddit Community Operations |
 | `''` (empty) | Not removed |
 
-#### removed_by_category Mapping
+</details>
+
+<details>
+<summary><strong>removed_by_category Mapping</strong></summary>
 
 The `removed_by_category` field (Priority 3) maps to canonical values:
 - `deleted`, `author` → `deleted`
@@ -86,6 +99,10 @@ The `removed_by_category` field (Priority 3) maps to canonical values:
 - `copyright_takedown` → `copyright_takedown`
 - `community_ops` → `community_ops`
 - Unknown categories → `moderator` (conservative default)
+
+</details>
+
+---
 
 ## Field List
 
@@ -125,6 +142,8 @@ The `removed_by_category` field (Priority 3) maps to canonical values:
 
 Edit `config/platforms/reddit/field_list.yaml` to customize which fields are extracted.
 
+---
+
 ## Field Types
 
 Defined in `config/platforms/reddit/field_types.yaml`:
@@ -139,12 +158,14 @@ Defined in `config/platforms/reddit/field_types.yaml`:
 | `varchar(10)` | link_id, parent_id |
 | `varchar(2)` | lang, lang2 |
 
+---
+
 ## Database Indexes
 
 Default indexes (from `platform.yaml`):
 
-**Submissions:** `dataset`, `author`, `subreddit`, `domain`, `created_utc`
+**Submissions:** `dataset`, `author`, `subreddit`, `domain`
 
-**Comments:** `dataset`, `author`, `subreddit`, `link_id`, `created_utc`
+**Comments:** `dataset`, `author`, `subreddit`, `link_id`
 
 Override via `user.yaml` in the postgres profile directory.

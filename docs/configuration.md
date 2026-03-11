@@ -2,7 +2,8 @@
 
 This document is the master configuration reference for Social Data Bridge. It covers every environment variable, configuration file, and tunable setting across all profiles.
 
-**Recommended:** Run `python sdb.py setup` to interactively generate all configuration files. The script auto-detects your hardware, walks you through every setting with sensible defaults, and generates `.env`, `user.yaml` for each profile, and `postgresql.local.conf`. The reference below documents what each setting does.
+> [!TIP]
+> Run `python sdb.py setup` to interactively generate all configuration files. The script auto-detects your hardware, walks you through every setting with sensible defaults, and generates `.env`, `user.yaml` for each profile, and `postgresql.local.conf`. The reference below documents what each setting does.
 
 For profile-specific usage and workflows, see:
 - [Parse Profile](profiles/parse.md)
@@ -31,11 +32,11 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `CLASSIFIER` | Run a single GPU classifier by name | (all enabled) |
 | `PROFILE` | Internal: set automatically by docker-compose | (auto) |
 
-**Notes:**
-- `DB_SCHEMA` is normally set in the platform config (`config/platforms/<platform>/platform.yaml`). The environment variable overrides it.
-- `CLASSIFIER` is used with the `ml` profile to run only one GPU classifier instead of all enabled classifiers.
-- `PROFILE` is set internally by docker-compose service definitions (`ml_cpu` or `ml`). Do not set this manually.
-- `HF_TOKEN` is optional but recommended to avoid rate limits and to access private models. Obtain one at <https://huggingface.co/settings/tokens>.
+> [!NOTE]
+> - `DB_SCHEMA` is normally set in the platform config (`config/platforms/<platform>/platform.yaml`). The environment variable overrides it.
+> - `CLASSIFIER` is used with the `ml` profile to run only one GPU classifier instead of all enabled classifiers.
+> - `PROFILE` is set internally by docker-compose service definitions (`ml_cpu` or `ml`). Do not set this manually.
+> - `HF_TOKEN` is optional but recommended to avoid rate limits and to access private models. Obtain one at https://huggingface.co/settings/tokens.
 
 ---
 
@@ -87,7 +88,7 @@ Each profile supports a `user.yaml` file that overrides base settings without mo
 
 1. Copy `user.yaml.example` to `user.yaml` in the relevant config directory.
 2. Uncomment and modify the settings you want to change.
-3. Overrides are scoped by config filename -- each top-level key corresponds to a config file (without the `.yaml` extension).
+3. Overrides are scoped by config filename — each top-level key corresponds to a config file (without the `.yaml` extension).
 4. **List values fully replace the base config** (they are not merged).
 
 ### Example
@@ -168,7 +169,8 @@ cpu_classifiers:            # CPU classifiers to run
 
 #### Classifiers: `config/ml_cpu/cpu_classifiers.yaml`
 
-**Global settings** (apply to all CPU classifiers):
+<details>
+<summary><strong>Global settings</strong> (apply to all CPU classifiers)</summary>
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -177,7 +179,10 @@ cpu_classifiers:            # CPU classifiers to run
 | `remove_patterns` | Regex patterns removed before classification. | URLs, `r/subreddit`, `u/user` |
 | `fields` | Additional columns to keep in `lingua_ingest` CSV (beyond mandatory `id`, `dataset`, `retrieved_utc`). Empty means only mandatory fields. | `[]` |
 
-**Lingua classifier settings** (`lingua:` key):
+</details>
+
+<details>
+<summary><strong>Lingua classifier settings</strong> (<code>lingua:</code> key)</summary>
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -189,13 +194,15 @@ cpu_classifiers:            # CPU classifiers to run
 | `batch_size` | Rows per batch (larger = less overhead, more memory). | `2000000` |
 | `languages` | List of Lingua enum names to detect. | 54 languages across 5 tiers (see below) |
 
+</details>
+
 **Language tiers:**
 
 - **Tier 1 (Top 10 countries):** English, German, Spanish, Portuguese, French, Italian, Russian, Hindi, Tagalog, Turkish
 - **Tier 2 (High volume):** Dutch, Swedish, Polish, Malay, Arabic, Vietnamese, Thai, Chinese, Japanese, Korean, Romanian, Greek, Czech, Danish, Finnish, Bokmal, Hebrew
 - **Tier 3 (Moderate/Regional):** Ukrainian, Hungarian, Slovak, Croatian, Serbian, Bulgarian, Slovene, Lithuanian, Latvian, Estonian, Bosnian, Indonesian, Persian
 - **Tier 4 (Indian Regional):** Bengali, Tamil, Telugu, Marathi, Gujarati, Punjabi, Urdu
-- **Tier 5 (Low volume):** Commented out by default -- uncomment in `user.yaml` to enable (Afrikaans, Albanian, Armenian, Azerbaijani, Basque, Belarusian, Catalan, Esperanto, and others)
+- **Tier 5 (Low volume):** Commented out by default — uncomment in `user.yaml` to enable (Afrikaans, Albanian, Armenian, Azerbaijani, Basque, Belarusian, Catalan, Esperanto, and others)
 
 See also: [Classification Profile guide](profiles/classification.md)
 
@@ -225,7 +232,8 @@ gpu_classifiers:
 
 #### Classifiers: `config/ml/gpu_classifiers.yaml`
 
-**Global settings** (apply to all GPU classifiers unless overridden per-classifier):
+<details>
+<summary><strong>Global settings</strong> (apply to all GPU classifiers unless overridden per-classifier)</summary>
 
 | Setting | Description | Default |
 |---------|-------------|---------|
@@ -242,7 +250,10 @@ gpu_classifiers:
 | `min_tokens` | Global minimum token count after text cleaning (`0` = no filter). | `0` |
 | `fields` | Additional columns to keep in output (beyond mandatory `id`, `dataset`, `retrieved_utc` + classifier columns). Empty or unset keeps all input columns. | `[author, subreddit]` |
 
-**Per-classifier options** (defined as top-level keys like `toxic_roberta:`, `go_emotions:`, etc.):
+</details>
+
+<details>
+<summary><strong>Per-classifier options</strong> (defined as top-level keys like <code>toxic_roberta:</code>)</summary>
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -262,6 +273,8 @@ gpu_classifiers:
 | `gpu_ids` | Override global GPU ID list for this classifier. | global value |
 | `batch_size` | Override global rows-per-batch for disk I/O. | global value |
 | `fields` | Override global additional output columns. | global value |
+
+</details>
 
 **Bundled classifiers:**
 
@@ -303,6 +316,9 @@ processing:
 indexes: {}                  # Per-data-type index fields (set via platform config)
 ```
 
+<details>
+<summary><strong>Full options table</strong></summary>
+
 | Setting | Description | Default |
 |---------|-------------|---------|
 | **database.host** | PostgreSQL hostname (Docker service name). | `postgres` |
@@ -323,6 +339,8 @@ indexes: {}                  # Per-data-type index fields (set via platform conf
 | **indexes** | Index fields per data type (e.g., `{submissions: [dataset, author, subreddit]}`). | `{}` |
 | **tablespaces** | Tablespace definitions: map of name to host path (e.g., `{nvme1: /mnt/nvme1/pg-tablespace}`). | `{}` |
 | **table_tablespaces** | Table-to-tablespace assignments: map of data type to tablespace name (e.g., `{submissions: nvme1}`). Use `pgdata` for the default PostgreSQL data directory. | `{}` |
+
+</details>
 
 See [Tablespaces](profiles/database.md#tablespaces) for details on multi-disk setups.
 
@@ -353,7 +371,9 @@ processing:
 | **processing.type_inference_rows** | Number of rows sampled to infer column types from CSV data. | `1000` |
 | **processing.use_foreign_key** | Add foreign key constraint linking to the main table. Requires the main table to exist; set `false` for independent ingestion. | `true` |
 | **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
-**Note:** `prefer_lingua` is read from the postgres profile (`config/postgres/pipeline.yaml`). When `true`, the lingua classifier is skipped during `postgres_ml` ingestion because lingua data is already in the main table. When `false`, lingua data is ingested from the `lingua_ingest` directory.
+
+> [!NOTE]
+> `prefer_lingua` is read from the postgres profile (`config/postgres/pipeline.yaml`). When `true`, the lingua classifier is skipped during `postgres_ml` ingestion because lingua data is already in the main table. When `false`, lingua data is ingested from the `lingua_ingest` directory.
 
 #### Classifier Table Definitions: `config/postgres_ml/services.yaml`
 
@@ -383,7 +403,7 @@ classifiers:
 | `source_dir_ingest` | Alternative source directory (lingua only, used when `prefer_lingua: false`). |
 | `suffix` | File suffix pattern and table name suffix (e.g., `_lingua` produces table `submissions_lingua`). |
 
-Column types are auto-inferred from CSV data -- no manual column definitions are needed.
+Column types are auto-inferred from CSV data — no manual column definitions are needed.
 
 See also: [Database Profile guide](profiles/database.md)
 
@@ -397,10 +417,11 @@ The PostgreSQL container loads its configuration from `config/postgres/`:
 |------|---------|
 | `postgresql.conf` | Server tuning parameters (shared_buffers, work_mem, etc.) |
 | `pg_hba.conf` | Client authentication rules |
-| `postgresql.local.conf` | **Local override** -- if present, replaces `postgresql.conf` |
-| `pg_hba.local.conf` | **Local override** -- if present, replaces `pg_hba.conf` |
+| `postgresql.local.conf` | **Local override** — if present, replaces `postgresql.conf` |
+| `pg_hba.local.conf` | **Local override** — if present, replaces `pg_hba.conf` |
 
-**Recommended approach:** Run `python sdb.py setup`, which handles PGTune integration and ZFS optimization as part of the interactive setup.
+> [!TIP]
+> Run `python sdb.py setup`, which handles PGTune integration and ZFS optimization as part of the interactive setup.
 
 **Manual approach:**
 
@@ -429,6 +450,9 @@ Each platform has a `platform.yaml` in `config/platforms/<platform>/` that defin
 
 ### Reddit Platform: `config/platforms/reddit/platform.yaml`
 
+<details>
+<summary><strong>Full config</strong></summary>
+
 ```yaml
 db_schema: reddit
 
@@ -454,21 +478,24 @@ indexes:
     - author
     - subreddit
     - domain
-    - created_utc
   comments:
     - dataset
     - author
     - subreddit
     - link_id
-    - created_utc
 ```
+
+</details>
 
 The Reddit platform also includes:
 
-- **`field_list.yaml`** -- Fields to extract per data type (submissions: 24 fields, comments: 17 fields).
-- **`field_types.yaml`** -- PostgreSQL type mappings for each field (integer, bigint, float, boolean, text, varchar).
+- **`field_list.yaml`** — Fields to extract per data type (submissions: 24 fields, comments: 17 fields).
+- **`field_types.yaml`** — PostgreSQL type mappings for each field (integer, bigint, float, boolean, text, varchar).
 
 ### Generic Platform: `config/platforms/generic/platform.yaml`
+
+<details>
+<summary><strong>Full config</strong></summary>
 
 ```yaml
 db_schema: null       # Required: set in user.yaml
@@ -486,10 +513,12 @@ file_patterns: {}     # Required: set in user.yaml
 indexes: {}           # Optional: set in user.yaml
 ```
 
+</details>
+
 The generic platform ships with:
 
-- **`field_types.yaml`** -- Common field type definitions (id, created_at, timestamp, text, content, author, title, url, score, count).
-- **`field_list.yaml.example`** -- Example field list showing how to define data types and fields, including support for dot notation (`user.profile.name`) and array indexing (`items.0.id`).
+- **`field_types.yaml`** — Common field type definitions (id, created_at, timestamp, text, content, author, title, url, score, count).
+- **`field_list.yaml.example`** — Example field list showing how to define data types and fields, including support for dot notation (`user.profile.name`) and array indexing (`items.0.id`).
 
 To use the generic platform:
 

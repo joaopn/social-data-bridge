@@ -2,6 +2,8 @@
 
 Social Data Bridge supports adding new platforms through configuration files and an optional custom parser.
 
+---
+
 ## Steps
 
 ### 1. Create Platform Configuration
@@ -113,7 +115,10 @@ def get_platform_parser(platform):
 python sdb.py run parse
 ```
 
-> **Note:** The platform is configured during `python sdb.py setup`. Select your custom platform during setup.
+> [!NOTE]
+> The platform is configured during `python sdb.py setup`. Select your custom platform during setup.
+
+---
 
 ## Using the Generic Parser
 

@@ -2,6 +2,8 @@
 
 The generic platform (`PLATFORM=generic`) provides simple JSON-to-CSV conversion for arbitrary data sources, without platform-specific logic.
 
+---
+
 ## Setup Guide
 
 ### 1. Prepare Your Data
@@ -17,7 +19,8 @@ data/extracted/
     └── users_export
 ```
 
-> **Note:** The generic platform currently requires pre-extracted files placed directly in `data/extracted/`. Automatic `.zst` decompression uses platform-specific filename patterns.
+> [!NOTE]
+> The generic platform currently requires pre-extracted files placed directly in `data/extracted/`. Automatic `.zst` decompression uses platform-specific filename patterns.
 
 ### 2. Configure Field List
 
@@ -97,7 +100,10 @@ python sdb.py run ml_cpu
 python sdb.py run ml
 ```
 
-> **Note:** The platform is configured during `python sdb.py setup`. If you need to use the generic platform, select it during setup.
+> [!TIP]
+> The platform is configured during `python sdb.py setup`. If you need to use the generic platform, select it during setup and all of the above will be generated for you.
+
+---
 
 ## Features
 

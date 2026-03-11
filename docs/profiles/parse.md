@@ -1,7 +1,6 @@
 # Parse Profile
 
-## Overview
-The parse profile decompresses `.zst` compressed data dumps and parses JSON to CSV files. It's the entry point of the pipeline - all other profiles depend on its output.
+The parse profile decompresses `.zst` compressed data dumps and parses JSON to CSV files. It's the entry point of the pipeline — all other profiles depend on its output.
 
 ## Running
 
@@ -9,7 +8,10 @@ The parse profile decompresses `.zst` compressed data dumps and parses JSON to C
 python sdb.py run parse
 ```
 
-> **Note:** The platform (Reddit or generic) is configured during `python sdb.py setup`.
+> [!NOTE]
+> The platform (Reddit or generic) is configured during `python sdb.py setup`.
+
+---
 
 ## How It Works
 
@@ -34,6 +36,8 @@ Three-phase pipeline:
 - Writes CSV with headers
 - Uses temp files for atomic writes
 
+---
+
 ## Configuration
 
 **Config file:** `config/parse/pipeline.yaml`
@@ -48,10 +52,14 @@ Three-phase pipeline:
 
 See [Configuration Reference](../configuration.md) for full details and the user.yaml override system.
 
+---
+
 ## Parallel vs Sequential Mode
 
 - **Parallel** (`parallel_mode: true`): All detected files parsed concurrently using `parse_workers` processes. Faster but uses more disk space (all JSON files extracted before parsing).
 - **Sequential** (`parallel_mode: false`): Process files one at a time. Lower disk usage since intermediate JSON can be cleaned up after each file.
+
+---
 
 ## Platform-Specific Behavior
 
@@ -59,6 +67,8 @@ The parse profile delegates to a platform-specific parser based on the `PLATFORM
 
 - **Reddit** (default): Specialized parsing with deletion detection, base-36 ID conversion, and format compatibility. See [Reddit Platform](../platforms/reddit.md).
 - **Generic**: Simple JSON-to-CSV with configurable field extraction. See [Generic Platform](../platforms/generic.md).
+
+---
 
 ## Output Structure
 
@@ -73,6 +83,8 @@ CSV_PATH/
 ```
 
 CSV files include headers. Column order: `dataset, id, retrieved_utc, ...fields from field_list.yaml...`
+
+---
 
 ## Resume Behavior
 

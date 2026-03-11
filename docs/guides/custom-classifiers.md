@@ -2,6 +2,8 @@
 
 Social Data Bridge supports two approaches for adding custom classifiers: config-only (for HuggingFace transformer models) and custom Python (for any classification logic).
 
+---
+
 ## Config-Only Approach
 
 For HuggingFace models that follow standard classification patterns, you can add a classifier entirely through configuration.
@@ -69,6 +71,8 @@ classifiers:
 ### Available Options
 
 See the full [Transformer Options Reference](../profiles/classification.md#transformer-options-reference) for all per-classifier options.
+
+---
 
 ## Custom Python Approach
 

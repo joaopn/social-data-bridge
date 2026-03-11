@@ -55,7 +55,9 @@ Lingua has two output modes controlled by `prefer_lingua` in the postgres profil
 
 **Config file:** `config/ml_cpu/cpu_classifiers.yaml`
 
-Global settings:
+<details>
+<summary><strong>Global settings</strong></summary>
+
 | Option | Description | Default |
 |--------|-------------|---------|
 | `text_columns` | Columns to classify per data type | submissions: [title, selftext], comments: [body] |
@@ -63,7 +65,11 @@ Global settings:
 | `remove_patterns` | Regex patterns to remove | URLs, r/subreddit, u/user |
 | `fields` | Extra columns in lingua_ingest CSV | `[]` (only mandatory fields) |
 
-Lingua settings:
+</details>
+
+<details>
+<summary><strong>Lingua settings</strong></summary>
+
 | Option | Description | Default |
 |--------|-------------|---------|
 | `suffix` | Output filename suffix | `"_lingua"` |
@@ -73,6 +79,8 @@ Lingua settings:
 | `file_workers` | Files processed in parallel | `2` |
 | `batch_size` | Rows per batch | `2000000` |
 | `languages` | Lingua enum names to detect | 54 languages in 5 tiers |
+
+</details>
 
 ### Language Tiers
 
@@ -129,7 +137,9 @@ The ml profile uses persistent worker threads for GPU inference:
 
 ### Default Classifiers
 
-#### toxic_roberta
+<details>
+<summary><strong>toxic_roberta</strong></summary>
+
 - **Model**: `joaopn/unbiased-toxic-roberta-onnx-fp16`
 - **Type**: ONNX FP16
 - **Activation**: sigmoid (multi-label)
@@ -137,7 +147,11 @@ The ml profile uses persistent worker threads for GPU inference:
 - **Output**: Toxicity labels (toxic, severe_toxic, obscene, threat, insult, identity_hate)
 - **Strategy**: chunk with stride=256, top_k=1 (max-pooling)
 
-#### go_emotions
+</details>
+
+<details>
+<summary><strong>go_emotions</strong></summary>
+
 - **Model**: `joaopn/roberta-base-go_emotions-onnx-fp16`
 - **Type**: ONNX FP16
 - **Activation**: sigmoid (multi-label)
@@ -145,7 +159,12 @@ The ml profile uses persistent worker threads for GPU inference:
 - **Output**: 28 emotion labels (admiration, amusement, anger, annoyance, approval, caring, confusion, curiosity, desire, disappointment, disapproval, disgust, embarrassment, excitement, fear, gratitude, grief, joy, love, nervousness, optimism, pride, realization, relief, remorse, sadness, surprise, neutral)
 - **Strategy**: chunk with stride=256, top_k=3
 
+</details>
+
 ### Transformer Options Reference
+
+<details>
+<summary><strong>Full options table</strong></summary>
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -168,6 +187,8 @@ The ml profile uses persistent worker threads for GPU inference:
 
 Global settings that can be overridden per-classifier: `gpu_ids`, `file_workers`, `tokenize_workers`, `batch_size`, `classifier_batch_size`, `use_lingua`, `lang2_fallback`, `min_tokens`, `fields`.
 
+</details>
+
 ---
 
 ## Shared Concepts
@@ -189,14 +210,9 @@ Both profiles check for existing output files before processing:
 - To reprocess: delete the specific output file or the entire classifier output directory
 
 ```bash
-# Reprocess lingua only
-rm -rf data/output/lingua/
-
-# Reprocess toxic_roberta only
-rm -rf data/output/toxic_roberta/
-
-# Reprocess all classifiers
-rm -rf data/output/
+rm -rf data/output/lingua/          # Reprocess lingua only
+rm -rf data/output/toxic_roberta/   # Reprocess toxic_roberta only
+rm -rf data/output/                 # Reprocess all classifiers
 ```
 
 ### Running a Single Classifier
@@ -207,7 +223,8 @@ Use the `CLASSIFIER` environment variable to run only one GPU classifier:
 CLASSIFIER=toxic_roberta docker compose --profile ml up
 ```
 
-This skips all other classifiers in the gpu_classifiers list. This is a per-run override; for standard usage, configure classifiers during `python sdb.py setup` and run with `python sdb.py run ml`.
+> [!NOTE]
+> This is a per-run override. For standard usage, configure classifiers during `python sdb.py setup` and run with `python sdb.py run ml`.
 
 ### Watch Mode
 

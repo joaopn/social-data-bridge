@@ -5,20 +5,14 @@ Three profiles work together for PostgreSQL ingestion: `postgres` runs the datab
 ## Running
 
 ```bash
-# Start PostgreSQL server
-python sdb.py start
-
-# Ingest parsed CSVs into main tables
-python sdb.py run postgres_ingest
-
-# Ingest ML classifier outputs
-python sdb.py run postgres_ml
-
-# Stop PostgreSQL server
-python sdb.py stop
+python sdb.py start                  # Start PostgreSQL server
+python sdb.py run postgres_ingest    # Ingest parsed CSVs into main tables
+python sdb.py run postgres_ml        # Ingest ML classifier outputs
+python sdb.py stop                   # Stop PostgreSQL server
 ```
 
-**Note:** The `postgres` profile must be running before `postgres_ingest` or `postgres_ml` can connect.
+> [!IMPORTANT]
+> The `postgres` profile must be running before `postgres_ingest` or `postgres_ml` can connect.
 
 ---
 
@@ -45,13 +39,8 @@ Use [PGTune](https://pgtune.leopard.in.ua/) to generate optimal settings:
 
 Append the output to `config/postgres/postgresql.conf`.
 
-The default configuration is tuned for:
-- 60GB RAM, 24 CPUs, SSD storage
-- `shared_buffers`: 16GB
-- `effective_cache_size`: 100GB
-- `max_parallel_workers`: 24
-- `synchronous_commit`: off (faster writes, safe with `fsync: on`)
-- Autovacuum: disabled (manual VACUUM expected after bulk loads)
+> [!TIP]
+> The default configuration is tuned for 60GB RAM, 24 CPUs, SSD storage. Run `python sdb.py setup` to generate a `postgresql.local.conf` with PGTune integration and optional ZFS optimization.
 
 ---
 
@@ -96,20 +85,22 @@ When a table does not exist yet, the pipeline automatically uses an optimized bu
 3. **Deduplication** — In-place `ROW_NUMBER()` window function removes duplicates by `id`, keeping the row with the latest `retrieved_utc`
 4. **PRIMARY KEY** — Adds primary key constraint in a single index build after all data is loaded
 
-**Performance**: Faster than ON CONFLICT for initial loads with billions of rows. The speedup comes from deferring index maintenance until after all data is loaded.
-
-Once the table exists, subsequent ingestions always use ON CONFLICT.
+> [!NOTE]
+> Faster than ON CONFLICT for initial loads with billions of rows. The speedup comes from deferring index maintenance until after all data is loaded. Once the table exists, subsequent ingestions always use ON CONFLICT.
 
 ### Indexing
 
 After ingestion, indexes are created on configured fields:
-- Index fields come from the platform's `platform.yaml` (e.g., Reddit: `[dataset, author, subreddit, domain, created_utc]` for submissions)
+- Index fields come from the platform's `platform.yaml` (e.g., Reddit: `[dataset, author, subreddit, domain]` for submissions)
 - `parallel_index_workers` controls `max_parallel_maintenance_workers` per index build
 - Indexes are B-tree by default
 
 ### Configuration
 
 **Config file:** `config/postgres/pipeline.yaml`
+
+<details>
+<summary><strong>Full options table</strong></summary>
 
 | Option | Description | Default |
 |--------|-------------|---------|
@@ -131,6 +122,8 @@ After ingestion, indexes are created on configured fields:
 | `indexes` | Index fields per data type | `{}` (from platform) |
 | `tablespaces` | Tablespace definitions (name → host path) | `{}` |
 | `table_tablespaces` | Data type → tablespace assignments | `{}` |
+
+</details>
 
 ---
 
@@ -219,6 +212,7 @@ Once the table exists, subsequent ingestions use ON CONFLICT.
 **Config file:** `config/postgres_ml/services.yaml`
 
 Each classifier entry has:
+
 | Option | Description |
 |--------|-------------|
 | `enabled` | Whether to process this classifier |
