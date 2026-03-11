@@ -3,7 +3,7 @@
 # Social Data Bridge
 
 [![Docker](https://img.shields.io/badge/Docker-Compose_v2-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Python 3.13](https://img.shields.io/badge/Python-3.13-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 
@@ -76,6 +76,7 @@ flowchart TD
 
 ## ◾ Requirements
 
+- [Python](https://www.python.org/) 3.10+ (for `sdb.py` CLI and setup scripts)
 - [Docker Compose](https://docs.docker.com/compose/) v2
 - Sufficient storage (see [Storage Requirements](#-storage-requirements))
 
