@@ -63,7 +63,6 @@ python sdb.py status
 ```mermaid
 flowchart TD
     ZST[".zst dump files"]
-    JSON["Extracted JSON"]
     CSV["Parsed CSVs"]
     LINGUA["CSVs with language"]
     ML_OUT["ML Classifier outputs"]
@@ -71,8 +70,7 @@ flowchart TD
     MONGO[(MongoDB)]
 
     ZST -->|"parse"| CSV
-    ZST -->|"mongo_ingest"| JSON
-    JSON -->|"mongoimport"| MONGO
+    ZST -->|"mongo_ingest"| MONGO
     CSV -->|"ml_cpu"| LINGUA
     CSV -->|"ml"| ML_OUT
     LINGUA -.->|"lang filter"| ML_OUT
