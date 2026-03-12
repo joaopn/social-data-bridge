@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
 from ..core.state import PipelineState
-from ..core.decompress import decompress_zst
+from ..core.decompress import decompress_file, is_compressed, strip_compression_extension
 from ..core.config import (
     load_profile_config,
     load_platform_config as _load_platform_config,
@@ -34,8 +34,9 @@ from ..db.postgres.ingest import (
 from .ml import detect_parsed_csv_files
 
 
-# Platform selection via environment variable
+# Platform and source selection via environment variables
 PLATFORM = os.environ.get('PLATFORM', 'reddit')
+SOURCE = os.environ.get('SOURCE') or PLATFORM
 
 
 def get_platform_parser():
@@ -60,7 +61,7 @@ def get_platform_parser():
 
 def load_platform_config(config_dir: str) -> Dict:
     """Load platform configuration using centralized loader."""
-    return _load_platform_config(config_dir, PLATFORM)
+    return _load_platform_config(config_dir, PLATFORM, source=SOURCE)
 
 
 def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
@@ -80,7 +81,7 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
     Raises:
         ConfigurationError: If required config is missing
     """
-    config = load_profile_config('postgres_ingest', config_dir, quiet)
+    config = load_profile_config('postgres_ingest', config_dir, source=SOURCE, quiet=quiet)
     
     # Apply environment variable overrides for database settings
     config = apply_env_overrides(config, 'postgres_ingest')
@@ -93,45 +94,56 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
 
 
 def detect_dump_files(dumps_dir: str, data_types: List[str], file_patterns: Dict) -> List[Tuple[str, str]]:
-    """Detect .zst dump files in the dumps directory and subfolders."""
+    """Detect compressed dump files in the dumps directory and subfolders."""
     dumps_path = Path(dumps_dir)
     files = []
-    
-    # Build patterns from platform config
+
     patterns = {}
     for data_type in data_types:
-        if data_type in file_patterns and 'zst' in file_patterns[data_type]:
-            patterns[data_type] = re.compile(file_patterns[data_type]['zst'])
-    
+        if data_type not in file_patterns:
+            continue
+        dt_patterns = file_patterns[data_type]
+        if 'dump' in dt_patterns:
+            patterns[data_type] = re.compile(dt_patterns['dump'])
+        elif 'zst' in dt_patterns:
+            patterns[data_type] = re.compile(dt_patterns['zst'])
+
     search_dirs = [dumps_path]
     for subfolder in data_types:
         subfolder_path = dumps_path / subfolder
         if subfolder_path.is_dir():
             search_dirs.append(subfolder_path)
-    
+
     for search_dir in search_dirs:
         if not search_dir.exists():
             continue
-        for filepath in search_dir.glob("*.zst"):
+        for filepath in search_dir.iterdir():
+            if not filepath.is_file():
+                continue
+            if not is_compressed(filepath.name):
+                continue
             filename = filepath.name
-            
+
             for data_type in data_types:
                 if data_type not in patterns:
                     continue
-                    
+
                 match = patterns[data_type].match(filename)
                 if match:
                     date_str = match.group(1) if match.groups() else filename
                     files.append((str(filepath), data_type, date_str))
                     break
-    
+
     files.sort(key=lambda x: (x[2], x[1]))
-    
+
     return [(f[0], f[1]) for f in files]
 
 
 def get_file_identifier(filepath: str) -> str:
-    """Extract identifier from filepath for state tracking."""
+    """Extract identifier from filepath, stripping compression extensions."""
+    name = Path(filepath).name
+    if is_compressed(name):
+        return strip_compression_extension(name)
     return Path(filepath).stem
 
 
@@ -208,7 +220,7 @@ def get_lingua_config(config_dir: str) -> Optional[Dict]:
         Dict with 'suffix' and 'output_dir' keys, or None if config not found
     """
     try:
-        ml_config = load_profile_config('ml_cpu', config_dir, quiet=True)
+        ml_config = load_profile_config('ml_cpu', config_dir, source=SOURCE, quiet=True)
         lingua_config = ml_config.get('lingua', {})
         return {
             'suffix': lingua_config.get('suffix', '_lingua'),
@@ -312,7 +324,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     total_failed = 0
 
     for dt in data_types:
-        state_file = f"{state_dir}/{PLATFORM}_postgres_ingest_{dt}.json"
+        state_file = f"{state_dir}/{SOURCE}_postgres_ingest_{dt}.json"
         states[dt] = PipelineState(
             state_file=state_file,
             db_config={
@@ -437,7 +449,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             expected_json = Path(extract_type_dir) / file_id
             if not expected_json.exists():
                 try:
-                    decompress_zst(filepath, extract_type_dir)
+                    decompress_file(filepath, extract_type_dir)
                 except Exception as e:
                     print(f"[sdb] Error extracting {file_id}: {e}")
                     states[data_type].mark_failed(file_id, f"Extraction failed: {e}")

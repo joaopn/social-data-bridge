@@ -1,19 +1,20 @@
 """
 Unified configuration loader for social_data_bridge.
 
-Supports profile-based configuration with user overrides.
-Each profile can have a user.yaml that overrides base config values.
-Shared configs also support a user.yaml.
+Supports profile-based configuration with source-specific overrides.
+Each source can have per-profile override files in config/sources/<source>/.
 
-User overrides are scoped by filename:
-    user.yaml:
+Source overrides are loaded from config/sources/<source>/<profile_key>.yaml
+and scoped by filename key (same as legacy user.yaml):
+    parse.yaml:
         pipeline:           # Overrides pipeline.yaml
             processing:
                 workers: 16
-        gpu_classifiers:    # Overrides gpu_classifiers.yaml
-            batch_size: 1000000
 
-List values in user.yaml fully replace base values (no merging).
+Legacy user.yaml overrides in config/<profile>/user.yaml are still supported
+as a fallback when no source is specified.
+
+List values in overrides fully replace base values (no merging).
 
 No hardcoded defaults - missing required config values will raise errors.
 """
@@ -94,31 +95,36 @@ def get_config_key(filename: str) -> str:
 def load_profile_config(
     profile: str,
     config_dir: str = "/app/config",
+    source: str = None,
     quiet: bool = False
 ) -> Dict[str, Any]:
     """
-    Load configuration for a profile with user.yaml overrides.
-    
-    Loads all base config files for the profile, then applies
-    user.yaml overrides scoped by filename key.
-    
-    user.yaml structure:
+    Load configuration for a profile with source-specific overrides.
+
+    Loads all base config files for the profile, then applies overrides.
+
+    Override resolution order:
+        1. If source is provided: config/sources/<source>/<profile_key>.yaml
+        2. Fallback: config/<profile_folder>/user.yaml (legacy)
+
+    Override structure (scoped by config filename key):
         pipeline:           # Overrides pipeline.yaml
             processing:
                 workers: 16
         gpu_classifiers:    # Overrides gpu_classifiers.yaml
             batch_size: 1000000
-    
-    List values in user.yaml fully replace base values (no merging).
-    
+
+    List values in overrides fully replace base values (no merging).
+
     Args:
         profile: Profile name ('parse', 'ml_cpu', 'ml', 'postgres_ingest', 'postgres_ml')
         config_dir: Base configuration directory
+        source: Source name. If provided, loads overrides from config/sources/<source>/
         quiet: If True, suppress informational output
-        
+
     Returns:
         Merged configuration dictionary
-        
+
     Raises:
         ConfigurationError: If required config files are missing
     """
@@ -129,10 +135,10 @@ def load_profile_config(
     }
     folder_name = profile_folders.get(profile, profile)
     config_path = Path(config_dir) / folder_name
-    
+
     if not config_path.exists():
         raise ConfigurationError(f"Config directory not found: {config_path}")
-    
+
     # Define base config files per profile
     profile_configs = {
         'parse': ['pipeline.yaml'],
@@ -142,36 +148,60 @@ def load_profile_config(
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
         'mongo_ingest': ['pipeline.yaml'],
     }
-    
+
     if profile not in profile_configs:
         raise ConfigurationError(f"Unknown profile: {profile}")
-    
-    # Load user.yaml if it exists
-    user_config_path = config_path / 'user.yaml'
-    user_config = load_yaml_file(user_config_path)
+
+    # Map profiles to source override filenames
+    source_override_files = {
+        'parse': 'parse.yaml',
+        'ml_cpu': 'ml_cpu.yaml',
+        'ml': 'ml.yaml',
+        'postgres_ingest': 'postgres.yaml',
+        'postgres_ml': 'postgres_ml.yaml',
+        'mongo_ingest': 'mongo.yaml',
+    }
+
+    # Try source-specific override first, then fall back to legacy user.yaml
+    user_config = None
+    override_label = None
+
+    if source:
+        source_override_path = Path(config_dir) / "sources" / source / source_override_files[profile]
+        user_config = load_yaml_file(source_override_path)
+        if user_config is not None:
+            override_label = f"sources/{source}/{source_override_files[profile]}"
+
+    if user_config is None:
+        # Legacy fallback: config/<profile_folder>/user.yaml
+        user_config_path = config_path / 'user.yaml'
+        user_config = load_yaml_file(user_config_path)
+        if user_config is not None:
+            override_label = f"{folder_name}/user.yaml"
+
     has_user_config = user_config is not None
-    
+
     if has_user_config and not quiet:
-        print(f"[sdb] Using user override: {profile}/user.yaml")
-    
+        print(f"[sdb] Using override: {override_label}")
+
     # Load each base config file and apply user overrides
     merged_config = {}
     for config_file in profile_configs[profile]:
         file_path = config_path / config_file
         config = load_yaml_file(file_path)
-        
+
         if config is None:
             raise ConfigurationError(f"Required config file not found: {file_path}")
-        
+
         # Apply user overrides for this specific file
         if has_user_config:
             config_key = get_config_key(config_file)
             if config_key in user_config:
                 config = deep_merge(config, user_config[config_key])
-        
+
         # Merge into final config
         merged_config = deep_merge(merged_config, config)
-    
+
     return merged_config
 
 
@@ -311,22 +341,21 @@ def validate_classifier_config(config: Dict, classifier_name: str, profile: str)
 
 def load_platform_config(
     config_dir: str = "/app/config",
-    platform: str = None
+    platform: str = None,
+    source: str = None
 ) -> Dict[str, Any]:
     """
     Load platform-specific configuration.
 
-    Built-in platforms (e.g., 'reddit'):
-        Loads config/platforms/{platform}/platform.yaml as the base,
-        then deep-merges user.yaml on top if it exists.
-
-    Custom platforms (e.g., 'custom/twitter'):
-        Loads config/platforms/custom/{name}.yaml directly.
-        No user.yaml support — the file is self-contained.
+    Resolution order:
+        1. If source is provided: config/sources/<source>/platform.yaml
+        2. Legacy custom platforms: config/platforms/custom/<name>.yaml
+        3. Legacy built-in platforms: config/platforms/<platform>/platform.yaml + user.yaml
 
     Args:
         config_dir: Base configuration directory
         platform: Platform name. If None, reads from PLATFORM env var (default: reddit)
+        source: Source name. If provided, loads from config/sources/<source>/platform.yaml
 
     Returns:
         Platform configuration dictionary
@@ -336,6 +365,14 @@ def load_platform_config(
     """
     if platform is None:
         platform = os.environ.get('PLATFORM', 'reddit')
+
+    # Source-specific config takes priority
+    if source:
+        source_path = Path(config_dir) / "sources" / source / "platform.yaml"
+        config = load_yaml_file(source_path)
+        if config is not None:
+            return config
+        # Fall through to legacy paths if source config doesn't exist
 
     if platform.startswith('custom/'):
         # Custom platform: single self-contained file
@@ -402,6 +439,26 @@ def get_platform_field_types(platform_config: Dict) -> Dict[str, Any]:
     if not field_types:
         raise ConfigurationError("No field_types configured in platform config")
     return field_types
+
+
+def load_db_config(
+    db_type: str,
+    config_dir: str = "/app/config"
+) -> Optional[Dict[str, Any]]:
+    """
+    Load global database configuration.
+
+    Loads from config/db/<db_type>.yaml (e.g., config/db/postgres.yaml).
+
+    Args:
+        db_type: Database type ('postgres' or 'mongo')
+        config_dir: Base configuration directory
+
+    Returns:
+        Database configuration dictionary, or None if not found
+    """
+    config_path = Path(config_dir) / "db" / f"{db_type}.yaml"
+    return load_yaml_file(config_path)
 
 
 def apply_env_overrides(config: Dict, profile: str) -> Dict:

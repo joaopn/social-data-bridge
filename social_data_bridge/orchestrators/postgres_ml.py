@@ -30,13 +30,14 @@ from ..db.postgres.ingest import (
 )
 
 
-# Platform selection via environment variable
+# Platform and source selection via environment variables
 PLATFORM = os.environ.get('PLATFORM', 'reddit')
+SOURCE = os.environ.get('SOURCE') or PLATFORM
 
 
 def load_platform_config(config_dir: str) -> Dict:
     """Load platform configuration using centralized loader."""
-    return _load_platform_config(config_dir, PLATFORM)
+    return _load_platform_config(config_dir, PLATFORM, source=SOURCE)
 
 
 def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
@@ -53,7 +54,7 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
     Raises:
         ConfigurationError: If required config is missing
     """
-    config = load_profile_config('postgres_ml', config_dir, quiet)
+    config = load_profile_config('postgres_ml', config_dir, source=SOURCE, quiet=quiet)
     
     # Apply environment variable overrides for database settings
     config = apply_env_overrides(config, 'postgres_ml')
@@ -163,7 +164,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     use_foreign_key = proc_config.get('use_foreign_key', True)
     # Read settings from postgres profile (tablespaces, prefer_lingua)
     try:
-        postgres_config = load_profile_config('postgres_ingest', config_dir, quiet=True)
+        postgres_config = load_profile_config('postgres_ingest', config_dir, source=SOURCE, quiet=True)
         prefer_lingua = postgres_config.get('processing', {}).get('prefer_lingua', True)
         tablespaces = postgres_config.get('tablespaces', {})
         table_tablespaces = postgres_config.get('table_tablespaces', {})
@@ -217,7 +218,7 @@ def run_pipeline(config_dir: str = "/app/config"):
 
     states = {}
     for dt in data_types:
-        state_file = f"{state_dir}/{PLATFORM}_postgres_ml_{dt}.json"
+        state_file = f"{state_dir}/{SOURCE}_postgres_ml_{dt}.json"
         states[dt] = PipelineState(state_file)
     
     total_success = 0

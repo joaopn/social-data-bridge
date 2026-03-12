@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 
 from ..core.state import PipelineState
-from ..core.decompress import decompress_zst
+from ..core.decompress import decompress_file, is_compressed, strip_compression_extension
 from ..core.config import (
     load_profile_config,
     load_platform_config as _load_platform_config,
@@ -35,13 +35,14 @@ from ..db.mongo.ingest import (
 )
 
 
-# Platform selection via environment variable
+# Platform and source selection via environment variables
 PLATFORM = os.environ.get('PLATFORM', 'reddit')
+SOURCE = os.environ.get('SOURCE') or PLATFORM
 
 
 def load_platform_config(config_dir: str) -> Dict:
     """Load platform configuration using centralized loader."""
-    return _load_platform_config(config_dir, PLATFORM)
+    return _load_platform_config(config_dir, PLATFORM, source=SOURCE)
 
 
 def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
@@ -55,7 +56,7 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
     Returns:
         Merged configuration dictionary
     """
-    config = load_profile_config('mongo_ingest', config_dir, quiet)
+    config = load_profile_config('mongo_ingest', config_dir, source=SOURCE, quiet=quiet)
     config = apply_env_overrides(config, 'mongo_ingest')
     validate_processing_config(config, 'mongo_ingest')
     validate_mongo_config(config)
@@ -69,14 +70,19 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
 def detect_dump_files(
     dumps_dir: str, data_types: List[str], file_patterns: Dict
 ) -> List[Tuple[str, str]]:
-    """Detect .zst dump files in the dumps directory and subfolders."""
+    """Detect compressed dump files in the dumps directory and subfolders."""
     dumps_path = Path(dumps_dir)
     files = []
 
     patterns = {}
     for data_type in data_types:
-        if data_type in file_patterns and 'zst' in file_patterns[data_type]:
-            patterns[data_type] = re.compile(file_patterns[data_type]['zst'])
+        if data_type not in file_patterns:
+            continue
+        dt_patterns = file_patterns[data_type]
+        if 'dump' in dt_patterns:
+            patterns[data_type] = re.compile(dt_patterns['dump'])
+        elif 'zst' in dt_patterns:
+            patterns[data_type] = re.compile(dt_patterns['zst'])
 
     search_dirs = [dumps_path]
     for subfolder in data_types:
@@ -87,7 +93,11 @@ def detect_dump_files(
     for search_dir in search_dirs:
         if not search_dir.exists():
             continue
-        for filepath in search_dir.glob("*.zst"):
+        for filepath in search_dir.iterdir():
+            if not filepath.is_file():
+                continue
+            if not is_compressed(filepath.name):
+                continue
             filename = filepath.name
             for data_type in data_types:
                 if data_type not in patterns:
@@ -136,7 +146,10 @@ def detect_json_files(
 
 
 def get_file_identifier(filepath: str) -> str:
-    """Extract identifier from filepath for state tracking."""
+    """Extract identifier from filepath, stripping compression extensions."""
+    name = Path(filepath).name
+    if is_compressed(name):
+        return strip_compression_extension(name)
     return Path(filepath).stem
 
 
@@ -145,15 +158,18 @@ def get_file_identifier(filepath: str) -> str:
 # ---------------------------------------------------------------------------
 
 def get_collection_name(
-    file_id: str, data_type: str, strategy: str, file_patterns: Dict
+    file_id: str, data_type: str, strategy: str,
+    file_patterns: Dict, collection_map: Dict = None,
 ) -> str:
     """
     Derive collection name from file and strategy.
 
+    per_data_type: use explicit collection_map if provided, else data_type name.
     per_file: extract date/identifier portion from file_id using json pattern.
-    per_data_type: use the data_type name as collection name.
     """
     if strategy == 'per_data_type':
+        if collection_map and data_type in collection_map:
+            return collection_map[data_type]
         return data_type
 
     # per_file: extract identifier from filename using the json pattern
@@ -167,13 +183,19 @@ def get_collection_name(
     return file_id
 
 
-def get_db_name(template: str, platform: str, data_type: str) -> str:
+def get_db_name(platform_config: Dict, platform: str, data_type: str) -> str:
     """
-    Format database name from template.
+    Get MongoDB database name from platform config.
 
-    Supports {platform} and {data_type} placeholders.
-    Sanitizes platform name (custom/twitter -> custom_twitter).
+    New format: 'mongo_db_name' (single name for all data types).
+    Legacy format: 'mongo_db_name_template' with {platform}/{data_type} placeholders.
     """
+    # New format: explicit db name
+    if 'mongo_db_name' in platform_config:
+        return platform_config['mongo_db_name']
+
+    # Legacy format: template with placeholders
+    template = platform_config.get('mongo_db_name_template', '{platform}_{data_type}')
     safe_platform = platform.replace('/', '_')
     return template.format(platform=safe_platform, data_type=data_type)
 
@@ -207,7 +229,7 @@ def run_pipeline(config_dir: str = "/app/config"):
 
     file_patterns = platform_config.get('file_patterns', {})
     collection_strategy = platform_config.get('mongo_collection_strategy', 'per_file')
-    db_name_template = platform_config.get('mongo_db_name_template', '{platform}_{data_type}')
+    collection_map = platform_config.get('mongo_collections', {})
     num_workers = get_required(config, 'processing', 'num_insertion_workers')
 
     host = db_config['host']
@@ -216,7 +238,6 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdb] Profile: mongo_ingest")
     print(f"[sdb] Platform: {PLATFORM}")
     print(f"[sdb] Collection strategy: {collection_strategy}")
-    print(f"[sdb] DB name template: {db_name_template}")
     print(f"[sdb] Data types: {data_types}")
 
     # Initialize state managers - one per data_type
@@ -226,14 +247,14 @@ def run_pipeline(config_dir: str = "/app/config"):
 
     # Build db_name function for state recovery
     def db_name_func(dt):
-        return get_db_name(db_name_template, PLATFORM, dt)
+        return get_db_name(platform_config, PLATFORM, dt)
 
     states = {}
     total_processed = 0
     total_failed = 0
 
     for dt in data_types:
-        state_file = f"{state_dir}/{PLATFORM}_mongo_ingest_{dt}.json"
+        state_file = f"{state_dir}/{SOURCE}_mongo_ingest_{dt}.json"
         states[dt] = PipelineState(
             state_file=state_file,
             db_config={
@@ -320,7 +341,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             expected_json = Path(extract_type_dir) / file_id
             if not expected_json.exists():
                 try:
-                    decompress_zst(filepath, extract_type_dir)
+                    decompress_file(filepath, extract_type_dir)
                 except Exception as e:
                     print(f"[sdb] Error extracting {file_id}: {e}")
                     states[data_type].mark_failed(file_id, f"Extraction failed: {e}")
@@ -349,9 +370,9 @@ def run_pipeline(config_dir: str = "/app/config"):
         collections_by_db = {}  # {db_name: set(collection_names)}
 
         for json_path, file_id, data_type in files_to_ingest:
-            db_name = get_db_name(db_name_template, PLATFORM, data_type)
+            db_name = get_db_name(platform_config, PLATFORM, data_type)
             collection_name = get_collection_name(
-                file_id, data_type, collection_strategy, file_patterns
+                file_id, data_type, collection_strategy, file_patterns, collection_map
             )
 
             try:

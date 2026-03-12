@@ -22,6 +22,10 @@ from ..core.config import (
 )
 
 
+# Source selection via environment variable
+SOURCE = os.environ.get('SOURCE') or os.environ.get('PLATFORM', 'reddit')
+
+
 def _process_lingua_worker(args: Tuple[str, str, str, str, Dict, int]) -> Tuple[str, bool, str]:
     """
     Worker function for parallel Lingua file processing.
@@ -87,7 +91,7 @@ def load_config(config_dir: str = "/app/config", profile: str = "ml_cpu", quiet:
     if profile not in ('ml_cpu', 'ml'):
         raise ConfigurationError(f"Invalid ML profile: {profile}. Must be 'ml_cpu' or 'ml'")
     
-    config = load_profile_config(profile, config_dir, quiet)
+    config = load_profile_config(profile, config_dir, source=SOURCE, quiet=quiet)
     validate_processing_config(config, profile)
     return config
 
@@ -163,7 +167,7 @@ def run_pipeline(profile: str = "ml_cpu", config_dir: str = "/app/config", targe
     
     if profile == "ml_cpu":
         try:
-            postgres_config = load_profile_config('postgres_ingest', config_dir, quiet=True)
+            postgres_config = load_profile_config('postgres_ingest', config_dir, source=SOURCE, quiet=True)
             prefer_lingua = postgres_config.get('processing', {}).get('prefer_lingua', True)
         except Exception:
             prefer_lingua = True

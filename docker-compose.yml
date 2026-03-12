@@ -43,6 +43,7 @@ services:
       - ./config:/app/config:ro
     environment:
       - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
       - PYTHONUNBUFFERED=1
 
   # ==========================================================================
@@ -56,6 +57,7 @@ services:
     command: python -m social_data_bridge.orchestrators.ml
     environment:
       - PROFILE=ml_cpu
+      - SOURCE=${SOURCE:-}
       - PYTHONUNBUFFERED=1
     volumes:
       - ${CSV_PATH:-./data/csv}:/data/csv:ro
@@ -74,6 +76,7 @@ services:
     ipc: host  # Required for PyTorch/CUDA shared memory
     environment:
       - PROFILE=ml
+      - SOURCE=${SOURCE:-}
       - CLASSIFIER=${CLASSIFIER:-}
       - PYTHONUNBUFFERED=1
       - HF_TOKEN=${HF_TOKEN:-}
@@ -106,10 +109,10 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
-      - ${PGDATA_PATH:-./data/database}/pgdata:/var/lib/postgresql
+      - ${PGDATA_PATH:-./data/database/postgres}/pgdata:/var/lib/postgresql
       - ${CSV_PATH:-./data/csv}:/data/csv:ro
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
-      - ${PGDATA_PATH:-./data/database}:/data/database
+      - ${PGDATA_PATH:-./data/database/postgres}:/data/database
       - ./config/postgres:/etc/postgresql/config:ro
     entrypoint: ["bash", "/etc/postgresql/config/entrypoint-wrapper.sh"]
     healthcheck:
@@ -131,6 +134,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - DB_NAME=${DB_NAME:-datasets}
       - PGDATA_PATH=/data/database
@@ -138,8 +142,8 @@ services:
       - ${DUMPS_PATH:-./data/dumps}:/data/dumps:ro
       - ${EXTRACTED_PATH:-./data/extracted}:/data/extracted
       - ${CSV_PATH:-./data/csv}:/data/csv
-      - ${OUTPUT_PATH}:/data/output:ro
-      - ${PGDATA_PATH:-./data/database}:/data/database
+      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      - ${PGDATA_PATH:-./data/database/postgres}:/data/database
       - ./config:/app/config:ro
 
   # ==========================================================================
@@ -155,12 +159,13 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - DB_NAME=${DB_NAME:-datasets}
       - PGDATA_PATH=/data/database
     volumes:
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
-      - ${PGDATA_PATH:-./data/database}:/data/database
+      - ${PGDATA_PATH:-./data/database/postgres}:/data/database
       - ./config:/app/config:ro
 
   # ==========================================================================
@@ -174,7 +179,7 @@ services:
     ports:
       - "${MONGO_PORT:-27017}:27017"
     volumes:
-      - ${MONGO_DATA_PATH:-./data/mongo}/db:/data/db
+      - ${MONGO_DATA_PATH:-./data/database/mongo}/db:/data/db
       - ./config/mongo/mongod.conf:/etc/mongod.conf:ro
     command: ["mongod", "--config", "/etc/mongod.conf", "--wiredTigerCacheSizeGB", "${MONGO_CACHE_SIZE_GB:-2}"]
     healthcheck:
@@ -196,10 +201,11 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
       - MONGO_PORT=${MONGO_PORT:-27017}
       - MONGO_DATA_PATH=/data/mongo
     volumes:
       - ${DUMPS_PATH:-./data/dumps}:/data/dumps:ro
       - ${EXTRACTED_PATH:-./data/extracted}:/data/extracted
-      - ${MONGO_DATA_PATH:-./data/mongo}:/data/mongo
+      - ${MONGO_DATA_PATH:-./data/database/mongo}:/data/mongo
       - ./config:/app/config:ro

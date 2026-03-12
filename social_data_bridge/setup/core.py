@@ -112,9 +112,9 @@ def run_questionnaire(hw):
     settings["csv_path"] = ask("CSV path (parsed output)", "./data/csv")
     settings["output_path"] = ask("Output path (ML classifier output)", "./data/output")
     if any(p.startswith("postgres") for p in profiles):
-        settings["pgdata_path"] = ask("PostgreSQL data path", "./data/database")
+        settings["pgdata_path"] = ask("PostgreSQL data path", "./data/database/postgres")
     if "mongo_ingest" in profiles:
-        settings["mongo_data_path"] = ask("MongoDB data path", "./data/mongo")
+        settings["mongo_data_path"] = ask("MongoDB data path", "./data/database/mongo")
 
     # ---- Compute defaults ----
     defaults = compute_defaults(hw, profiles)

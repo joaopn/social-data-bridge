@@ -1,25 +1,38 @@
 #!/usr/bin/env python3
 """Social Data Bridge CLI.
 
-Unified entrypoint for configuration, database management, and pipeline execution.
+Unified entrypoint for database management, source configuration, and pipeline execution.
 
 Usage:
-    sdb.py setup               Interactive configuration (core → classifiers → platform)
-    sdb.py setup-reddit        Configure Reddit platform (fields, indexes, schema)
-    sdb.py add-classifiers     Configure classifiers (Lingua, GPU transformers)
-    sdb.py status              Show configuration and ingestion status
-    sdb.py start [service]     Start configured databases (postgres, mongo, or all)
-    sdb.py stop  [service]     Stop configured databases (postgres, mongo, or all)
-    sdb.py run <profile>       Run a pipeline profile (--build to rebuild image)
-    sdb.py unsetup             Remove all configuration (and optionally databases)
+    sdb.py db setup                          Configure databases (PostgreSQL, MongoDB)
+    sdb.py db start [postgres|mongo]         Start database services (all if unspecified)
+    sdb.py db stop [postgres|mongo]          Stop database services (all if unspecified)
+    sdb.py db status                         Show database config and health
+    sdb.py db unsetup                        Remove database config (and optionally data)
+
+    sdb.py source add <name>                 Add a new source (interactive setup)
+    sdb.py source configure <name>           Reconfigure existing source (platform-specific)
+    sdb.py source add-classifiers <name>     Add ML classifiers for a source
+    sdb.py source remove <name>              Remove source config
+    sdb.py source list                       List configured sources
+    sdb.py source status [name]              Show source processing/ingestion status
+
+    sdb.py run <profile> [--source <name>]   Run pipeline for a source (--build to rebuild)
+
+    sdb.py setup                             Legacy: full interactive setup (core + classifiers + platform)
 """
 
+import argparse
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+CONFIG_DIR = ROOT / "config"
+
+VALID_PROFILES = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
 
 
 # ============================================================================
@@ -42,9 +55,41 @@ def load_env():
     return env
 
 
-def load_state():
-    """Load setup_state.yaml. Returns dict or None."""
-    state_path = ROOT / "config" / "setup_state.yaml"
+def docker_compose(*args):
+    """Run docker compose with the given arguments."""
+    cmd = ["docker", "compose"] + list(args)
+    print(f"  $ {' '.join(cmd)}")
+    return subprocess.run(cmd, cwd=ROOT)
+
+
+def _get_configured_db_services():
+    """Determine which database services are configured."""
+    db_dir = CONFIG_DIR / "db"
+    services = []
+    if (db_dir / "postgres.yaml").exists():
+        services.append("postgres")
+    if (db_dir / "mongo.yaml").exists():
+        services.append("mongo")
+
+    if not services:
+        # Fallback: check legacy setup_state.yaml
+        state = _load_legacy_state()
+        if state:
+            databases = state.get("databases")
+            if databases:
+                return list(databases)
+            profiles = state.get("profiles", [])
+            if any(p.startswith("postgres") for p in profiles):
+                services.append("postgres")
+            if "mongo_ingest" in profiles:
+                services.append("mongo")
+
+    return services
+
+
+def _load_legacy_state():
+    """Load legacy setup_state.yaml. Returns dict or None."""
+    state_path = CONFIG_DIR / "setup_state.yaml"
     if not state_path.exists():
         return None
     try:
@@ -54,99 +99,91 @@ def load_state():
         return None
 
 
-def docker_compose(*args):
-    """Run docker compose with the given arguments."""
-    cmd = ["docker", "compose"] + list(args)
-    print(f"  $ {' '.join(cmd)}")
-    return subprocess.run(cmd, cwd=ROOT)
+# ============================================================================
+# sdb db setup
+# ============================================================================
+
+def cmd_db_setup(args):
+    """Run interactive database configuration."""
+    from social_data_bridge.setup.db import main as db_main
+    db_main()
+    return 0
 
 
 # ============================================================================
-# sdb setup
+# sdb db start / stop
 # ============================================================================
 
-def cmd_setup():
-    """Run interactive configuration: core → classifiers → platform."""
-    from social_data_bridge.setup.core import main as core_main
-    from social_data_bridge.setup.utils import ask_bool
-
-    # Step 1: Core setup (always required)
-    print("  Step 1: Core configuration\n")
-    core_main()
-
-    state = load_state()
-    if not state:
-        print("\n  Error: Core setup did not create state file.\n")
+def cmd_db_start(args):
+    """Start configured database server(s)."""
+    configured = _get_configured_db_services()
+    if not configured:
+        print("  No databases configured. Run: python sdb.py db setup")
         return 1
 
-    platform = state.get("platform")
-    profiles = state.get("profiles", [])
-    has_classifiers = "ml_cpu" in profiles or "ml" in profiles
-
-    # Step 2: Classifier configuration (optional)
-    if has_classifiers:
-        print("\n  Step 2: Classifier configuration (optional)\n")
-        try:
-            if ask_bool("Customize classifier settings?", False):
-                from social_data_bridge.setup.classifiers import main as classifiers_main
-                classifiers_main()
-            else:
-                print("  Skipped. Using default classifier configuration.\n")
-        except KeyboardInterrupt:
-            print("\n")
+    service = args.service
+    if service:
+        if service not in ("postgres", "mongo"):
+            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
             return 1
+        if service not in configured:
+            print(f"  Warning: '{service}' is not configured, starting anyway.")
+        targets = [service]
+    else:
+        targets = configured
 
-    # Step 3: Platform-specific configuration
-    if platform == "reddit":
-        step_n = 3 if has_classifiers else 2
-        print(f"\n  Step {step_n}: Reddit platform configuration\n")
-        from social_data_bridge.setup.reddit import main as reddit_main
-        reddit_main()
+    compose_args = []
+    for svc in targets:
+        compose_args += ["--profile", svc]
+    compose_args += ["up", "-d"]
 
-    return 0
-
-
-def cmd_setup_reddit():
-    """Run Reddit platform configuration."""
-    from social_data_bridge.setup.reddit import main
-    main()
-    return 0
+    result = docker_compose(*compose_args)
+    return result.returncode
 
 
-def cmd_add_classifiers():
-    """Run classifier configuration."""
-    from social_data_bridge.setup.classifiers import main
-    main()
-    return 0
+def cmd_db_stop(args):
+    """Stop configured database server(s)."""
+    configured = _get_configured_db_services()
+    if not configured:
+        print("  No databases configured. Run: python sdb.py db setup")
+        return 1
+
+    service = args.service
+    if service:
+        if service not in ("postgres", "mongo"):
+            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
+            return 1
+        targets = [service]
+    else:
+        targets = configured
+
+    compose_args = []
+    for svc in targets:
+        compose_args += ["--profile", svc]
+    compose_args += ["down"]
+
+    result = docker_compose(*compose_args)
+    return result.returncode
 
 
 # ============================================================================
-# sdb status
+# sdb db status
 # ============================================================================
 
-def cmd_status():
-    """Show configuration and ingestion status."""
-    state = load_state()
+def cmd_db_status(args):
+    """Show database configuration and health."""
     env = load_env()
+    configured = _get_configured_db_services()
 
-    # Configuration status
     print()
-    print("  Social Data Bridge - Status")
-    print("  ============================")
+    print("  Social Data Bridge - Database Status")
+    print("  =====================================")
 
-    if not state:
-        print("\n  Not configured. Run: python sdb.py setup\n")
-        return
+    if not configured:
+        print("\n  No databases configured. Run: python sdb.py db setup\n")
+        return 0
 
-    platform = state.get("platform", "unknown")
-    data_types = state.get("data_types", [])
-    profiles = state.get("profiles", [])
-
-    print(f"\n  Platform:    {platform}")
-    print(f"  Data types:  {', '.join(data_types)}")
-    print(f"  Profiles:    {', '.join(profiles)}")
-
-    # Check which services are running (single docker call)
+    # Check which services are running
     running_services = set()
     result = subprocess.run(
         ["docker", "compose", "ps", "--format", "json", "--filter", "status=running"],
@@ -162,10 +199,9 @@ def cmd_status():
             except json.JSONDecodeError:
                 pass
 
-    # PostgreSQL status
-    has_postgres = any(p.startswith("postgres") for p in profiles)
-    if has_postgres:
-        pgdata_path = env.get("PGDATA_PATH", "./data/database")
+    # PostgreSQL
+    if "postgres" in configured:
+        pgdata_path = env.get("PGDATA_PATH", "./data/database/postgres")
         pgdata = Path(pgdata_path)
         if not pgdata.is_absolute():
             pgdata = ROOT / pgdata
@@ -176,14 +212,12 @@ def cmd_status():
         print(f"    Port:      {env.get('POSTGRES_PORT', '5432')}")
         print(f"    Running:   {'yes' if 'postgres' in running_services else 'no'}")
 
-        # Ingestion state
         state_dir = pgdata / "state_tracking"
         _print_ingestion_state(state_dir, "_postgres_")
 
-    # MongoDB status
-    has_mongo = "mongo_ingest" in profiles
-    if has_mongo:
-        mongo_data_path = env.get("MONGO_DATA_PATH", "./data/mongo")
+    # MongoDB
+    if "mongo" in configured:
+        mongo_data_path = env.get("MONGO_DATA_PATH", "./data/database/mongo")
         mongo_data = Path(mongo_data_path)
         if not mongo_data.is_absolute():
             mongo_data = ROOT / mongo_data
@@ -193,25 +227,25 @@ def cmd_status():
         print(f"    Port:      {env.get('MONGO_PORT', '27017')}")
         print(f"    Running:   {'yes' if 'mongo' in running_services else 'no'}")
 
-        # Ingestion state
         state_dir = mongo_data / "state_tracking"
         _print_ingestion_state(state_dir, "_mongo_")
 
     print()
+    return 0
 
 
 def _print_ingestion_state(state_dir, label_split):
     """Print ingestion state from JSON files in a state directory."""
     if not state_dir.exists():
-        print(f"\n  No ingestion data yet.")
+        print(f"\n    No ingestion data yet.")
         return
 
     state_files = sorted(state_dir.glob("*.json"))
     if not state_files:
-        print(f"\n  No ingestion data yet.")
+        print(f"\n    No ingestion data yet.")
         return
 
-    print(f"\n  Ingestion status:")
+    print(f"\n    Ingestion status:")
     for sf in state_files:
         try:
             sdata = json.loads(sf.read_text())
@@ -224,7 +258,6 @@ def _print_ingestion_state(state_dir, label_split):
         in_progress = sdata.get("in_progress")
         last_updated = sdata.get("last_updated", "")
 
-        # Derive a friendly label
         parts = name.split(label_split)
         if len(parts) == 2:
             label = parts[1].replace("_", " / ", 1)
@@ -234,7 +267,7 @@ def _print_ingestion_state(state_dir, label_split):
         count = len(processed)
         latest = processed[-1] if processed else "-"
 
-        line = f"    {label}: {count} datasets"
+        line = f"      {label}: {count} datasets"
         if latest != "-":
             line += f" (latest: {latest})"
         if in_progress:
@@ -244,174 +277,87 @@ def _print_ingestion_state(state_dir, label_split):
         print(line)
 
         if last_updated:
-            print(f"      last updated: {last_updated}")
+            print(f"        last updated: {last_updated}")
 
 
 # ============================================================================
-# sdb start / stop
+# sdb db unsetup
 # ============================================================================
 
-def _get_configured_db_services():
-    """Determine which database services are configured from setup_state.yaml."""
-    state = load_state()
-    if not state:
-        return []
+# Config files generated by db setup
+DB_GENERATED_FILES = [
+    "config/db/postgres.yaml",
+    "config/db/mongo.yaml",
+    "config/postgres/postgresql.local.conf",
+    "docker-compose.override.yml",
+    ".env",
+]
 
-    # Use explicit databases list if available (new setup format)
-    databases = state.get("databases")
-    if databases:
-        return list(databases)
-
-    # Fallback: infer from profiles (old setup_state.yaml without databases key)
-    profiles = state.get("profiles", [])
-    services = []
-    if any(p.startswith("postgres") for p in profiles):
-        services.append("postgres")
-    if "mongo_ingest" in profiles:
-        services.append("mongo")
-    return services
-
-
-def cmd_start(service=None):
-    """Start configured database server(s).
-
-    Args:
-        service: Optional specific service ('postgres', 'mongo').
-                 If None, starts all configured databases.
-    """
-    configured = _get_configured_db_services()
-    if not configured:
-        print("  No database profiles configured. Run: python sdb.py setup")
-        return 1
-
-    if service:
-        if service not in ("postgres", "mongo"):
-            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
-            return 1
-        if service not in configured:
-            print(f"  Warning: '{service}' is not in configured profiles, starting anyway.")
-        targets = [service]
-    else:
-        targets = configured
-
-    args = []
-    for svc in targets:
-        args += ["--profile", svc]
-    args += ["up", "-d"]
-
-    result = docker_compose(*args)
-    return result.returncode
-
-
-def cmd_stop(service=None):
-    """Stop configured database server(s).
-
-    Args:
-        service: Optional specific service ('postgres', 'mongo').
-                 If None, stops all configured databases.
-    """
-    configured = _get_configured_db_services()
-    if not configured:
-        print("  No database profiles configured. Run: python sdb.py setup")
-        return 1
-
-    if service:
-        if service not in ("postgres", "mongo"):
-            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
-            return 1
-        targets = [service]
-    else:
-        targets = configured
-
-    args = []
-    for svc in targets:
-        args += ["--profile", svc]
-    args += ["down"]
-
-    result = docker_compose(*args)
-    return result.returncode
-
-
-# ============================================================================
-# sdb unsetup
-# ============================================================================
-
-# All config files that setup may generate (relative to ROOT)
-GENERATED_CONFIG_FILES = [
+# Legacy config files from old setup (for backward compat cleanup)
+LEGACY_GENERATED_FILES = [
     "config/setup_state.yaml",
     "config/parse/user.yaml",
     "config/ml_cpu/user.yaml",
     "config/ml/user.yaml",
     "config/postgres/user.yaml",
     "config/postgres_ml/user.yaml",
-    "config/postgres/postgresql.local.conf",
     "config/mongo/user.yaml",
     "config/platforms/reddit/user.yaml",
-    "docker-compose.override.yml",
-    ".env",
 ]
 
 
-def cmd_unsetup():
-    """Remove all setup-generated configuration and optionally the database."""
-    import shutil
-
+def cmd_db_unsetup(args):
+    """Remove database configuration and optionally database data."""
     env = load_env()
 
     print()
-    print("  Social Data Bridge - Unsetup")
-    print("  =============================")
+    print("  Social Data Bridge - Database Unsetup")
+    print("  ======================================")
     print()
 
-    # --- Phase 1: Remove generated config files ---
+    # --- Find config files to remove ---
     removed = []
-    for rel in GENERATED_CONFIG_FILES:
+    for rel in DB_GENERATED_FILES:
         path = ROOT / rel
         if path.exists():
             removed.append(rel)
 
-    # Also find custom platform config files
-    custom_dir = ROOT / "config" / "platforms" / "custom"
-    if custom_dir.is_dir():
-        for f in custom_dir.glob("*.yaml"):
-            if f.name != "example.yaml":
-                rel = str(f.relative_to(ROOT))
-                if rel not in removed:
-                    if f.exists():
-                        removed.append(rel)
-
-    # Also find .bak files created by write_files()
+    # Also find .bak files
     backups = []
-    for rel in GENERATED_CONFIG_FILES:
+    for rel in DB_GENERATED_FILES:
         bak = ROOT / (rel + ".bak")
         if bak.exists():
             backups.append(rel + ".bak")
 
     if removed or backups:
-        print("  Generated config files to remove:")
-        for rel in removed:
-            print(f"    {rel}")
-        for rel in backups:
+        print("  Database config files to remove:")
+        for rel in removed + backups:
             print(f"    {rel}")
         print()
     else:
-        print("  No generated config files found.\n")
+        print("  No database config files found.\n")
 
-    # --- Phase 2: Database removal (double confirmation) ---
+    # --- PostgreSQL data removal (double confirmation) ---
     pgdata_path = env.get("PGDATA_PATH", "")
     db_removed = False
 
-    # Collect tablespace paths from postgres config
     tablespace_paths = {}
     try:
         import yaml
         for cfg_name in ("pipeline.yaml", "user.yaml"):
-            cfg_file = ROOT / "config" / "postgres" / cfg_name
+            cfg_file = CONFIG_DIR / "postgres" / cfg_name
             if cfg_file.exists():
                 cfg = yaml.safe_load(cfg_file.read_text()) or {}
                 ts = cfg.get("tablespaces") or cfg.get("pipeline", {}).get("tablespaces")
                 if ts and isinstance(ts, dict):
                     tablespace_paths.update(ts)
+        # Also check config/db/postgres.yaml
+        pg_db_config = CONFIG_DIR / "db" / "postgres.yaml"
+        if pg_db_config.exists():
+            cfg = yaml.safe_load(pg_db_config.read_text()) or {}
+            ts = cfg.get("tablespaces")
+            if ts and isinstance(ts, dict):
+                tablespace_paths.update(ts)
     except Exception:
         pass
 
@@ -430,11 +376,9 @@ def cmd_unsetup():
             if confirm1 in ("y", "yes"):
                 confirm2 = input("  Are you SURE? All database data will be permanently lost [y/N]: ").strip().lower()
                 if confirm2 in ("y", "yes"):
-                    # Stop postgres first
                     print()
                     print("  Stopping PostgreSQL...")
                     docker_compose("--profile", "postgres", "down")
-                    # Fix permissions: PG container creates files owned by its internal user
                     print("  Fixing directory permissions...")
                     volume_args = ["-v", f"{pgdata.resolve()}:/pgdata"]
                     chmod_paths = ["/pgdata"]
@@ -467,7 +411,7 @@ def cmd_unsetup():
                 print("  Database removal skipped.")
             print()
 
-    # --- Phase 2b: MongoDB data removal ---
+    # --- MongoDB data removal ---
     mongo_data_path = env.get("MONGO_DATA_PATH", "")
     mongo_removed = False
 
@@ -485,7 +429,6 @@ def cmd_unsetup():
                     print()
                     print("  Stopping MongoDB...")
                     docker_compose("--profile", "mongo", "down")
-                    # Fix permissions: mongo container creates files owned by mongodb user
                     print("  Fixing directory permissions...")
                     subprocess.run(
                         ["docker", "run", "--rm",
@@ -503,33 +446,30 @@ def cmd_unsetup():
                 print("  MongoDB data removal skipped.")
             print()
 
-    # --- Phase 3: Actually remove config files ---
+    # --- Remove config files ---
     if removed or backups:
-        for rel in removed:
-            (ROOT / rel).unlink()
-        for rel in backups:
+        for rel in removed + backups:
             (ROOT / rel).unlink()
         print(f"  Removed {len(removed) + len(backups)} config file(s).")
     else:
         print("  Nothing to remove.")
 
-    # --- Phase 4: Print data file locations for manual deletion ---
+    # --- Print remaining data paths ---
     data_paths = {}
-    for key, label in [
-        ("DUMPS_PATH", "Dumps (.zst files)"),
-        ("EXTRACTED_PATH", "Extracted JSON"),
-        ("CSV_PATH", "Parsed CSV"),
-        ("OUTPUT_PATH", "ML classifier output"),
-    ]:
-        val = env.get(key)
-        if val:
-            data_paths[label] = val
     if not db_removed and pgdata_path:
-        data_paths["PostgreSQL data"] = pgdata_path
-        for ts_name, ts_path in tablespace_paths.items():
-            data_paths[f"Tablespace '{ts_name}'"] = ts_path
+        pgdata = Path(pgdata_path)
+        if not pgdata.is_absolute():
+            pgdata = ROOT / pgdata
+        if pgdata.exists():
+            data_paths["PostgreSQL data"] = pgdata_path
+            for ts_name, ts_path in tablespace_paths.items():
+                data_paths[f"Tablespace '{ts_name}'"] = ts_path
     if not mongo_removed and mongo_data_path:
-        data_paths["MongoDB data"] = mongo_data_path
+        mongo_data = Path(mongo_data_path)
+        if not mongo_data.is_absolute():
+            mongo_data = ROOT / mongo_data
+        if mongo_data.exists():
+            data_paths["MongoDB data"] = mongo_data_path
 
     if data_paths:
         print()
@@ -538,90 +478,422 @@ def cmd_unsetup():
             print(f"    {label}: {path}")
 
     print()
-    print("  Unsetup complete.\n")
+    print("  Database unsetup complete.\n")
     return 0
+
+
+# ============================================================================
+# sdb source add
+# ============================================================================
+
+def cmd_source_add(args):
+    """Add a new source (interactive setup)."""
+    from social_data_bridge.setup.source import main as source_main
+    source_main(source_name=args.name)
+    return 0
+
+
+# ============================================================================
+# sdb source configure
+# ============================================================================
+
+def cmd_source_configure(args):
+    """Reconfigure an existing source (platform-specific customization)."""
+    from social_data_bridge.setup.utils import load_source_config
+
+    source_name = args.name
+    source_config = load_source_config(source_name)
+    if source_config is None:
+        print(f"\n  Error: Source '{source_name}' not found in config/sources/\n")
+        return 1
+
+    platform = source_config.get("platform", "")
+    if platform == "reddit" or source_name == "reddit":
+        from social_data_bridge.setup.reddit import main as reddit_main
+        reddit_main(source_name=source_name)
+    else:
+        # For custom platforms, re-run source setup
+        from social_data_bridge.setup.source import main as source_main
+        source_main(source_name=source_name)
+
+    return 0
+
+
+# ============================================================================
+# sdb source add-classifiers
+# ============================================================================
+
+def cmd_source_add_classifiers(args):
+    """Add ML classifiers for a source."""
+    from social_data_bridge.setup.classifiers import main as classifiers_main
+    classifiers_main(source_name=args.name)
+    return 0
+
+
+# ============================================================================
+# sdb source remove
+# ============================================================================
+
+def cmd_source_remove(args):
+    """Remove source configuration."""
+    source_dir = CONFIG_DIR / "sources" / args.name
+    if not source_dir.exists():
+        print(f"\n  Error: Source '{args.name}' not found in config/sources/\n")
+        return 1
+
+    print(f"\n  Source: {args.name}")
+    print(f"  Directory: config/sources/{args.name}/")
+
+    # List files
+    files = sorted(source_dir.glob("*"))
+    if files:
+        print(f"  Files:")
+        for f in files:
+            print(f"    {f.name}")
+    print()
+
+    confirm = input(f"  Remove source '{args.name}' configuration? [y/N]: ").strip().lower()
+    if confirm not in ("y", "yes"):
+        print("  Aborted.\n")
+        return 0
+
+    shutil.rmtree(source_dir)
+    print(f"\n  Removed config/sources/{args.name}/")
+    print("  Note: Data files (dumps, csv, output) were NOT removed.\n")
+    return 0
+
+
+# ============================================================================
+# sdb source list
+# ============================================================================
+
+def cmd_source_list(args):
+    """List configured sources."""
+    from social_data_bridge.setup.utils import list_sources, get_source_profiles
+
+    sources = list_sources()
+    if not sources:
+        print("\n  No sources configured. Run: python sdb.py source add <name>\n")
+        return 0
+
+    print(f"\n  Configured sources:\n")
+    for source in sources:
+        profiles = get_source_profiles(source)
+        profiles_str = ", ".join(profiles) if profiles else "none"
+        print(f"    {source}")
+        print(f"      profiles: {profiles_str}")
+    print()
+    return 0
+
+
+# ============================================================================
+# sdb source status
+# ============================================================================
+
+def cmd_source_status(args):
+    """Show source processing/ingestion status."""
+    from social_data_bridge.setup.utils import list_sources, load_source_config, get_source_profiles
+
+    source_name = args.name
+
+    if source_name:
+        sources = [source_name]
+    else:
+        sources = list_sources()
+
+    if not sources:
+        print("\n  No sources configured. Run: python sdb.py source add <name>\n")
+        return 0
+
+    env = load_env()
+    print()
+    print("  Social Data Bridge - Source Status")
+    print("  ===================================")
+
+    for source in sources:
+        config = load_source_config(source)
+        if config is None:
+            print(f"\n  Source '{source}': not found")
+            continue
+
+        platform = config.get("platform", source)
+        data_types = config.get("data_types", [])
+        profiles = get_source_profiles(source)
+
+        print(f"\n  Source: {source}")
+        print(f"    Platform:    {platform}")
+        print(f"    Data types:  {', '.join(data_types)}")
+        print(f"    Profiles:    {', '.join(profiles) if profiles else 'none'}")
+        paths = config.get("paths", {})
+        print(f"    Paths:")
+        print(f"      Dumps:     {paths.get('dumps', f'./data/dumps/{source}')}")
+        print(f"      Extracted: {paths.get('extracted', f'./data/extracted/{source}')}")
+        print(f"      CSV:       {paths.get('csv', f'./data/csv/{source}')}")
+        print(f"      Output:    {paths.get('output', f'./data/output/{source}')}")
+
+        # Show ingestion state for this source
+        has_postgres = any(p.startswith("postgres") for p in profiles)
+        if has_postgres:
+            pgdata_path = env.get("PGDATA_PATH", "./data/database/postgres")
+            pgdata = Path(pgdata_path)
+            if not pgdata.is_absolute():
+                pgdata = ROOT / pgdata
+            state_dir = pgdata / "state_tracking"
+            _print_source_ingestion_state(state_dir, source, "postgres")
+
+        has_mongo = "mongo_ingest" in profiles
+        if has_mongo:
+            mongo_data_path = env.get("MONGO_DATA_PATH", "./data/database/mongo")
+            mongo_data = Path(mongo_data_path)
+            if not mongo_data.is_absolute():
+                mongo_data = ROOT / mongo_data
+            state_dir = mongo_data / "state_tracking"
+            _print_source_ingestion_state(state_dir, source, "mongo")
+
+    print()
+    return 0
+
+
+def _print_source_ingestion_state(state_dir, source, db_type):
+    """Print ingestion state for a specific source from state files."""
+    if not state_dir.exists():
+        return
+
+    prefix = f"{source}_{db_type}_"
+    state_files = sorted(f for f in state_dir.glob("*.json") if f.stem.startswith(prefix))
+
+    # Also check legacy naming (PLATFORM prefix)
+    if not state_files:
+        state_files = sorted(state_dir.glob(f"*_{db_type}_*.json"))
+
+    if not state_files:
+        return
+
+    print(f"\n    {db_type.title()} ingestion:")
+    for sf in state_files:
+        try:
+            sdata = json.loads(sf.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        name = sf.stem
+        processed = sdata.get("processed", [])
+        failed = sdata.get("failed", [])
+        in_progress = sdata.get("in_progress")
+        last_updated = sdata.get("last_updated", "")
+
+        # Extract data type from state filename
+        parts = name.split(f"_{db_type}_")
+        label = parts[1] if len(parts) == 2 else name
+
+        count = len(processed)
+        latest = processed[-1] if processed else "-"
+
+        line = f"      {label}: {count} datasets"
+        if latest != "-":
+            line += f" (latest: {latest})"
+        if in_progress:
+            line += f" [in progress: {in_progress}]"
+        if failed:
+            line += f" [{len(failed)} failed]"
+        print(line)
+
+        if last_updated:
+            print(f"        last updated: {last_updated}")
 
 
 # ============================================================================
 # sdb run
 # ============================================================================
 
-VALID_PROFILES = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
+def cmd_run(args):
+    """Run a pipeline profile for a source."""
+    from social_data_bridge.setup.utils import resolve_source, load_source_config
 
-
-def cmd_run(profile, build=False):
-    """Run a pipeline profile."""
+    profile = args.profile
     if profile not in VALID_PROFILES:
         print(f"  Error: Unknown profile '{profile}'.")
         print(f"  Valid profiles: {', '.join(VALID_PROFILES)}")
         return 1
 
-    args = ["--profile", profile, "up"]
-    if build:
-        args.append("--build")
-    result = docker_compose(*args)
+    # Resolve source (auto-selects if only one exists)
+    source = resolve_source(args.source)
+    source_config = load_source_config(source)
+
+    # Determine PLATFORM from source config
+    if source == "reddit":
+        platform = "reddit"
+    else:
+        platform = f"custom/{source}"
+
+    # Build per-source environment (read paths from source config, with defaults)
+    paths = source_config.get("paths", {}) if source_config else {}
+    env_overrides = {
+        "PLATFORM": platform,
+        "SOURCE": source,
+        "DUMPS_PATH": paths.get("dumps", f"./data/dumps/{source}"),
+        "CSV_PATH": paths.get("csv", f"./data/csv/{source}"),
+        "EXTRACTED_PATH": paths.get("extracted", f"./data/extracted/{source}"),
+        "OUTPUT_PATH": paths.get("output", f"./data/output/{source}"),
+    }
+
+    # Set env vars for docker compose
+    import os
+    for key, value in env_overrides.items():
+        os.environ[key] = value
+
+    compose_args = ["--profile", profile, "up"]
+    if args.build:
+        compose_args.append("--build")
+
+    print(f"  Source: {source} (platform: {platform})")
+    result = docker_compose(*compose_args)
     return result.returncode
+
+
+# ============================================================================
+# sdb setup (legacy)
+# ============================================================================
+
+def cmd_legacy_setup(args):
+    """Legacy: Run full interactive configuration (core + classifiers + platform)."""
+    from social_data_bridge.setup.core import main as core_main
+    from social_data_bridge.setup.utils import ask_bool
+
+    print("  Step 1: Core configuration\n")
+    core_main()
+
+    state = _load_legacy_state()
+    if not state:
+        print("\n  Error: Core setup did not create state file.\n")
+        return 1
+
+    platform = state.get("platform")
+    profiles = state.get("profiles", [])
+    has_classifiers = "ml_cpu" in profiles or "ml" in profiles
+
+    if has_classifiers:
+        print("\n  Step 2: Classifier configuration (optional)\n")
+        try:
+            if ask_bool("Customize classifier settings?", False):
+                from social_data_bridge.setup.classifiers import main as classifiers_main
+                classifiers_main()
+            else:
+                print("  Skipped. Using default classifier configuration.\n")
+        except KeyboardInterrupt:
+            print("\n")
+            return 1
+
+    if platform == "reddit":
+        step_n = 3 if has_classifiers else 2
+        print(f"\n  Step {step_n}: Reddit platform configuration\n")
+        from social_data_bridge.setup.reddit import main as reddit_main
+        reddit_main()
+
+    return 0
+
+
+# ============================================================================
+# Argument parser
+# ============================================================================
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="sdb.py",
+        description="Social Data Bridge CLI",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Command group")
+
+    # ---- sdb db ----
+    db_parser = subparsers.add_parser("db", help="Database management")
+    db_sub = db_parser.add_subparsers(dest="db_command", help="Database command")
+
+    db_setup_p = db_sub.add_parser("setup", help="Configure databases (PostgreSQL, MongoDB)")
+    db_setup_p.set_defaults(func=cmd_db_setup)
+
+    db_start_p = db_sub.add_parser("start", help="Start database services")
+    db_start_p.add_argument("service", nargs="?", choices=["postgres", "mongo"],
+                            help="Specific service (default: all configured)")
+    db_start_p.set_defaults(func=cmd_db_start)
+
+    db_stop_p = db_sub.add_parser("stop", help="Stop database services")
+    db_stop_p.add_argument("service", nargs="?", choices=["postgres", "mongo"],
+                           help="Specific service (default: all configured)")
+    db_stop_p.set_defaults(func=cmd_db_stop)
+
+    db_status_p = db_sub.add_parser("status", help="Show database status")
+    db_status_p.set_defaults(func=cmd_db_status)
+
+    db_unsetup_p = db_sub.add_parser("unsetup", help="Remove database configuration")
+    db_unsetup_p.set_defaults(func=cmd_db_unsetup)
+
+    # ---- sdb source ----
+    source_parser = subparsers.add_parser("source", help="Source management")
+    source_sub = source_parser.add_subparsers(dest="source_command", help="Source command")
+
+    src_add_p = source_sub.add_parser("add", help="Add a new source")
+    src_add_p.add_argument("name", help="Source name (e.g. reddit, twitter_academic)")
+    src_add_p.set_defaults(func=cmd_source_add)
+
+    src_configure_p = source_sub.add_parser("configure", help="Reconfigure existing source")
+    src_configure_p.add_argument("name", help="Source name")
+    src_configure_p.set_defaults(func=cmd_source_configure)
+
+    src_classifiers_p = source_sub.add_parser("add-classifiers", help="Add ML classifiers for a source")
+    src_classifiers_p.add_argument("name", help="Source name")
+    src_classifiers_p.set_defaults(func=cmd_source_add_classifiers)
+
+    src_remove_p = source_sub.add_parser("remove", help="Remove source configuration")
+    src_remove_p.add_argument("name", help="Source name")
+    src_remove_p.set_defaults(func=cmd_source_remove)
+
+    src_list_p = source_sub.add_parser("list", help="List configured sources")
+    src_list_p.set_defaults(func=cmd_source_list)
+
+    src_status_p = source_sub.add_parser("status", help="Show source status")
+    src_status_p.add_argument("name", nargs="?", help="Source name (default: all sources)")
+    src_status_p.set_defaults(func=cmd_source_status)
+
+    # ---- sdb run ----
+    run_parser = subparsers.add_parser("run", help="Run a pipeline profile")
+    run_parser.add_argument("profile", choices=VALID_PROFILES, help="Pipeline profile to run")
+    run_parser.add_argument("--source", "-s", dest="source",
+                            help="Source name (auto-selects if only one configured)")
+    run_parser.add_argument("--build", action="store_true", help="Rebuild Docker image")
+    run_parser.set_defaults(func=cmd_run)
+
+    # ---- sdb setup (legacy) ----
+    setup_parser = subparsers.add_parser("setup", help="Legacy: full interactive setup")
+    setup_parser.set_defaults(func=cmd_legacy_setup)
+
+    return parser
 
 
 # ============================================================================
 # Main
 # ============================================================================
 
-def usage():
-    print()
-    print("  Social Data Bridge CLI")
-    print()
-    print("  Usage:")
-    print("    sdb.py setup               Interactive configuration")
-    print("    sdb.py setup-reddit        Configure Reddit platform")
-    print("    sdb.py add-classifiers     Configure classifiers")
-    print("    sdb.py status              Show configuration and ingestion status")
-    print("    sdb.py start [service]     Start databases (postgres, mongo, or all configured)")
-    print("    sdb.py stop  [service]     Stop databases (postgres, mongo, or all configured)")
-    print("    sdb.py run <profile>       Run a pipeline profile (--build to rebuild image)")
-    print("    sdb.py unsetup             Remove all configuration (and optionally databases)")
-    print()
-    print(f"  Profiles: {', '.join(VALID_PROFILES)}")
-    print()
-
-
 def main():
-    args = sys.argv[1:]
+    parser = build_parser()
+    args = parser.parse_args()
 
-    if not args or args[0] in ("-h", "--help", "help"):
-        usage()
+    if not args.command:
+        parser.print_help()
         return 0
 
-    command = args[0]
-
-    if command == "setup":
-        return cmd_setup()
-    elif command == "setup-reddit":
-        return cmd_setup_reddit()
-    elif command == "add-classifiers":
-        return cmd_add_classifiers()
-    elif command == "status":
-        cmd_status()
+    # Handle subcommand groups that need their own help
+    if args.command == "db" and not getattr(args, "db_command", None):
+        parser.parse_args(["db", "-h"])
         return 0
-    elif command == "start":
-        service = args[1] if len(args) > 1 else None
-        return cmd_start(service)
-    elif command == "stop":
-        service = args[1] if len(args) > 1 else None
-        return cmd_stop(service)
-    elif command == "unsetup":
-        return cmd_unsetup()
-    elif command == "run":
-        if len(args) < 2:
-            print(f"  Usage: sdb.py run <profile> [--build]")
-            print(f"  Profiles: {', '.join(VALID_PROFILES)}")
-            return 1
-        build = "--build" in args[2:]
-        return cmd_run(args[1], build=build)
-    else:
-        print(f"  Unknown command: {command}")
-        usage()
-        return 1
+    if args.command == "source" and not getattr(args, "source_command", None):
+        parser.parse_args(["source", "-h"])
+        return 0
+
+    if hasattr(args, "func"):
+        return args.func(args)
+
+    parser.print_help()
+    return 0
 
 
 if __name__ == "__main__":

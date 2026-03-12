@@ -1,7 +1,7 @@
 """Reddit platform configuration for Social Data Bridge.
 
 Configures Reddit-specific settings: database schema, field lists, and indexes.
-Generates config/platforms/reddit/user.yaml.
+Generates overrides in config/sources/reddit/platform.yaml or legacy config/platforms/reddit/user.yaml.
 """
 
 import sys
@@ -16,6 +16,7 @@ from social_data_bridge.setup.utils import (
     ROOT, CONFIG_DIR,
     ask, ask_bool, ask_list, ask_multi_select,
     section_header, load_setup_state, write_files, print_pipeline_commands,
+    load_source_config, get_source_profiles,
 )
 
 
@@ -161,7 +162,35 @@ def print_summary(settings, files_to_write):
 # Main
 # ============================================================================
 
-def main():
+def apply_overrides_to_platform_yaml(source_name, override_yaml):
+    """Apply Reddit overrides directly into config/sources/<name>/platform.yaml.
+
+    Instead of writing a separate user.yaml, deep-merges overrides into the
+    existing platform.yaml in the source directory.
+    """
+    source_platform_path = CONFIG_DIR / "sources" / source_name / "platform.yaml"
+    if not source_platform_path.exists():
+        return
+
+    base = yaml.safe_load(source_platform_path.read_text()) or {}
+    overrides = yaml.safe_load(override_yaml)
+
+    # Simple deep merge
+    for key, value in overrides.items():
+        if isinstance(value, dict) and isinstance(base.get(key), dict):
+            base[key].update(value)
+        else:
+            base[key] = value
+
+    source_platform_path.write_text(yaml.dump(base, default_flow_style=False, sort_keys=False))
+
+
+def main(source_name=None):
+    """Configure Reddit-specific fields, indexes, and schema.
+
+    Args:
+        source_name: Source name (e.g. 'reddit'). If None, uses legacy paths.
+    """
     print()
     print("  Social Data Bridge - Reddit Platform Configuration")
     print("  ===================================================")
@@ -172,36 +201,58 @@ def main():
 
     settings, platform_config = run_questionnaire()
 
-    # Build file list
-    files_to_write = []
     reddit_yaml = generate_reddit_platform_user_yaml(settings, platform_config)
-    if reddit_yaml is not None:
-        files_to_write.append((
+
+    if reddit_yaml is None:
+        print("  No configuration changes needed. Using defaults.\n")
+        if source_name:
+            profiles = get_source_profiles(source_name)
+            print_pipeline_commands(profiles, source_name)
+        else:
+            state = load_setup_state()
+            if state:
+                print_pipeline_commands(state.get("profiles", []))
+        return
+
+    # Determine output path
+    if source_name:
+        # New source-based: merge overrides into source's platform.yaml
+        source_platform_path = CONFIG_DIR / "sources" / source_name / "platform.yaml"
+        if source_platform_path.exists():
+            # Show what will change
+            print_summary(settings, [(source_platform_path, reddit_yaml)])
+            if not ask_bool("Apply these overrides?", True):
+                print("\n  Aborted.\n")
+                sys.exit(0)
+            print()
+            apply_overrides_to_platform_yaml(source_name, reddit_yaml)
+            print(f"  Updated:   config/sources/{source_name}/platform.yaml")
+        else:
+            print(f"  Error: Source platform config not found: {source_platform_path}\n")
+            sys.exit(1)
+
+        print(f"\n  Done! Reddit platform configuration has been updated.")
+        profiles = get_source_profiles(source_name)
+        print_pipeline_commands(profiles, source_name)
+    else:
+        # Legacy: write to config/platforms/reddit/user.yaml
+        files_to_write = [(
             CONFIG_DIR / "platforms" / "reddit" / "user.yaml",
             reddit_yaml,
-        ))
+        )]
 
-    # Summary and confirm
-    print_summary(settings, files_to_write)
+        print_summary(settings, files_to_write)
 
-    if not files_to_write:
-        print("  No configuration changes needed. Using defaults.\n")
+        if not ask_bool("Write these files?", True):
+            print("\n  Aborted. No files written.\n")
+            sys.exit(0)
+
+        print()
+        write_files(files_to_write)
+        print(f"\n  Done! Reddit platform configuration has been generated.")
+
         state = load_setup_state()
         if state:
             print_pipeline_commands(state.get("profiles", []))
-        return
-
-    if not ask_bool("Write these files?", True):
-        print("\n  Aborted. No files written.\n")
-        sys.exit(0)
-
-    print()
-    write_files(files_to_write)
-    print(f"\n  Done! Reddit platform configuration has been generated.")
-
-    # setup_reddit is always the last step for Reddit — print pipeline commands
-    state = load_setup_state()
-    if state:
-        print_pipeline_commands(state.get("profiles", []))
-    else:
-        print()
+        else:
+            print()

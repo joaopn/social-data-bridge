@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import List, Dict, Tuple
 
-from ..core.decompress import decompress_zst
+from ..core.decompress import decompress_file, is_compressed, strip_compression_extension
 from ..core.config import (
     load_profile_config,
     load_platform_config,
@@ -24,8 +24,9 @@ from ..core.config import (
 )
 
 
-# Platform selection via environment variable
+# Platform and source selection via environment variables
 PLATFORM = os.environ.get('PLATFORM', 'reddit')
+SOURCE = os.environ.get('SOURCE') or PLATFORM
 
 
 def get_platform_parser():
@@ -64,14 +65,17 @@ def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
     Raises:
         ConfigurationError: If required config is missing
     """
-    config = load_profile_config('parse', config_dir, quiet)
+    config = load_profile_config('parse', config_dir, source=SOURCE, quiet=quiet)
     validate_processing_config(config, 'parse')
     return config
 
 
 def detect_dump_files(dumps_dir: str, data_types: List[str], file_patterns: Dict) -> List[Tuple[str, str]]:
     """
-    Detect .zst dump files in the dumps directory and subfolders.
+    Detect compressed dump files in the dumps directory and subfolders.
+
+    Supports .zst, .gz, .json.gz, .xz, .tar.gz, .tgz formats.
+    Uses 'dump' pattern (new format) or 'zst' pattern (legacy) from file_patterns.
 
     Searches in:
         - dumps_dir/ (root)
@@ -84,10 +88,16 @@ def detect_dump_files(dumps_dir: str, data_types: List[str], file_patterns: Dict
     files = []
 
     # Build patterns from platform config
+    # Support both new 'dump' key and legacy 'zst' key
     patterns = {}
     for data_type in data_types:
-        if data_type in file_patterns and 'zst' in file_patterns[data_type]:
-            patterns[data_type] = re.compile(file_patterns[data_type]['zst'])
+        if data_type not in file_patterns:
+            continue
+        dt_patterns = file_patterns[data_type]
+        if 'dump' in dt_patterns:
+            patterns[data_type] = re.compile(dt_patterns['dump'])
+        elif 'zst' in dt_patterns:
+            patterns[data_type] = re.compile(dt_patterns['zst'])
 
     search_dirs = [dumps_path]
     for subfolder in data_types:
@@ -98,7 +108,11 @@ def detect_dump_files(dumps_dir: str, data_types: List[str], file_patterns: Dict
     for search_dir in search_dirs:
         if not search_dir.exists():
             continue
-        for filepath in search_dir.glob("*.zst"):
+        for filepath in search_dir.iterdir():
+            if not filepath.is_file():
+                continue
+            if not is_compressed(filepath.name):
+                continue
             filename = filepath.name
 
             for data_type in data_types:
@@ -181,7 +195,13 @@ def detect_parsed_csv_files(csv_dir: str, data_types: List[str], file_patterns: 
 
 
 def get_file_identifier(filepath: str) -> str:
-    """Extract identifier from filepath (e.g., RC_2023-01 from RC_2023-01.zst)."""
+    """Extract identifier from filepath, stripping compression extensions.
+
+    E.g., RC_2023-01.zst -> RC_2023-01, data.json.gz -> data
+    """
+    name = Path(filepath).name
+    if is_compressed(name):
+        return strip_compression_extension(name)
     return Path(filepath).stem
 
 
@@ -199,7 +219,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     """
     # Load configuration
     config = load_config(config_dir)
-    platform_config = load_platform_config(config_dir, PLATFORM)
+    platform_config = load_platform_config(config_dir, PLATFORM, source=SOURCE)
 
     # Get platform-specific parser
     parser = get_platform_parser()
@@ -230,8 +250,8 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("PHASE 1: INPUT DETECTION")
     print("="*60)
 
-    zst_files = detect_dump_files(dumps_dir, data_types, file_patterns)
-    print(f"[sdb] Found {len(zst_files)} .zst files in {dumps_dir}")
+    dump_files = detect_dump_files(dumps_dir, data_types, file_patterns)
+    print(f"[sdb] Found {len(dump_files)} compressed files in {dumps_dir}")
 
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)
     parsed_csv_files = detect_parsed_csv_files(csv_dir, data_types, file_patterns)
@@ -239,19 +259,19 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdb] Found {len(json_files)} JSON files in extracted directory")
     print(f"[sdb] Found {len(parsed_csv_files)} CSV files in csv directory")
 
-    # Filter out .zst files that already have extracted JSON
+    # Filter out compressed files that already have extracted JSON or parsed CSV
     existing_json_ids = {fid for _, fid, _ in json_files}
     existing_csv_ids = {fid for _, fid, _ in parsed_csv_files}
-    pending_zst = [(p, dt) for p, dt in zst_files
-                   if get_file_identifier(p) not in existing_json_ids
-                   and get_file_identifier(p) not in existing_csv_ids]
+    pending_dumps = [(p, dt) for p, dt in dump_files
+                     if get_file_identifier(p) not in existing_json_ids
+                     and get_file_identifier(p) not in existing_csv_ids]
 
     # Filter out JSON files that already have parsed CSV
     pending_json = [(p, fid, dt) for p, fid, dt in json_files if fid not in existing_csv_ids]
 
-    print(f"[sdb] Pending: {len(pending_zst)} .zst, {len(pending_json)} JSON")
+    print(f"[sdb] Pending: {len(pending_dumps)} compressed, {len(pending_json)} JSON")
 
-    if not (pending_zst or pending_json):
+    if not (pending_dumps or pending_json):
         print("\n[sdb] No files to process. Exiting.")
         return
 
@@ -259,20 +279,20 @@ def run_pipeline(config_dir: str = "/app/config"):
     success_count = 0
     fail_count = 0
 
-    # Phase 2: Extract .zst files
-    if pending_zst:
+    # Phase 2: Extract compressed files
+    if pending_dumps:
         print("\n" + "="*60)
         print("PHASE 2: EXTRACTION")
         print("="*60)
 
         t_start = time.time()
 
-        for filepath, data_type in pending_zst:
+        for filepath, data_type in pending_dumps:
             file_id = get_file_identifier(filepath)
             extract_dir = f"{extracted_dir}/{data_type}"
 
             try:
-                decompress_zst(filepath, extract_dir)
+                decompress_file(filepath, extract_dir)
                 success_count += 1
             except Exception as e:
                 print(f"[sdb] Error extracting {file_id}: {e}")

@@ -2,7 +2,7 @@
 Core modules shared across all profiles.
 """
 
-from .decompress import decompress_zst
+from .decompress import decompress_zst, decompress_file, detect_compression, is_compressed, strip_compression_extension
 from .parser import (
     escape_string,
     quote_field,
@@ -27,6 +27,10 @@ from .config import (
 
 __all__ = [
     'decompress_zst',
+    'decompress_file',
+    'detect_compression',
+    'is_compressed',
+    'strip_compression_extension',
     'escape_string',
     'quote_field',
     'get_nested_data',
