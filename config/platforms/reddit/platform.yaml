@@ -23,7 +23,7 @@ file_patterns:
     csv: '^RC_(\d{4}-\d{2})\.csv$'
     prefix: 'RC_'
 
-# Default index fields for database tables
+# Default index fields for PostgreSQL tables
 indexes:
   submissions:
     - dataset
@@ -32,6 +32,24 @@ indexes:
     - domain
   comments:
     - dataset
+    - author
+    - subreddit
+    - link_id
+
+# MongoDB settings (used by mongo_ingest profile)
+mongo_collection_strategy: per_file   # per_file: one collection per input file (monthly dumps)
+                                      # per_data_type: all files of a type merge into one collection
+mongo_db_name_template: "{platform}_{data_type}"  # Supports {platform} and {data_type} placeholders
+
+# MongoDB index fields (used by mongo_ingest profile)
+mongo_indexes:
+  submissions:
+    - id
+    - author
+    - subreddit
+    - domain
+  comments:
+    - id
     - author
     - subreddit
     - link_id

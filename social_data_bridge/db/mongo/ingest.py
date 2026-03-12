@@ -1,0 +1,202 @@
+"""
+MongoDB operations for social_data_bridge.
+
+Provides collection management, mongoimport-based bulk ingestion,
+index creation, and metadata tracking for the mongo_ingest profile.
+
+Adapted from db_tools/db_tools/mongodb.py with project-consistent conventions.
+"""
+
+import os
+import subprocess
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+
+
+def get_mongo_uri(host: str, port: int) -> str:
+    """Build MongoDB connection URI."""
+    return f"mongodb://{host}:{port}"
+
+
+def _get_client(host: str, port: int):
+    """Lazy-import pymongo and return a MongoClient."""
+    from pymongo import MongoClient
+    return MongoClient(get_mongo_uri(host, port))
+
+
+def ensure_collection(
+    db_name: str,
+    collection_name: str,
+    host: str,
+    port: int,
+) -> bool:
+    """
+    Ensure a collection exists with zstd WiredTiger compression.
+
+    Returns True if the collection was newly created, False if it already existed.
+    """
+    client = _get_client(host, port)
+    try:
+        if collection_name in client[db_name].list_collection_names():
+            return False
+
+        client[db_name].create_collection(
+            collection_name,
+            storageEngine={
+                'wiredTiger': {
+                    'configString': 'block_compressor=zstd',
+                }
+            },
+        )
+        print(f"[sdb] Created collection {db_name}.{collection_name} (zstd)")
+        return True
+    finally:
+        client.close()
+
+
+def mongoimport_file(
+    filepath: str,
+    db_name: str,
+    collection_name: str,
+    host: str,
+    port: int,
+    num_workers: int = 4,
+    log_dir: str = "/data/mongo/logs",
+) -> None:
+    """
+    Ingest a JSON/NDJSON file using mongoimport subprocess.
+
+    Logs are appended to {log_dir}/mongoimport_{db}_{collection}.log.
+    Raises subprocess.CalledProcessError on failure.
+    """
+    command = [
+        "mongoimport",
+        f"--uri={get_mongo_uri(host, port)}",
+        "--db", db_name,
+        "--collection", collection_name,
+        "--file", filepath,
+        "--numInsertionWorkers", str(num_workers),
+    ]
+
+    # Ensure log directory exists
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"mongoimport_{db_name}_{collection_name}.log")
+
+    with open(log_file, 'a') as log:
+        log.write(f"\n{'='*60}\n")
+        log.write(f"Timestamp: {datetime.now().isoformat()}\n")
+        log.write(f"Command: {' '.join(command)}\n")
+        log.write(f"File: {filepath}\n")
+        log.write(f"{'='*60}\n")
+        result = subprocess.run(
+            command,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(
+            result.returncode, command,
+            output=f"mongoimport failed. See log: {log_file}",
+        )
+
+
+def create_index(
+    db_name: str,
+    collection_name: str,
+    field: str,
+    host: str,
+    port: int,
+) -> None:
+    """Create a single ascending index on a collection."""
+    from pymongo import ASCENDING
+
+    client = _get_client(host, port)
+    try:
+        index_name = f"{field}_1"
+        existing = client[db_name][collection_name].list_indexes()
+        existing_names = [idx['name'] for idx in existing]
+
+        if index_name in existing_names:
+            print(f"[sdb] Index {index_name} already exists on {db_name}.{collection_name}")
+            return
+
+        client[db_name][collection_name].create_index(
+            [(field, ASCENDING)],
+            name=index_name,
+        )
+        print(f"[sdb] Created index {index_name} on {db_name}.{collection_name}")
+    finally:
+        client.close()
+
+
+def get_collection_names(db_name: str, host: str, port: int) -> List[str]:
+    """Get list of collection names in a database (excludes system/metadata collections)."""
+    client = _get_client(host, port)
+    try:
+        names = client[db_name].list_collection_names()
+        return [n for n in sorted(names) if not n.startswith('_')]
+    finally:
+        client.close()
+
+
+def record_ingested_file(
+    db_name: str,
+    file_id: str,
+    data_type: str,
+    collection_name: str,
+    host: str,
+    port: int,
+) -> None:
+    """
+    Record an ingested file in the _sdb_metadata collection.
+
+    Stores file_id, data_type, collection_name, and timestamp.
+    Used for state recovery when the state JSON file is lost.
+    """
+    client = _get_client(host, port)
+    try:
+        metadata = client[db_name]['_sdb_metadata']
+        metadata.update_one(
+            {'file_id': file_id, 'data_type': data_type},
+            {
+                '$set': {
+                    'file_id': file_id,
+                    'data_type': data_type,
+                    'collection': collection_name,
+                    'ingested_at': datetime.now().isoformat(),
+                }
+            },
+            upsert=True,
+        )
+    finally:
+        client.close()
+
+
+def get_ingested_files(
+    db_name: str,
+    host: str,
+    port: int,
+    data_type: Optional[str] = None,
+) -> List[str]:
+    """
+    Get list of ingested file_ids from the _sdb_metadata collection.
+
+    Args:
+        db_name: MongoDB database name
+        host: MongoDB host
+        port: MongoDB port
+        data_type: If provided, filter by data_type
+
+    Returns:
+        List of file_id strings
+    """
+    client = _get_client(host, port)
+    try:
+        metadata = client[db_name]['_sdb_metadata']
+        query = {'data_type': data_type} if data_type else {}
+        return [doc['file_id'] for doc in metadata.find(query, {'file_id': 1, '_id': 0})]
+    finally:
+        client.close()

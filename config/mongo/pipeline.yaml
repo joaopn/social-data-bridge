@@ -1,0 +1,18 @@
+# MongoDB ingestion profile pipeline configuration
+# Ingests raw extracted JSON/NDJSON files directly into MongoDB
+
+database:
+  host: mongo              # Docker service name
+  port: 27017              # Override with MONGO_PORT env var
+
+processing:
+  data_types: []           # Override in user.yaml or set via platform config
+  num_insertion_workers: 4        # mongoimport --numInsertionWorkers
+  create_indexes: true            # Create indexes after ingestion
+  cleanup_temp: false             # Delete extracted JSON after ingestion
+  watch_interval: 0               # Check for new files every N minutes (0 = run once)
+
+# MongoDB index configuration
+# Override in user.yaml with platform-specific index fields
+# Each entry is a list of field names; each gets a single ascending index
+mongo_indexes: {}  # Example: {submissions: [id, author, subreddit], comments: [id, author, link_id]}

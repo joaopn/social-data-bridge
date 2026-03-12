@@ -179,6 +179,61 @@ class PipelineState:
             self.state["in_progress"] = None
             self._save_state()
     
+    def recover_from_mongodb(self):
+        """
+        Recover processed files list by querying the _sdb_metadata collection in MongoDB.
+
+        Uses the db_config dict which should contain: host, port, db_name, and optionally data_type.
+        Works for both per_file and per_data_type collection strategies.
+        """
+        if not self.db_config:
+            print("[sdb] No database config provided, cannot recover from MongoDB")
+            return
+
+        try:
+            from ..db.mongo.ingest import get_ingested_files
+        except ImportError:
+            print("[sdb] pymongo not available, cannot recover from MongoDB")
+            return
+
+        recovered = []
+
+        try:
+            host = self.db_config['host']
+            port = self.db_config['port']
+
+            # Query each configured database for metadata
+            for data_type in self.data_types:
+                db_name = self.db_config.get('db_name_func', lambda dt: dt)(data_type)
+                try:
+                    file_ids = get_ingested_files(
+                        db_name=db_name,
+                        host=host,
+                        port=port,
+                        data_type=data_type,
+                    )
+                    for fid in file_ids:
+                        if fid not in recovered:
+                            recovered.append(fid)
+                    if file_ids:
+                        print(f"[sdb] Found {len(file_ids)} ingested files for {data_type} in {db_name}")
+                    else:
+                        print(f"[sdb] No metadata found for {data_type} in {db_name}")
+                except Exception as e:
+                    print(f"[sdb] Error querying {db_name} for {data_type}: {e}")
+
+        except Exception as e:
+            print(f"[sdb] Error recovering from MongoDB: {e}")
+            return
+
+        if recovered:
+            self.state["processed"] = recovered
+            self._save_state()
+            print(f"[sdb] Recovered {len(recovered)} processed files from MongoDB")
+        else:
+            print("[sdb] No existing metadata found in MongoDB, starting fresh")
+            self._save_state()
+
     def get_stats(self) -> dict:
         """Get processing statistics."""
         return {

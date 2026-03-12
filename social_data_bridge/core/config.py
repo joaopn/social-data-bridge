@@ -125,6 +125,7 @@ def load_profile_config(
     # Map profile names to config folder names
     profile_folders = {
         'postgres_ingest': 'postgres',
+        'mongo_ingest': 'mongo',
     }
     folder_name = profile_folders.get(profile, profile)
     config_path = Path(config_dir) / folder_name
@@ -139,6 +140,7 @@ def load_profile_config(
         'ml': ['pipeline.yaml', 'gpu_classifiers.yaml'],
         'postgres_ingest': ['pipeline.yaml'],
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
+        'mongo_ingest': ['pipeline.yaml'],
     }
     
     if profile not in profile_configs:
@@ -260,6 +262,25 @@ def validate_database_config(config: Dict) -> None:
         if 'database' not in config or key not in config['database']:
             raise ConfigurationError(
                 f"[postgres] Required config missing: database.{key}"
+            )
+
+
+def validate_mongo_config(config: Dict) -> None:
+    """
+    Validate that required MongoDB config exists for mongo_ingest profile.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        ConfigurationError: If required config is missing
+    """
+    required_keys = ['host', 'port']
+
+    for key in required_keys:
+        if 'database' not in config or key not in config['database']:
+            raise ConfigurationError(
+                f"[mongo] Required config missing: database.{key}"
             )
 
 
@@ -401,12 +422,19 @@ def apply_env_overrides(config: Dict, profile: str) -> Dict:
     if profile in ('postgres_ingest', 'postgres_ml'):
         if 'database' not in result:
             result['database'] = {}
-        
+
         if 'POSTGRES_PORT' in os.environ:
             result['database']['port'] = int(os.environ['POSTGRES_PORT'])
         if 'DB_NAME' in os.environ:
             result['database']['name'] = os.environ['DB_NAME']
         if 'DB_SCHEMA' in os.environ:
             result['database']['schema'] = os.environ['DB_SCHEMA']
-    
+
+    if profile == 'mongo_ingest':
+        if 'database' not in result:
+            result['database'] = {}
+
+        if 'MONGO_PORT' in os.environ:
+            result['database']['port'] = int(os.environ['MONGO_PORT'])
+
     return result

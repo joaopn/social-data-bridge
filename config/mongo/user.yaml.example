@@ -1,0 +1,34 @@
+# MongoDB ingestion profile user configuration
+# Copy this file to user.yaml and uncomment/modify settings as needed.
+#
+# Structure: Each key corresponds to a config file (without .yaml extension).
+# List values fully replace the base config (no merging).
+#
+# Note: Database settings can also be overridden via environment variables:
+#   MONGO_PORT
+
+# pipeline:                        # Overrides pipeline.yaml
+#   database:
+#     host: mongo                  # Docker service name or hostname
+#     port: 27017                  # Override with MONGO_PORT env var
+#   processing:
+#     data_types:                  # Which data types to process (replaces default list)
+#       - submissions
+#       - comments
+#     num_insertion_workers: 4     # mongoimport --numInsertionWorkers
+#     create_indexes: true         # Create indexes after ingestion
+#     cleanup_temp: false          # Delete extracted JSON after ingestion
+#     watch_interval: 0            # Check for new files every N minutes (0 = run once)
+#   mongo_indexes:                 # Index fields per data type (replaces default lists)
+#     submissions:
+#       - id
+#       - author
+#       - subreddit
+#       - domain
+#       - created_utc
+#     comments:
+#       - id
+#       - author
+#       - subreddit
+#       - link_id
+#       - created_utc

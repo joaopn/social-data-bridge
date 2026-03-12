@@ -1,0 +1,39 @@
+# Social Data Bridge - MongoDB Ingestion Image
+# Used for: mongo_ingest profile
+# Includes mongoimport (mongodb-database-tools) and pymongo
+FROM python:3.13-slim
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies including mongodb-database-tools for mongoimport
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    zstd \
+    wget \
+    gnupg \
+    && wget -qO- https://www.mongodb.org/static/pgp/server-8.0.asc | \
+       gpg --dearmor -o /usr/share/keyrings/mongodb.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/mongodb.gpg] http://repo.mongodb.org/apt/debian bookworm/mongodb-org/8.0 main" \
+       > /etc/apt/sources.list.d/mongodb.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
+       mongodb-database-tools \
+    && apt-get purge -y wget gnupg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements-mongo.txt ./
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-mongo.txt
+
+# Copy application code
+COPY social_data_bridge/ ./social_data_bridge/
+COPY config/ ./config/
+
+# Create directories
+RUN mkdir -p /data/dumps /data/extracted /data/csv /data/output /data/database /data/mongo
+
+# Default command
+CMD ["python", "-m", "social_data_bridge.orchestrators.mongo_ingest"]

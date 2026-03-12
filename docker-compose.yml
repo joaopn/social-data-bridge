@@ -162,3 +162,44 @@ services:
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ${PGDATA_PATH:-./data/database}:/data/database
       - ./config:/app/config:ro
+
+  # ==========================================================================
+  # Profile: mongo - MongoDB server
+  # ==========================================================================
+  mongo:
+    profiles: [mongo]
+    image: mongo:8
+    restart: unless-stopped
+    stop_grace_period: 5m
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - ${MONGO_DATA_PATH:-./data/mongo}/db:/data/db
+      - ./config/mongo/mongod.conf:/etc/mongod.conf:ro
+    command: ["mongod", "--config", "/etc/mongod.conf", "--wiredTigerCacheSizeGB", "${MONGO_CACHE_SIZE_GB:-2}"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ==========================================================================
+  # Profile: mongo_ingest - Raw JSON ingestion to MongoDB
+  # Requires: mongo profile to be running
+  # ==========================================================================
+  mongo-ingest:
+    profiles: [mongo_ingest]
+    build:
+      context: .
+      dockerfile: Dockerfile.mongo
+    command: python -m social_data_bridge.orchestrators.mongo_ingest
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
+      - MONGO_PORT=${MONGO_PORT:-27017}
+      - MONGO_DATA_PATH=/data/mongo
+    volumes:
+      - ${DUMPS_PATH:-./data/dumps}:/data/dumps:ro
+      - ${EXTRACTED_PATH:-./data/extracted}:/data/extracted
+      - ${MONGO_DATA_PATH:-./data/mongo}:/data/mongo
+      - ./config:/app/config:ro

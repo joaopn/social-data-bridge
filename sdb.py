@@ -8,11 +8,10 @@ Usage:
     sdb.py setup-reddit        Configure Reddit platform (fields, indexes, schema)
     sdb.py add-classifiers     Configure classifiers (Lingua, GPU transformers)
     sdb.py status              Show configuration and ingestion status
-    sdb.py start               Start the PostgreSQL database
-    sdb.py stop                Stop the PostgreSQL database
-    sdb.py run <profile>       Run a pipeline profile (parse, ml_cpu, ml, postgres_ingest, postgres_ml)
-                               Use --build to rebuild the image before running
-    sdb.py unsetup             Remove all configuration (and optionally database)
+    sdb.py start [service]     Start configured databases (postgres, mongo, or all)
+    sdb.py stop  [service]     Stop configured databases (postgres, mongo, or all)
+    sdb.py run <profile>       Run a pipeline profile (--build to rebuild image)
+    sdb.py unsetup             Remove all configuration (and optionally databases)
 """
 
 import json
@@ -147,98 +146,189 @@ def cmd_status():
     print(f"  Data types:  {', '.join(data_types)}")
     print(f"  Profiles:    {', '.join(profiles)}")
 
-    # Database status
+    # Check which services are running (single docker call)
+    running_services = set()
+    result = subprocess.run(
+        ["docker", "compose", "ps", "--format", "json", "--filter", "status=running"],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        for line in result.stdout.strip().splitlines():
+            try:
+                container = json.loads(line)
+                svc = container.get("Service")
+                if svc:
+                    running_services.add(svc)
+            except json.JSONDecodeError:
+                pass
+
+    # PostgreSQL status
     has_postgres = any(p.startswith("postgres") for p in profiles)
     if has_postgres:
         pgdata_path = env.get("PGDATA_PATH", "./data/database")
-        # Resolve relative to ROOT
         pgdata = Path(pgdata_path)
         if not pgdata.is_absolute():
             pgdata = ROOT / pgdata
 
-        print(f"\n  Database:")
+        print(f"\n  PostgreSQL:")
         print(f"    Path:      {pgdata_path}")
         print(f"    Name:      {env.get('DB_NAME', 'datasets')}")
         print(f"    Port:      {env.get('POSTGRES_PORT', '5432')}")
-
-        # Check if postgres is running
-        result = subprocess.run(
-            ["docker", "compose", "ps", "--format", "json", "--filter", "status=running"],
-            capture_output=True, text=True, cwd=ROOT,
-        )
-        pg_running = False
-        if result.returncode == 0 and result.stdout.strip():
-            for line in result.stdout.strip().splitlines():
-                try:
-                    container = json.loads(line)
-                    if container.get("Service") == "postgres":
-                        pg_running = True
-                        break
-                except json.JSONDecodeError:
-                    pass
-        print(f"    Running:   {'yes' if pg_running else 'no'}")
+        print(f"    Running:   {'yes' if 'postgres' in running_services else 'no'}")
 
         # Ingestion state
         state_dir = pgdata / "state_tracking"
-        if state_dir.exists():
-            state_files = sorted(state_dir.glob("*.json"))
-            if state_files:
-                print(f"\n  Ingestion status:")
-                for sf in state_files:
-                    try:
-                        sdata = json.loads(sf.read_text())
-                    except (json.JSONDecodeError, OSError):
-                        continue
+        _print_ingestion_state(state_dir, "_postgres_")
 
-                    # Parse filename: {platform}_postgres_{profile}_{data_type}.json
-                    name = sf.stem
-                    processed = sdata.get("processed", [])
-                    failed = sdata.get("failed", [])
-                    in_progress = sdata.get("in_progress")
-                    last_updated = sdata.get("last_updated", "")
+    # MongoDB status
+    has_mongo = "mongo_ingest" in profiles
+    if has_mongo:
+        mongo_data_path = env.get("MONGO_DATA_PATH", "./data/mongo")
+        mongo_data = Path(mongo_data_path)
+        if not mongo_data.is_absolute():
+            mongo_data = ROOT / mongo_data
 
-                    # Derive a friendly label
-                    parts = name.split("_postgres_")
-                    if len(parts) == 2:
-                        label = parts[1].replace("_", " / ", 1)
-                    else:
-                        label = name
+        print(f"\n  MongoDB:")
+        print(f"    Path:      {mongo_data_path}")
+        print(f"    Port:      {env.get('MONGO_PORT', '27017')}")
+        print(f"    Running:   {'yes' if 'mongo' in running_services else 'no'}")
 
-                    count = len(processed)
-                    latest = processed[-1] if processed else "-"
-
-                    line = f"    {label}: {count} datasets"
-                    if latest != "-":
-                        line += f" (latest: {latest})"
-                    if in_progress:
-                        line += f" [in progress: {in_progress}]"
-                    if failed:
-                        line += f" [{len(failed)} failed]"
-                    print(line)
-
-                    if last_updated:
-                        print(f"      last updated: {last_updated}")
-            else:
-                print(f"\n  No ingestion data yet.")
-        else:
-            print(f"\n  No ingestion data yet.")
+        # Ingestion state
+        state_dir = mongo_data / "state_tracking"
+        _print_ingestion_state(state_dir, "_mongo_")
 
     print()
+
+
+def _print_ingestion_state(state_dir, label_split):
+    """Print ingestion state from JSON files in a state directory."""
+    if not state_dir.exists():
+        print(f"\n  No ingestion data yet.")
+        return
+
+    state_files = sorted(state_dir.glob("*.json"))
+    if not state_files:
+        print(f"\n  No ingestion data yet.")
+        return
+
+    print(f"\n  Ingestion status:")
+    for sf in state_files:
+        try:
+            sdata = json.loads(sf.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        name = sf.stem
+        processed = sdata.get("processed", [])
+        failed = sdata.get("failed", [])
+        in_progress = sdata.get("in_progress")
+        last_updated = sdata.get("last_updated", "")
+
+        # Derive a friendly label
+        parts = name.split(label_split)
+        if len(parts) == 2:
+            label = parts[1].replace("_", " / ", 1)
+        else:
+            label = name
+
+        count = len(processed)
+        latest = processed[-1] if processed else "-"
+
+        line = f"    {label}: {count} datasets"
+        if latest != "-":
+            line += f" (latest: {latest})"
+        if in_progress:
+            line += f" [in progress: {in_progress}]"
+        if failed:
+            line += f" [{len(failed)} failed]"
+        print(line)
+
+        if last_updated:
+            print(f"      last updated: {last_updated}")
 
 
 # ============================================================================
 # sdb start / stop
 # ============================================================================
 
-def cmd_start():
-    """Start the PostgreSQL database."""
-    result = docker_compose("--profile", "postgres", "up", "-d")
+def _get_configured_db_services():
+    """Determine which database services are configured from setup_state.yaml."""
+    state = load_state()
+    if not state:
+        return []
+
+    # Use explicit databases list if available (new setup format)
+    databases = state.get("databases")
+    if databases:
+        return list(databases)
+
+    # Fallback: infer from profiles (old setup_state.yaml without databases key)
+    profiles = state.get("profiles", [])
+    services = []
+    if any(p.startswith("postgres") for p in profiles):
+        services.append("postgres")
+    if "mongo_ingest" in profiles:
+        services.append("mongo")
+    return services
+
+
+def cmd_start(service=None):
+    """Start configured database server(s).
+
+    Args:
+        service: Optional specific service ('postgres', 'mongo').
+                 If None, starts all configured databases.
+    """
+    configured = _get_configured_db_services()
+    if not configured:
+        print("  No database profiles configured. Run: python sdb.py setup")
+        return 1
+
+    if service:
+        if service not in ("postgres", "mongo"):
+            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
+            return 1
+        if service not in configured:
+            print(f"  Warning: '{service}' is not in configured profiles, starting anyway.")
+        targets = [service]
+    else:
+        targets = configured
+
+    args = []
+    for svc in targets:
+        args += ["--profile", svc]
+    args += ["up", "-d"]
+
+    result = docker_compose(*args)
     return result.returncode
 
 
-def cmd_stop():
-    """Stop the PostgreSQL database."""
-    result = docker_compose("--profile", "postgres", "down")
+def cmd_stop(service=None):
+    """Stop configured database server(s).
+
+    Args:
+        service: Optional specific service ('postgres', 'mongo').
+                 If None, stops all configured databases.
+    """
+    configured = _get_configured_db_services()
+    if not configured:
+        print("  No database profiles configured. Run: python sdb.py setup")
+        return 1
+
+    if service:
+        if service not in ("postgres", "mongo"):
+            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
+            return 1
+        targets = [service]
+    else:
+        targets = configured
+
+    args = []
+    for svc in targets:
+        args += ["--profile", svc]
+    args += ["down"]
+
+    result = docker_compose(*args)
     return result.returncode
 
 
@@ -255,6 +345,7 @@ GENERATED_CONFIG_FILES = [
     "config/postgres/user.yaml",
     "config/postgres_ml/user.yaml",
     "config/postgres/postgresql.local.conf",
+    "config/mongo/user.yaml",
     "config/platforms/reddit/user.yaml",
     "docker-compose.override.yml",
     ".env",
@@ -376,6 +467,42 @@ def cmd_unsetup():
                 print("  Database removal skipped.")
             print()
 
+    # --- Phase 2b: MongoDB data removal ---
+    mongo_data_path = env.get("MONGO_DATA_PATH", "")
+    mongo_removed = False
+
+    if mongo_data_path:
+        mongo_data = Path(mongo_data_path)
+        if not mongo_data.is_absolute():
+            mongo_data = ROOT / mongo_data
+        if mongo_data.exists():
+            print(f"  MongoDB data directory: {mongo_data_path}")
+            print()
+            confirm1 = input("  Delete the MongoDB data? This CANNOT be undone [y/N]: ").strip().lower()
+            if confirm1 in ("y", "yes"):
+                confirm2 = input("  Are you SURE? All MongoDB data will be permanently lost [y/N]: ").strip().lower()
+                if confirm2 in ("y", "yes"):
+                    print()
+                    print("  Stopping MongoDB...")
+                    docker_compose("--profile", "mongo", "down")
+                    # Fix permissions: mongo container creates files owned by mongodb user
+                    print("  Fixing directory permissions...")
+                    subprocess.run(
+                        ["docker", "run", "--rm",
+                         "-v", f"{mongo_data.resolve()}:/mongodata",
+                         "mongo:8", "chmod", "-R", "a+rwX", "/mongodata"],
+                        cwd=ROOT,
+                    )
+                    print(f"  Removing {mongo_data}...")
+                    shutil.rmtree(mongo_data)
+                    mongo_removed = True
+                    print("  MongoDB data removed.")
+                else:
+                    print("  MongoDB data removal skipped.")
+            else:
+                print("  MongoDB data removal skipped.")
+            print()
+
     # --- Phase 3: Actually remove config files ---
     if removed or backups:
         for rel in removed:
@@ -401,6 +528,8 @@ def cmd_unsetup():
         data_paths["PostgreSQL data"] = pgdata_path
         for ts_name, ts_path in tablespace_paths.items():
             data_paths[f"Tablespace '{ts_name}'"] = ts_path
+    if not mongo_removed and mongo_data_path:
+        data_paths["MongoDB data"] = mongo_data_path
 
     if data_paths:
         print()
@@ -417,7 +546,7 @@ def cmd_unsetup():
 # sdb run
 # ============================================================================
 
-VALID_PROFILES = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml"]
+VALID_PROFILES = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
 
 
 def cmd_run(profile, build=False):
@@ -447,10 +576,10 @@ def usage():
     print("    sdb.py setup-reddit        Configure Reddit platform")
     print("    sdb.py add-classifiers     Configure classifiers")
     print("    sdb.py status              Show configuration and ingestion status")
-    print("    sdb.py start               Start the PostgreSQL database")
-    print("    sdb.py stop                Stop the PostgreSQL database")
+    print("    sdb.py start [service]     Start databases (postgres, mongo, or all configured)")
+    print("    sdb.py stop  [service]     Stop databases (postgres, mongo, or all configured)")
     print("    sdb.py run <profile>       Run a pipeline profile (--build to rebuild image)")
-    print("    sdb.py unsetup             Remove all configuration (and optionally database)")
+    print("    sdb.py unsetup             Remove all configuration (and optionally databases)")
     print()
     print(f"  Profiles: {', '.join(VALID_PROFILES)}")
     print()
@@ -475,9 +604,11 @@ def main():
         cmd_status()
         return 0
     elif command == "start":
-        return cmd_start()
+        service = args[1] if len(args) > 1 else None
+        return cmd_start(service)
     elif command == "stop":
-        return cmd_stop()
+        service = args[1] if len(args) > 1 else None
+        return cmd_stop(service)
     elif command == "unsetup":
         return cmd_unsetup()
     elif command == "run":

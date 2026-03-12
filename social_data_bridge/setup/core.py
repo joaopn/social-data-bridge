@@ -1,7 +1,7 @@
 """Core infrastructure configuration for Social Data Bridge.
 
-Configures platform, paths, parse workers, and PostgreSQL settings.
-Generates .env, user.yaml files, and postgresql.local.conf.
+Configures platform, paths, parse workers, and database settings.
+Generates .env, user.yaml files, and database configuration.
 """
 
 import sys
@@ -66,6 +66,11 @@ def run_questionnaire(hw):
     # ---- Section 1: General ----
     section_header("Section 1: General")
 
+    # Database selection first — determines which profiles are available
+    all_databases = ["postgres", "mongo"]
+    databases = ask_multi_select("Databases:", all_databases, ["postgres"])
+    settings["databases"] = databases
+
     platform = ask_choice(
         "Platform:",
         ["reddit", "custom"],
@@ -88,7 +93,13 @@ def run_questionnaire(hw):
     settings["platform"] = platform
     settings["data_types"] = data_types
 
-    all_profiles = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml"]
+    # Build profile list based on selected databases
+    all_profiles = ["parse", "ml_cpu", "ml"]
+    if "postgres" in databases:
+        all_profiles += ["postgres_ingest", "postgres_ml"]
+    if "mongo" in databases:
+        all_profiles += ["mongo_ingest"]
+
     default_profiles = all_profiles[:] if gpus else [p for p in all_profiles if p != "ml"]
     profiles = ask_multi_select("Profiles to configure:", all_profiles, default_profiles)
     settings["profiles"] = profiles
@@ -102,6 +113,8 @@ def run_questionnaire(hw):
     settings["output_path"] = ask("Output path (ML classifier output)", "./data/output")
     if any(p.startswith("postgres") for p in profiles):
         settings["pgdata_path"] = ask("PostgreSQL data path", "./data/database")
+    if "mongo_ingest" in profiles:
+        settings["mongo_data_path"] = ask("MongoDB data path", "./data/mongo")
 
     # ---- Compute defaults ----
     defaults = compute_defaults(hw, profiles)
@@ -189,9 +202,17 @@ def run_questionnaire(hw):
         else:
             settings["pgtune_output"] = ""
 
-    # ---- Section 5: Custom Platform ----
+    # ---- Section 5: MongoDB ----
+    if "mongo_ingest" in profiles:
+        section_n = 5
+        section_header(f"Section {section_n}: MongoDB")
+
+        settings["mongo_port"] = ask_int("MongoDB port", 27017)
+        settings["mongo_cache_size_gb"] = ask_int("MongoDB WiredTiger cache size (GB)", 2)
+
+    # ---- Section 6: Custom Platform ----
     if platform.startswith("custom/"):
-        section_header("Section 5: Custom Platform")
+        section_header("Section 6: Custom Platform")
         settings["db_schema"] = ask("Database schema name")
         settings["custom_file_patterns"] = {}
         for dt in data_types:
@@ -203,6 +224,17 @@ def run_questionnaire(hw):
             settings["custom_file_patterns"][dt] = {
                 "zst": zst, "json": json_pat, "csv": csv_pat, "prefix": prefix,
             }
+
+        if "mongo_ingest" in profiles:
+            settings["mongo_collection_strategy"] = ask_choice(
+                "MongoDB collection strategy:",
+                ["per_file", "per_data_type"],
+                default="per_data_type",
+            )
+            settings["mongo_db_name_template"] = ask(
+                "MongoDB database name template ({platform} and {data_type} are placeholders)",
+                "{platform}_{data_type}",
+            )
 
     return settings
 
@@ -248,6 +280,15 @@ def generate_env(settings):
         f"POSTGRES_PORT={settings.get('pg_port', 5432)}",
         "# Note: DB_SCHEMA is set per-platform in config/platforms/<platform>/platform.yaml",
     ]
+
+    if "mongo_data_path" in settings:
+        lines += [
+            "",
+            "# ===== MONGODB CONFIGURATION (mongo_ingest profile) =====",
+            f"MONGO_DATA_PATH={settings['mongo_data_path']}",
+            f"MONGO_PORT={settings.get('mongo_port', 27017)}",
+            f"MONGO_CACHE_SIZE_GB={settings.get('mongo_cache_size_gb', 2)}",
+        ]
 
     return "\n".join(lines) + "\n"
 
@@ -302,6 +343,18 @@ def generate_postgres_ml_user_yaml(settings):
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
 
+def generate_mongo_user_yaml(settings):
+    """Generate config/mongo/user.yaml content."""
+    config = {
+        "pipeline": {
+            "processing": {
+                "data_types": settings["data_types"],
+            }
+        }
+    }
+    return yaml.dump(config, default_flow_style=False, sort_keys=False)
+
+
 def generate_docker_compose_override(settings):
     """Generate docker-compose.override.yml with tablespace volume mounts."""
     tablespaces = settings.get("tablespaces", {})
@@ -337,6 +390,13 @@ def generate_custom_platform_yaml(settings):
         "db_schema": settings["db_schema"],
         "data_types": settings["data_types"],
         "file_patterns": settings["custom_file_patterns"],
+    }
+
+    if "mongo_collection_strategy" in settings:
+        config["mongo_collection_strategy"] = settings["mongo_collection_strategy"]
+        config["mongo_db_name_template"] = settings.get("mongo_db_name_template", "{platform}_{data_type}")
+
+    config.update({
         "indexes": {},
         "field_types": {
             # Common field types — add or modify as needed
@@ -358,7 +418,7 @@ def generate_custom_platform_yaml(settings):
             "lang_chars": "integer",
         },
         "fields": {dt: [] for dt in settings["data_types"]},
-    }
+    })
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
 
@@ -442,6 +502,8 @@ def print_summary(settings, files_to_write):
     print(f"    Output:    {settings['output_path']}")
     if "pgdata_path" in settings:
         print(f"    PG data:   {settings['pgdata_path']}")
+    if "mongo_data_path" in settings:
+        print(f"    Mongo:     {settings['mongo_data_path']}")
     print()
 
     if "parse" in profiles:
@@ -466,6 +528,12 @@ def print_summary(settings, files_to_write):
                 for dt, ts in settings["table_tablespaces"].items():
                     print(f"      {dt} -> {ts}")
         print(f"    PGTune:              {'provided' if settings.get('pgtune_output') else 'not provided'}")
+        print()
+
+    if "mongo_ingest" in profiles:
+        print(f"  MongoDB:")
+        print(f"    Port:                {settings.get('mongo_port', 27017)}")
+        print(f"    Cache size:          {settings.get('mongo_cache_size_gb', 2)} GB")
         print()
 
     if settings["platform"].startswith("custom/"):
@@ -493,7 +561,7 @@ def main():
     print("  ==========================================")
     print()
     print("  This script configures core infrastructure: paths, parse,")
-    print("  and PostgreSQL settings. Press Enter to accept defaults.")
+    print("  and database settings. Press Enter to accept defaults.")
     print()
 
     # Detect hardware
@@ -526,6 +594,12 @@ def main():
         files_to_write.append((
             CONFIG_DIR / "postgres_ml" / "user.yaml",
             generate_postgres_ml_user_yaml(settings),
+        ))
+
+    if "mongo_ingest" in profiles:
+        files_to_write.append((
+            CONFIG_DIR / "mongo" / "user.yaml",
+            generate_mongo_user_yaml(settings),
         ))
 
     # postgresql.local.conf
@@ -566,6 +640,7 @@ def main():
     state = {
         "platform": settings["platform"],
         "data_types": settings["data_types"],
+        "databases": settings["databases"],
         "profiles": profiles,
     }
     save_setup_state(state)

@@ -314,20 +314,22 @@ def write_files(files_to_write):
 
 def print_pipeline_commands(profiles):
     """Print sdb.py commands to run the selected profiles in order."""
-    profile_order = ["parse", "ml_cpu", "ml", "postgres", "postgres_ingest", "postgres_ml"]
+    profile_order = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
     selected = [p for p in profile_order if p in profiles]
 
-    # postgres server must run alongside ingestion profiles
-    needs_postgres = any(p in profiles for p in ("postgres_ingest", "postgres_ml"))
-    if needs_postgres and "postgres" not in selected:
+    # Database servers must run before their ingestion profiles
+    db_profiles = {"postgres_ingest", "postgres_ml", "mongo_ingest"}
+    needs_start = any(p in profiles for p in db_profiles)
+    if needs_start:
+        # Insert 'sdb start' before the first db ingestion profile
         for i, p in enumerate(selected):
-            if p in ("postgres_ingest", "postgres_ml"):
-                selected.insert(i, "postgres")
+            if p in db_profiles:
+                selected.insert(i, "_start")
                 break
 
     print("\n  To run your pipeline, execute these commands in order:\n")
     for p in selected:
-        if p == "postgres":
+        if p == "_start":
             print(f"    python sdb.py start")
         else:
             print(f"    python sdb.py run {p}")
