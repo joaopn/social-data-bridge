@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import List, Optional, Dict
 
-from ...core.config import load_yaml_file, ConfigurationError
+from ...core.config import ConfigurationError
 
 
 # Mandatory fields always included (in this order at start of columns)
@@ -185,38 +185,34 @@ def yaml_type_to_sql(type_def) -> str:
     return 'TEXT STORAGE EXTERNAL'
 
 
-def get_column_list(data_type: str, config_dir: str, csv_file: str = None) -> List[str]:
+def get_column_list(data_type: str, platform_config: Dict, csv_file: str = None) -> List[str]:
     """
     Get ordered list of columns for a data type.
-    
-    Order: [dataset, id, retrieved_utc, ...fields from YAML..., (lingua fields if applicable)]
-    
+
+    Order: [dataset, id, retrieved_utc, ...fields from platform config..., (lingua fields if applicable)]
+
     Args:
         data_type: Data type key (e.g., 'submissions', 'comments')
-        config_dir: Directory containing field_list.yaml (platform-specific config dir)
+        platform_config: Loaded platform configuration dict (must contain 'fields')
         csv_file: Optional CSV file path - if contains 'lingua', lingua columns are appended
-        
+
     Returns:
         List of column names in order
-        
+
     Raises:
-        ConfigurationError: If config file is missing or data type not configured
+        ConfigurationError: If no fields configured for the data type
     """
-    field_list = load_yaml_file(Path(config_dir) / "field_list.yaml")
-    if field_list is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/field_list.yaml")
-    
-    yaml_fields = field_list.get(data_type, [])
+    yaml_fields = platform_config.get('fields', {}).get(data_type, [])
     if not yaml_fields:
         raise ConfigurationError(f"No fields configured for data type: {data_type}")
-    
+
     # Mandatory fields first, then YAML fields
     columns = MANDATORY_FIELDS + yaml_fields
-    
+
     # Append lingua columns if this is a lingua file
     if csv_file and 'lingua' in csv_file:
         columns = columns + ['lang', 'lang_prob', 'lang2', 'lang2_prob', 'lang_chars']
-    
+
     return columns
 
 
@@ -224,14 +220,14 @@ def get_create_table_query(
     data_type: str,
     schema: str,
     table: str,
-    config_dir: str,
+    platform_config: Dict,
     csv_file: str = None,
     unlogged: bool = False,
     include_pk: bool = True,
     tablespace: str = None
 ) -> str:
     """
-    Generate CREATE TABLE query dynamically from YAML configuration.
+    Generate CREATE TABLE query dynamically from platform configuration.
 
     All TEXT fields use STORAGE EXTERNAL (uncompressed TOAST) for external
     filesystem compression (ZFS, BTRFS).
@@ -240,7 +236,7 @@ def get_create_table_query(
         data_type: 'submissions' or 'comments'
         schema: Database schema name
         table: Table name
-        config_dir: Directory containing config files
+        platform_config: Loaded platform configuration dict (must contain 'fields' and 'field_types')
         csv_file: Optional CSV file path - if contains 'lingua', lingua columns are included
         unlogged: If True, create UNLOGGED table (faster, no WAL, no crash recovery)
         include_pk: If True, include PRIMARY KEY on id column
@@ -250,18 +246,18 @@ def get_create_table_query(
         CREATE TABLE SQL query
 
     Raises:
-        ConfigurationError: If config files are missing
+        ConfigurationError: If platform config is missing required keys
     """
-    
+
     full_table = f"{schema}.{table}"
-    
-    # Load field types
-    field_types = load_yaml_file(Path(config_dir) / "field_types.yaml")
-    if field_types is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/field_types.yaml")
-    
+
+    # Get field types from platform config
+    field_types = platform_config.get('field_types', {})
+    if not field_types:
+        raise ConfigurationError("No field_types configured in platform config")
+
     # Get column list (includes lingua columns if csv_file is a lingua file)
-    columns = get_column_list(data_type, config_dir, csv_file)
+    columns = get_column_list(data_type, platform_config, csv_file)
     
     # Build column definitions
     col_defs = []
@@ -295,33 +291,33 @@ def get_create_table_query(
 
 
 def get_ingest_query(
-    data_type: str, 
-    schema: str, 
-    table: str, 
+    data_type: str,
+    schema: str,
+    table: str,
     check_duplicates: bool,
-    config_dir: str,
+    platform_config: Dict,
     csv_file: str = None
 ) -> str:
     """
-    Generate COPY/INSERT query dynamically from YAML configuration.
-    
+    Generate COPY/INSERT query dynamically from platform configuration.
+
     Args:
         data_type: 'submissions' or 'comments'
         schema: Database schema name
         table: Table name
         check_duplicates: Whether to handle duplicate IDs
-        config_dir: Directory containing config files
+        platform_config: Loaded platform configuration dict (must contain 'fields')
         csv_file: Optional CSV file path - if contains 'lingua', lingua columns are included
-        
+
     Returns:
         SQL query for data ingestion
     """
-    
+
     full_table = f"{schema}.{table}"
     temp_table = f"temp_{data_type}"
-    
-    # Get column list from YAML (includes lingua columns if csv_file is a lingua file)
-    columns_list = get_column_list(data_type, config_dir, csv_file)
+
+    # Get column list from platform config (includes lingua columns if csv_file is a lingua file)
+    columns_list = get_column_list(data_type, platform_config, csv_file)
     columns = ", ".join(columns_list)
     
     # Fields to update on conflict (all except 'id' which is the primary key)
@@ -585,14 +581,14 @@ def fast_ingest_csv(
     host: str,
     port: int,
     user: str,
-    config_dir: str
+    platform_config: Dict
 ):
     """
     Fast ingest a single CSV file using blind COPY (no duplicate checking).
-    
+
     Part of fast initial load - just appends data to existing table (no PK).
     Deduplication happens after all files are loaded.
-    
+
     Args:
         csv_file: Path to the CSV file
         data_type: 'submissions' or 'comments'
@@ -602,12 +598,12 @@ def fast_ingest_csv(
         host: Database host
         port: Database port
         user: Database user
-        config_dir: Directory containing YAML configuration files
+        platform_config: Loaded platform configuration dict
     """
     print(f"[sdb] COPY: {csv_file}")
-    
+
     # Use existing get_ingest_query with check_duplicates=False for blind COPY
-    copy_query = get_ingest_query(data_type, schema, table, check_duplicates=False, config_dir=config_dir, csv_file=csv_file)
+    copy_query = get_ingest_query(data_type, schema, table, check_duplicates=False, platform_config=platform_config, csv_file=csv_file)
     execute_query(copy_query, dbname, host, port, user, args=[csv_file])
 
 
@@ -619,7 +615,7 @@ def create_fast_load_table(
     host: str,
     port: int,
     user: str,
-    config_dir: str,
+    platform_config: Dict,
     csv_file: str = None,
     tablespace: str = None
 ):
@@ -634,7 +630,7 @@ def create_fast_load_table(
         host: Database host
         port: Database port
         user: Database user
-        config_dir: Directory containing YAML configuration files
+        platform_config: Loaded platform configuration dict
         csv_file: Optional CSV file path for lingua column detection
         tablespace: Optional tablespace name (None = default pg_default)
     """
@@ -645,7 +641,7 @@ def create_fast_load_table(
     ensure_database_exists(dbname, host, port, user)
     ensure_schema_exists(schema, dbname, host, port, user)
 
-    create_query = get_create_table_query(data_type, schema, table, config_dir, csv_file, include_pk=False, tablespace=tablespace)
+    create_query = get_create_table_query(data_type, schema, table, platform_config, csv_file, include_pk=False, tablespace=tablespace)
     execute_query(create_query, dbname, host, port, user)
 
     print(f"[sdb] Created table {schema}.{table} (no PK)")
@@ -829,7 +825,7 @@ def ingest_csv(
     user: str,
     check_duplicates: bool,
     create_indexes: bool,
-    config_dir: str,
+    platform_config: Dict,
     index_fields: Optional[List[str]] = None,
     tablespace: str = None
 ):
@@ -847,25 +843,25 @@ def ingest_csv(
         user: Database user
         check_duplicates: Whether to handle duplicates
         create_indexes: Whether to create indexes after ingestion
-        config_dir: Directory containing YAML configuration files
+        platform_config: Loaded platform configuration dict
         index_fields: Fields to index (uses defaults if None)
         tablespace: Optional tablespace name (None = default pg_default)
     """
     if table is None:
         table = data_type
-    
+
     print(f"[sdb] Starting ingestion: {csv_file} -> {schema}.{table}")
-    
+
     # Ensure database and schema exist
     ensure_database_exists(dbname, host, port, user)
     ensure_schema_exists(schema, dbname, host, port, user)
-    
-    # Create table if needed (schema from YAML, includes lingua columns if applicable)
-    create_query = get_create_table_query(data_type, schema, table, config_dir, csv_file, tablespace=tablespace)
+
+    # Create table if needed (schema from platform config, includes lingua columns if applicable)
+    create_query = get_create_table_query(data_type, schema, table, platform_config, csv_file, tablespace=tablespace)
     execute_query(create_query, dbname, host, port, user)
 
-    # Ingest data (columns from YAML, includes lingua columns if applicable)
-    ingest_query = get_ingest_query(data_type, schema, table, check_duplicates, config_dir, csv_file)
+    # Ingest data (columns from platform config, includes lingua columns if applicable)
+    ingest_query = get_ingest_query(data_type, schema, table, check_duplicates, platform_config, csv_file)
     execute_query(ingest_query, dbname, host, port, user, args=[csv_file])
 
     # Create indexes if requested

@@ -18,7 +18,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PLATFORM` | Platform to use for parsing (`reddit` or `generic`) | `reddit` |
+| `PLATFORM` | Platform to use for parsing (`reddit` or `custom/<name>`) | `reddit` |
 | `DUMPS_PATH` | Directory containing `.zst` dump files | `./data/dumps` |
 | `EXTRACTED_PATH` | Storage for decompressed JSON files | `./data/extracted` |
 | `CSV_PATH` | Storage for parsed CSV files | `./data/csv` |
@@ -46,14 +46,11 @@ All environment variables are set in the `.env` file at the project root. Docker
 config/
 ├── platforms/                     # Platform-specific configurations
 │   ├── reddit/
-│   │   ├── platform.yaml          # Data types, file patterns, DB schema, indexes
-│   │   ├── field_list.yaml        # Fields to extract per data type
-│   │   ├── field_types.yaml       # Field type definitions
-│   │   └── user.yaml              # User overrides for platform config
-│   └── generic/
-│       ├── platform.yaml          # Data types, file patterns (user-defined)
-│       ├── field_types.yaml       # Field type definitions
-│       └── field_list.yaml.example
+│   │   ├── platform.yaml          # All platform config: schema, patterns, fields, types, indexes
+│   │   └── user.yaml              # User overrides (deep-merged over platform.yaml)
+│   └── custom/
+│       ├── example.yaml           # Example custom platform config
+│       └── <name>.yaml            # Self-contained custom platform configs
 ├── parse/
 │   ├── pipeline.yaml              # Parse profile settings
 │   └── user.yaml                  # User overrides
@@ -105,12 +102,14 @@ gpu_classifiers:       # Overrides settings from gpu_classifiers.yaml
 
 In this example, `pipeline:` overrides keys in `config/ml/pipeline.yaml`, and `gpu_classifiers:` overrides keys in `config/ml/gpu_classifiers.yaml`.
 
+> [!NOTE]
+> Platform `user.yaml` files (`config/platforms/*/user.yaml`) work differently — they are deep-merged directly over `platform.yaml` without scoping by filename.
+
 ### Available user.yaml files
 
 | Config directory | Overrides |
 |-----------------|-----------|
-| `config/platforms/reddit/user.yaml` | `platform.yaml`, `field_types.yaml`, `field_list.yaml` |
-| `config/platforms/generic/user.yaml` | `platform.yaml`, `field_types.yaml` |
+| `config/platforms/reddit/user.yaml` | `platform.yaml` (flat merge) |
 | `config/parse/user.yaml` | `pipeline.yaml` |
 | `config/ml_cpu/user.yaml` | `pipeline.yaml`, `cpu_classifiers.yaml` |
 | `config/ml/user.yaml` | `pipeline.yaml`, `gpu_classifiers.yaml` |
@@ -439,7 +438,7 @@ The local override files (`postgresql.local.conf`, `pg_hba.local.conf`) are not 
 
 ### Overview
 
-Each platform has a `platform.yaml` in `config/platforms/<platform>/` that defines:
+Each platform has a single `platform.yaml` in `config/platforms/<platform>/` that defines everything:
 
 | Key | Description |
 |-----|-------------|
@@ -447,6 +446,10 @@ Each platform has a `platform.yaml` in `config/platforms/<platform>/` that defin
 | `data_types` | List of data types this platform supports. |
 | `file_patterns` | Regex patterns for file detection per data type (keys: `zst`, `json`, `csv`, `prefix`). |
 | `indexes` | Default index fields per data type (used by the postgres profile). |
+| `field_types` | Type definitions for each field (integer, text, boolean, etc.). |
+| `fields` | Fields to extract per data type. |
+
+Built-in platforms (like Reddit) support an optional `user.yaml` in the same directory, deep-merged over `platform.yaml` (lists replace, dicts merge). Custom platforms are single self-contained files with no user.yaml support.
 
 ### Reddit Platform: `config/platforms/reddit/platform.yaml`
 
@@ -462,10 +465,10 @@ data_types:
 
 file_patterns:
   submissions:
-    zst: '^RS_(\d{4}-\d{2})\.zst$'      # Compressed dump files
-    json: '^RS_(\d{4}-\d{2})$'           # Decompressed JSON files
-    csv: '^RS_(\d{4}-\d{2})\.csv$'       # Parsed CSV files
-    prefix: 'RS_'                         # File prefix for this data type
+    zst: '^RS_(\d{4}-\d{2})\.zst$'
+    json: '^RS_(\d{4}-\d{2})$'
+    csv: '^RS_(\d{4}-\d{2})\.csv$'
+    prefix: 'RS_'
   comments:
     zst: '^RC_(\d{4}-\d{2})\.zst$'
     json: '^RC_(\d{4}-\d{2})$'
@@ -473,56 +476,70 @@ file_patterns:
     prefix: 'RC_'
 
 indexes:
+  submissions: [dataset, author, subreddit, domain]
+  comments: [dataset, author, subreddit, link_id]
+
+field_types:
+  created_utc: integer
+  score: integer
+  author: text
+  # ... all type definitions ...
+
+fields:
   submissions:
-    - dataset
-    - author
-    - subreddit
-    - domain
+    - created_utc
+    - id10
+    - score
+    # ... 25 fields total ...
   comments:
-    - dataset
-    - author
-    - subreddit
+    - created_utc
     - link_id
+    # ... 17 fields total ...
 ```
 
 </details>
 
-The Reddit platform also includes:
+### Custom Platforms: `config/platforms/custom/<name>.yaml`
 
-- **`field_list.yaml`** — Fields to extract per data type (submissions: 24 fields, comments: 17 fields).
-- **`field_types.yaml`** — PostgreSQL type mappings for each field (integer, bigint, float, boolean, text, varchar).
-
-### Generic Platform: `config/platforms/generic/platform.yaml`
+Custom platforms are self-contained single files — no base config, no user.yaml merge.
 
 <details>
-<summary><strong>Full config</strong></summary>
+<summary><strong>Example config</strong></summary>
 
 ```yaml
-db_schema: null       # Required: set in user.yaml
+db_schema: my_data
 
-data_types: []        # Required: set in user.yaml
+data_types:
+  - posts
+  - users
 
-file_patterns: {}     # Required: set in user.yaml
-  # Example:
-  # posts:
-  #   zst: '^posts_(\d{4}-\d{2})\.zst$'
-  #   json: '^posts_(\d{4}-\d{2})$'
-  #   csv: '^posts_(\d{4}-\d{2})\.csv$'
-  #   prefix: 'posts_'
+file_patterns:
+  posts:
+    zst: '^posts_(\d{4}-\d{2})\.zst$'
+    json: '^posts_(\d{4}-\d{2})$'
+    csv: '^posts_(\d{4}-\d{2})\.csv$'
+    prefix: 'posts_'
 
-indexes: {}           # Optional: set in user.yaml
+indexes:
+  posts: [dataset, author]
+
+field_types:
+  id: text
+  created_at: integer
+  author: text
+  content: text
+
+fields:
+  posts:
+    - id
+    - created_at
+    - author
+    - content
 ```
 
 </details>
 
-The generic platform ships with:
+1. Create `config/platforms/custom/<name>.yaml` with all required sections.
+2. Run with `PLATFORM=custom/<name>`.
 
-- **`field_types.yaml`** — Common field type definitions (id, created_at, timestamp, text, content, author, title, url, score, count).
-- **`field_list.yaml.example`** — Example field list showing how to define data types and fields, including support for dot notation (`user.profile.name`) and array indexing (`items.0.id`).
-
-To use the generic platform:
-
-1. Copy `field_list.yaml.example` to `field_list.yaml` and define your data types and fields.
-2. Create a `user.yaml` to set `db_schema`, `data_types`, and `file_patterns` in the `platform:` key.
-3. Add any custom field types to `field_types.yaml`.
-4. Run with `PLATFORM=generic`.
+See [Custom Platforms](platforms/custom.md) for a complete setup guide.

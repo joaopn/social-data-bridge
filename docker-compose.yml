@@ -9,8 +9,8 @@
 #   postgres_ml     - ML classifier table ingestion (requires postgres running)
 #
 # Platform selection (for parse profile):
-#   PLATFORM=reddit docker compose --profile parse up   # Default
-#   PLATFORM=generic docker compose --profile parse up  # For arbitrary JSON/CSV
+#   PLATFORM=reddit docker compose --profile parse up         # Default
+#   PLATFORM=custom/mydata docker compose --profile parse up  # Custom platform
 #
 # Usage:
 #   docker compose --profile parse up
@@ -27,7 +27,7 @@
 services:
   # ==========================================================================
   # Profile: parse - Decompress and parse to CSV
-  # Platform selection: PLATFORM=reddit (default) | generic
+  # Platform selection: PLATFORM=reddit (default) | custom/<name>
   # ==========================================================================
   parse:
     profiles: [parse]

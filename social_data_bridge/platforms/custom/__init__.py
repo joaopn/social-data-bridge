@@ -1,8 +1,8 @@
 """
-Generic platform parser.
+Custom platform parser.
 
-A simple parser for arbitrary JSON/CSV data without platform-specific logic.
-Uses only the shared utilities from core/parser.py.
+A simple parser for arbitrary JSON/NDJSON data without platform-specific logic.
+Used by all custom/* platforms. Uses shared utilities from core/parser.py.
 """
 
 from .parser import (

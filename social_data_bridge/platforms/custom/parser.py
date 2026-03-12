@@ -1,8 +1,9 @@
 """
-Generic JSON to CSV parsing.
+Custom platform JSON to CSV parsing.
 
 This module provides a simple parser for arbitrary JSON/NDJSON data
 without any platform-specific transformation logic.
+Used by all custom/* platforms.
 """
 
 import json
@@ -12,7 +13,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
 from typing import Dict, List, Tuple
 
-from ...core.config import load_yaml_file, ConfigurationError
+from ...core.config import ConfigurationError
 from ...core.parser import (
     escape_string,
     quote_field,
@@ -121,41 +122,36 @@ def parse_to_csv(
     input_file: str,
     output_dir: str,
     data_type: str,
-    config_dir: str,
+    platform_config: Dict,
     use_type_subdir: bool = True
 ) -> str:
     """
     Parse a JSON/NDJSON file to CSV with headers.
-    
+
     Args:
         input_file: Path to JSON/NDJSON file
         output_dir: Directory for output CSV file
         data_type: Data type identifier (used to select fields from config)
-        config_dir: Directory containing configuration files
+        platform_config: Loaded platform configuration dict (fields, field_types, etc.)
         use_type_subdir: If True, output to output_dir/data_type/
-        
+
     Returns:
         Path to the output CSV file
-        
+
     Raises:
-        ConfigurationError: If config files are missing
+        ConfigurationError: If config is missing required keys
     """
-    config_dir = Path(config_dir)
     output_dir = Path(output_dir)
     if use_type_subdir:
         output_dir = output_dir / data_type
     output_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Load configuration
-    field_types = load_yaml_file(config_dir / "field_types.yaml")
-    field_list = load_yaml_file(config_dir / "field_list.yaml")
-    
-    if field_types is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/field_types.yaml")
-    if field_list is None:
-        raise ConfigurationError(f"Required config file not found: {config_dir}/field_list.yaml")
-    
-    fields_to_extract = field_list.get(data_type, [])
+
+    # Extract fields and types from platform config
+    field_types = platform_config.get('field_types', {})
+    if not field_types:
+        raise ConfigurationError("No field_types configured in platform config")
+
+    fields_to_extract = platform_config.get('fields', {}).get(data_type, [])
     if not fields_to_extract:
         raise ConfigurationError(f"No fields configured for data type: {data_type}")
     
@@ -190,38 +186,38 @@ def parse_to_csv(
     return output_path
 
 
-def _parse_file_worker(args: Tuple[str, str, str, str]) -> Tuple[str, str, str]:
+def _parse_file_worker(args: Tuple[str, str, str, Dict]) -> Tuple[str, str, str]:
     """Worker function for parallel parsing."""
-    input_file, output_dir, data_type, config_dir = args
-    csv_path = parse_to_csv(input_file, output_dir, data_type, config_dir)
+    input_file, output_dir, data_type, platform_config = args
+    csv_path = parse_to_csv(input_file, output_dir, data_type, platform_config)
     return input_file, csv_path, data_type
 
 
 def parse_files_parallel(
     files: List[Tuple[str, str]],
     output_dir: str,
-    config_dir: str,
+    platform_config: Dict,
     workers: int
 ) -> List[Tuple[str, str]]:
     """
     Parse multiple JSON files to CSV in parallel.
-    
+
     Args:
         files: List of tuples (input_file, data_type)
         output_dir: Directory for output CSV files
-        config_dir: Directory containing configuration files
+        platform_config: Loaded platform configuration dict
         workers: Number of parallel workers
-        
+
     Returns:
         List of tuples (csv_path, data_type) in the same order as input
     """
     if not files:
         return []
-    
+
     print(f"[sdb] Starting parallel parsing with up to {workers} workers for {len(files)} files")
-    
+
     worker_args = [
-        (input_file, output_dir, data_type, config_dir)
+        (input_file, output_dir, data_type, platform_config)
         for input_file, data_type in files
     ]
     

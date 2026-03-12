@@ -5,4 +5,6 @@ data_types:
 profiles:
 - parse
 - ml_cpu
+- ml
 - postgres_ingest
+- postgres_ml

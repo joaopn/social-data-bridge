@@ -27,7 +27,7 @@ Supports both flat directory and torrent directory structure (`submissions/RS_*.
 
 ## Mandatory Fields
 
-These fields are always included regardless of field_list.yaml:
+These fields are always included regardless of the `fields` config:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -49,7 +49,7 @@ The `retrieved_utc` field handles multiple Reddit dump formats:
 
 Reddit IDs are base-36 (digits 0-9 and letters a-z). The `id10` field provides the base-10 equivalent as a `bigint` for applications requiring numeric IDs or sorting.
 
-Include `id10` in your `field_list.yaml` to enable this conversion.
+Include `id10` in your platform config `fields` to enable this conversion.
 
 ### is_deleted / removal_type (Waterfall Algorithm)
 
@@ -140,13 +140,13 @@ The `removed_by_category` field (Priority 3) maps to canonical values:
 **Content:**
 `body`
 
-Edit `config/platforms/reddit/field_list.yaml` to customize which fields are extracted.
+Edit the `fields` section in `config/platforms/reddit/platform.yaml` (or override via `user.yaml`) to customize which fields are extracted.
 
 ---
 
 ## Field Types
 
-Defined in `config/platforms/reddit/field_types.yaml`:
+Defined in the `field_types` section of `config/platforms/reddit/platform.yaml`:
 
 | Type | Fields |
 |------|--------|

@@ -9,7 +9,7 @@ python sdb.py run parse
 ```
 
 > [!NOTE]
-> The platform (Reddit or generic) is configured during `python sdb.py setup`.
+> The platform (Reddit or custom) is configured during `python sdb.py setup`.
 
 ---
 
@@ -32,7 +32,7 @@ Three-phase pipeline:
 ### Phase 3: Parsing
 - Platform-specific JSON-to-CSV conversion
 - Reddit: applies waterfall deletion detection, base-36 ID conversion, format compatibility (see [Reddit Platform](../platforms/reddit.md))
-- Generic: simple field extraction with dot-notation and type enforcement (see [Generic Platform](../platforms/generic.md))
+- Custom: simple field extraction with dot-notation and type enforcement (see [Custom Platforms](../platforms/custom.md))
 - Writes CSV with headers
 - Uses temp files for atomic writes
 
@@ -44,7 +44,7 @@ Three-phase pipeline:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `data_types` | Data types to process (must match keys in platform's field_list.yaml) | `[]` (set via platform) |
+| `data_types` | Data types to process (must match keys in platform's `fields` config) | `[]` (set via platform) |
 | `parallel_mode` | Process multiple files in parallel | `true` |
 | `parse_workers` | Number of parallel workers | `8` |
 | `cleanup_temp` | Delete intermediate JSON files after parsing | `false` |
@@ -66,7 +66,7 @@ See [Configuration Reference](../configuration.md) for full details and the user
 The parse profile delegates to a platform-specific parser based on the `PLATFORM` environment variable:
 
 - **Reddit** (default): Specialized parsing with deletion detection, base-36 ID conversion, and format compatibility. See [Reddit Platform](../platforms/reddit.md).
-- **Generic**: Simple JSON-to-CSV with configurable field extraction. See [Generic Platform](../platforms/generic.md).
+- **Custom** (`custom/<name>`): Simple JSON-to-CSV with configurable field extraction. See [Custom Platforms](../platforms/custom.md).
 
 ---
 
@@ -82,7 +82,7 @@ CSV_PATH/
     └── RC_2024-02.csv
 ```
 
-CSV files include headers. Column order: `dataset, id, retrieved_utc, ...fields from field_list.yaml...`
+CSV files include headers. Column order: `dataset, id, retrieved_utc, ...fields from platform config...`
 
 ---
 

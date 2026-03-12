@@ -288,6 +288,101 @@ def validate_classifier_config(config: Dict, classifier_name: str, profile: str)
             )
 
 
+def load_platform_config(
+    config_dir: str = "/app/config",
+    platform: str = None
+) -> Dict[str, Any]:
+    """
+    Load platform-specific configuration.
+
+    Built-in platforms (e.g., 'reddit'):
+        Loads config/platforms/{platform}/platform.yaml as the base,
+        then deep-merges user.yaml on top if it exists.
+
+    Custom platforms (e.g., 'custom/twitter'):
+        Loads config/platforms/custom/{name}.yaml directly.
+        No user.yaml support — the file is self-contained.
+
+    Args:
+        config_dir: Base configuration directory
+        platform: Platform name. If None, reads from PLATFORM env var (default: reddit)
+
+    Returns:
+        Platform configuration dictionary
+
+    Raises:
+        ConfigurationError: If config file is not found
+    """
+    if platform is None:
+        platform = os.environ.get('PLATFORM', 'reddit')
+
+    if platform.startswith('custom/'):
+        # Custom platform: single self-contained file
+        name = platform.split('/', 1)[1]
+        if not name:
+            raise ConfigurationError("Custom platform name is empty. Use PLATFORM=custom/<name>")
+        config_path = Path(config_dir) / "platforms" / "custom" / f"{name}.yaml"
+        config = load_yaml_file(config_path)
+        if config is None:
+            raise ConfigurationError(f"Custom platform config not found: {config_path}")
+        return config
+
+    # Built-in platform: platform.yaml + optional user.yaml merge
+    platform_dir = Path(config_dir) / "platforms" / platform
+
+    base_path = platform_dir / "platform.yaml"
+    config = load_yaml_file(base_path)
+    if config is None:
+        raise ConfigurationError(f"Platform config not found: {base_path}")
+
+    # Apply user.yaml overrides if present
+    user_path = platform_dir / "user.yaml"
+    user_config = load_yaml_file(user_path)
+    if user_config is not None:
+        config = deep_merge(config, user_config)
+
+    return config
+
+
+def get_platform_fields(platform_config: Dict, data_type: str) -> List[str]:
+    """
+    Get the field list for a data type from platform config.
+
+    Args:
+        platform_config: Loaded platform configuration
+        data_type: Data type key (e.g., 'submissions', 'comments')
+
+    Returns:
+        List of field names
+
+    Raises:
+        ConfigurationError: If no fields are configured for the data type
+    """
+    fields = platform_config.get('fields', {}).get(data_type, [])
+    if not fields:
+        raise ConfigurationError(f"No fields configured for data type: {data_type}")
+    return fields
+
+
+def get_platform_field_types(platform_config: Dict) -> Dict[str, Any]:
+    """
+    Get the field type definitions from platform config.
+
+    Args:
+        platform_config: Loaded platform configuration
+
+    Returns:
+        Dictionary mapping field names to type definitions
+
+    Raises:
+        ConfigurationError: If no field_types are configured
+    """
+    field_types = platform_config.get('field_types', {})
+    if not field_types:
+        raise ConfigurationError("No field_types configured in platform config")
+    return field_types
+
+
 def apply_env_overrides(config: Dict, profile: str) -> Dict:
     """
     Apply environment variable overrides to configuration.

@@ -48,7 +48,7 @@ python sdb.py status
 
 **Social Data Bridge** provides a complete pipeline for working with large-scale social media data dumps:
 
-- **Multi-platform support** — Reddit (with specialized features) or generic JSON/CSV processing
+- **Multi-platform support** — Reddit (with specialized features) or custom JSON/CSV platforms
 - **Automatic detection and decompression** of `.zst` dump files
 - **Parsing** JSON to clean CSVs with configurable field extraction
 - **Modular classification** — CPU-based (Lingua) and GPU-based (transformers) with multi-GPU parallelization and language filtering
@@ -212,12 +212,12 @@ For detailed configuration and algorithm documentation, see the per-profile docs
 | Platform | Description | Default |
 |----------|-------------|---------|
 | `reddit` | Specialized Reddit features: waterfall deletion detection, base-36 ID conversion, format compatibility | Yes |
-| `generic` | Simple JSON-to-CSV for arbitrary data: dot-notation, array indexing, type enforcement | No |
+| `custom/<name>` | Simple JSON-to-CSV for arbitrary data: dot-notation, array indexing, type enforcement | No |
 
-The default platform is Reddit. To process arbitrary JSON/NDJSON data, select `generic` during `sdb.py setup` and configure field lists, field types, and file patterns.
+The default platform is Reddit. To process arbitrary JSON/NDJSON data, select `custom` during `sdb.py setup` and configure your platform in a single YAML file.
 
 - [Reddit Platform Reference](docs/platforms/reddit.md)
-- [Generic Platform Setup](docs/platforms/generic.md)
+- [Custom Platform Setup](docs/platforms/custom.md)
 
 ### Extending functionality
 
@@ -251,7 +251,7 @@ Yes! Use `python sdb.py run ml_cpu` or `python sdb.py run ml` independently. The
 <details>
 <summary><strong>Can I use this for non-Reddit data?</strong></summary>
 
-Yes! Select `generic` during `python sdb.py setup` to process arbitrary JSON/NDJSON data. See the [Generic Platform](docs/platforms/generic.md) setup guide.
+Yes! Select `custom` during `python sdb.py setup` to process arbitrary JSON/NDJSON data. See the [Custom Platform](docs/platforms/custom.md) setup guide.
 
 </details>
 

@@ -256,7 +256,6 @@ GENERATED_CONFIG_FILES = [
     "config/postgres_ml/user.yaml",
     "config/postgres/postgresql.local.conf",
     "config/platforms/reddit/user.yaml",
-    "config/platforms/generic/user.yaml",
     "docker-compose.override.yml",
     ".env",
 ]
@@ -280,6 +279,16 @@ def cmd_unsetup():
         if path.exists():
             removed.append(rel)
 
+    # Also find custom platform config files
+    custom_dir = ROOT / "config" / "platforms" / "custom"
+    if custom_dir.is_dir():
+        for f in custom_dir.glob("*.yaml"):
+            if f.name != "example.yaml":
+                rel = str(f.relative_to(ROOT))
+                if rel not in removed:
+                    if f.exists():
+                        removed.append(rel)
+
     # Also find .bak files created by write_files()
     backups = []
     for rel in GENERATED_CONFIG_FILES:
@@ -300,12 +309,31 @@ def cmd_unsetup():
     # --- Phase 2: Database removal (double confirmation) ---
     pgdata_path = env.get("PGDATA_PATH", "")
     db_removed = False
+
+    # Collect tablespace paths from postgres config
+    tablespace_paths = {}
+    try:
+        import yaml
+        for cfg_name in ("pipeline.yaml", "user.yaml"):
+            cfg_file = ROOT / "config" / "postgres" / cfg_name
+            if cfg_file.exists():
+                cfg = yaml.safe_load(cfg_file.read_text()) or {}
+                ts = cfg.get("tablespaces") or cfg.get("pipeline", {}).get("tablespaces")
+                if ts and isinstance(ts, dict):
+                    tablespace_paths.update(ts)
+    except Exception:
+        pass
+
     if pgdata_path:
         pgdata = Path(pgdata_path)
         if not pgdata.is_absolute():
             pgdata = ROOT / pgdata
         if pgdata.exists():
             print(f"  Database directory: {pgdata_path}")
+            if tablespace_paths:
+                print(f"  Tablespace directories:")
+                for ts_name, ts_path in tablespace_paths.items():
+                    print(f"    {ts_name}: {ts_path}")
             print()
             confirm1 = input("  Delete the PostgreSQL database? This CANNOT be undone [y/N]: ").strip().lower()
             if confirm1 in ("y", "yes"):
@@ -315,8 +343,31 @@ def cmd_unsetup():
                     print()
                     print("  Stopping PostgreSQL...")
                     docker_compose("--profile", "postgres", "down")
+                    # Fix permissions: PG container creates files owned by its internal user
+                    print("  Fixing directory permissions...")
+                    volume_args = ["-v", f"{pgdata.resolve()}:/pgdata"]
+                    chmod_paths = ["/pgdata"]
+                    for ts_name, ts_path in tablespace_paths.items():
+                        ts_dir = Path(ts_path)
+                        if not ts_dir.is_absolute():
+                            ts_dir = ROOT / ts_dir
+                        if ts_dir.exists():
+                            volume_args += ["-v", f"{ts_dir.resolve()}:/tablespace/{ts_name}"]
+                            chmod_paths.append(f"/tablespace/{ts_name}")
+                    subprocess.run(
+                        ["docker", "run", "--rm"] + volume_args +
+                        ["postgres:18", "chmod", "-R", "a+rwX"] + chmod_paths,
+                        cwd=ROOT,
+                    )
                     print(f"  Removing {pgdata}...")
                     shutil.rmtree(pgdata)
+                    for ts_name, ts_path in tablespace_paths.items():
+                        ts_dir = Path(ts_path)
+                        if not ts_dir.is_absolute():
+                            ts_dir = ROOT / ts_dir
+                        if ts_dir.exists():
+                            print(f"  Removing tablespace '{ts_name}' at {ts_dir}...")
+                            shutil.rmtree(ts_dir)
                     db_removed = True
                     print("  Database removed.")
                 else:
@@ -348,6 +399,8 @@ def cmd_unsetup():
             data_paths[label] = val
     if not db_removed and pgdata_path:
         data_paths["PostgreSQL data"] = pgdata_path
+        for ts_name, ts_path in tablespace_paths.items():
+            data_paths[f"Tablespace '{ts_name}'"] = ts_path
 
     if data_paths:
         print()

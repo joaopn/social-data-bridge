@@ -16,7 +16,7 @@ from typing import List, Dict, Tuple, Optional
 from ..core.state import PipelineState
 from ..core.config import (
     load_profile_config,
-    load_yaml_file,
+    load_platform_config as _load_platform_config,
     apply_env_overrides,
     validate_database_config,
     ConfigurationError,
@@ -34,26 +34,9 @@ from ..db.postgres.ingest import (
 PLATFORM = os.environ.get('PLATFORM', 'reddit')
 
 
-def get_platform_config_dir(config_dir: str) -> str:
-    """Get the platform-specific config directory."""
-    return f"{config_dir}/platforms/{PLATFORM}"
-
-
 def load_platform_config(config_dir: str) -> Dict:
-    """
-    Load platform-specific configuration (file patterns, data types, db_schema).
-    
-    Args:
-        config_dir: Base configuration directory
-        
-    Returns:
-        Platform configuration dictionary
-    """
-    platform_config_path = Path(get_platform_config_dir(config_dir)) / "platform.yaml"
-    config = load_yaml_file(platform_config_path)
-    if config is None:
-        raise ConfigurationError(f"Platform config not found: {platform_config_path}")
-    return config
+    """Load platform configuration using centralized loader."""
+    return _load_platform_config(config_dir, PLATFORM)
 
 
 def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:

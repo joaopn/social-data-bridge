@@ -1,16 +1,17 @@
 # Adding New Platforms
 
-Social Data Bridge supports adding new platforms through configuration files and an optional custom parser.
+Social Data Bridge supports two ways to add new platforms:
+
+1. **Custom platform** (config-only) — Create a single YAML file. No code required.
+2. **Built-in platform** (with custom parser) — For platforms needing specialized logic (computed fields, format handling, etc.).
 
 ---
 
-## Steps
+## Option 1: Custom Platform (Recommended)
 
-### 1. Create Platform Configuration
+If your data is standard JSON/NDJSON, use the custom platform system. No code changes needed.
 
-Create `config/platforms/{platform}/` with these files:
-
-#### platform.yaml
+Create `config/platforms/custom/<name>.yaml`:
 
 ```yaml
 db_schema: my_platform
@@ -23,54 +24,36 @@ file_patterns:
     json: '^posts_(\d{4}-\d{2})$'
     csv: '^posts_(\d{4}-\d{2})\.csv$'
     prefix: 'posts_'
-  comments:
-    zst: '^comments_(\d{4}-\d{2})\.zst$'
-    json: '^comments_(\d{4}-\d{2})$'
-    csv: '^comments_(\d{4}-\d{2})\.csv$'
-    prefix: 'comments_'
 indexes:
   posts: [author, created_at]
-  comments: [author, post_id, created_at]
+field_types:
+  created_at: integer
+  author: text
+  content: text
+fields:
+  posts:
+    - created_at
+    - author
+    - content
 ```
 
-#### field_list.yaml
+Run with `PLATFORM=custom/<name>`. See [Custom Platforms](custom.md) for full details.
 
-```yaml
-posts:
-  - created_at
-  - author
-  - title
-  - content
-  - score
+---
 
-comments:
-  - created_at
-  - author
-  - post_id
-  - parent_id
-  - content
-  - score
-```
+## Option 2: Built-in Platform (Custom Parser)
 
-#### field_types.yaml
+For platforms needing specialized parsing logic (like Reddit's deletion detection or base-36 ID conversion):
 
-```yaml
-created_at: integer
-author: text
-title: text
-content: text
-score: integer
-post_id: text
-parent_id: text
-```
+### 1. Create Platform Configuration
 
-### 2. Create Parser (Optional)
+Create `config/platforms/{platform}/platform.yaml` with all sections (`db_schema`, `data_types`, `file_patterns`, `indexes`, `field_types`, `fields`).
 
-If your platform needs custom parsing logic (computed fields, format handling, etc.), create a parser module:
+Users can override any section via an optional `user.yaml` in the same directory (deep-merged over `platform.yaml`, lists replace).
 
-`social_data_bridge/platforms/{platform}/parser.py`
+### 2. Create Parser Module
 
-Required functions:
+Create `social_data_bridge/platforms/{platform}/parser.py` with these functions:
 
 ```python
 def transform_json(data, dataset, data_type_config, fields_to_extract):
@@ -81,16 +64,14 @@ def process_single_file(input_file, output_file, data_type, data_type_config, fi
     """Process a single JSON file to CSV. Returns (input_size, output_file)."""
     ...
 
-def parse_to_csv(input_file, output_dir, data_type, config_dir, use_type_subdir=True):
+def parse_to_csv(input_file, output_dir, data_type, platform_config, use_type_subdir=True):
     """Main entry point. Parse a JSON file to CSV. Returns output CSV path."""
     ...
 
-def parse_files_parallel(files, output_dir, config_dir, workers):
+def parse_files_parallel(files, output_dir, platform_config, workers):
     """Parse multiple files in parallel. Returns list of (csv_path, data_type)."""
     ...
 ```
-
-If no custom logic is needed, you can reuse the generic parser.
 
 ### 3. Register the Platform
 
@@ -104,9 +85,11 @@ def get_platform_parser(platform):
     elif platform == 'my_platform':
         from ..platforms.my_platform import parser
         return parser
-    else:
-        from ..platforms.generic import parser
+    elif platform.startswith('custom/'):
+        from ..platforms.custom import parser
         return parser
+    else:
+        raise ConfigurationError(f"Unknown platform: {platform}")
 ```
 
 ### 4. Run
@@ -116,10 +99,4 @@ python sdb.py run parse
 ```
 
 > [!NOTE]
-> The platform is configured during `python sdb.py setup`. Select your custom platform during setup.
-
----
-
-## Using the Generic Parser
-
-If your platform doesn't need custom logic, you can skip step 2 and let it fall through to the generic parser. Just create the config files and set `PLATFORM=generic` or register your platform to use the generic parser module.
+> The platform is configured during `python sdb.py setup`. Select your platform during setup.

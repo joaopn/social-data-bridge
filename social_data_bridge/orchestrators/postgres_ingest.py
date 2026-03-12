@@ -17,7 +17,7 @@ from ..core.state import PipelineState
 from ..core.decompress import decompress_zst
 from ..core.config import (
     load_profile_config,
-    load_yaml_file,
+    load_platform_config as _load_platform_config,
     get_required,
     get_optional,
     validate_processing_config,
@@ -41,40 +41,26 @@ PLATFORM = os.environ.get('PLATFORM', 'reddit')
 def get_platform_parser():
     """
     Get the appropriate parser module for the current platform.
-    
+
+    Built-in platforms have dedicated parsers. Custom platforms (custom/*)
+    use the shared custom parser.
+
     Returns:
         Parser module with parse_to_csv and parse_files_parallel functions
     """
     if PLATFORM == 'reddit':
         from ..platforms.reddit import parser
         return parser
-    elif PLATFORM == 'generic':
-        from ..platforms.generic import parser
+    elif PLATFORM.startswith('custom/'):
+        from ..platforms.custom import parser
         return parser
     else:
-        raise ConfigurationError(f"Unknown platform: {PLATFORM}. Supported: reddit, generic")
-
-
-def get_platform_config_dir(config_dir: str) -> str:
-    """Get the platform-specific config directory."""
-    return f"{config_dir}/platforms/{PLATFORM}"
+        raise ConfigurationError(f"Unknown platform: {PLATFORM}. Supported: reddit, custom/<name>")
 
 
 def load_platform_config(config_dir: str) -> Dict:
-    """
-    Load platform-specific configuration (file patterns, data types, indexes).
-    
-    Args:
-        config_dir: Base configuration directory
-        
-    Returns:
-        Platform configuration dictionary
-    """
-    platform_config_path = Path(get_platform_config_dir(config_dir)) / "platform.yaml"
-    config = load_yaml_file(platform_config_path)
-    if config is None:
-        raise ConfigurationError(f"Platform config not found: {platform_config_path}")
-    return config
+    """Load platform configuration using centralized loader."""
+    return _load_platform_config(config_dir, PLATFORM)
 
 
 def load_config(config_dir: str = "/app/config", quiet: bool = False) -> Dict:
@@ -294,10 +280,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     
     # Get file patterns from platform config
     file_patterns = platform_config.get('file_patterns', {})
-    
-    # Get platform-specific config directory
-    platform_config_dir = get_platform_config_dir(config_dir)
-    
+
     # Tablespace configuration
     tablespaces = config.get('tablespaces', {})
     table_tablespaces = config.get('table_tablespaces', {})
@@ -488,7 +471,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                 parser.parse_files_parallel(
                     files=parse_input,
                     output_dir=csv_dir,
-                    config_dir=platform_config_dir,
+                    platform_config=platform_config,
                     workers=workers
                 )
                 
@@ -512,7 +495,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                         input_file=json_path,
                         output_dir=csv_dir,
                         data_type=data_type,
-                        config_dir=platform_config_dir
+                        platform_config=platform_config
                     )
                     
                     if cleanup_temp and os.path.exists(json_path):
@@ -626,7 +609,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     host=db_config['host'],
                     port=db_config['port'],
                     user=db_config['user'],
-                    config_dir=platform_config_dir,
+                    platform_config=platform_config,
                     csv_file=first_csv,
                     tablespace=get_tablespace(data_type)
                 )
@@ -644,7 +627,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                             host=db_config['host'],
                             port=db_config['port'],
                             user=db_config['user'],
-                            config_dir=platform_config_dir
+                            platform_config=platform_config
                         )
                         states[data_type].mark_completed(file_id)
                         local_success += 1
@@ -744,7 +727,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                                 user=db_config['user'],
                                 check_duplicates=check_duplicates,
                                 create_indexes=False,
-                                config_dir=platform_config_dir,
+                                platform_config=platform_config,
                                 tablespace=get_tablespace(data_type)
                             )
 
@@ -788,7 +771,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                             user=db_config['user'],
                             check_duplicates=check_duplicates,
                             create_indexes=False,
-                            config_dir=platform_config_dir,
+                            platform_config=platform_config,
                             tablespace=get_tablespace(data_type)
                         )
 

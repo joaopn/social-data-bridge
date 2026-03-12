@@ -1,0 +1,60 @@
+# Example custom platform configuration
+# Copy this file to config/platforms/custom/<name>.yaml and set PLATFORM=custom/<name>
+#
+# Each custom platform is a single self-contained YAML file.
+# No user.yaml override — everything goes in this one file.
+#
+# Supported field types:
+#   integer, bigint, float, boolean, text,
+#   ['char', N], ['varchar', N]
+
+db_schema: my_data
+
+data_types:
+  - posts
+  - users
+
+file_patterns:
+  posts:
+    zst: '^posts_(\d{4}-\d{2})\.zst$'
+    json: '^posts_(\d{4}-\d{2})$'
+    csv: '^posts_(\d{4}-\d{2})\.csv$'
+    prefix: 'posts_'
+  users:
+    zst: '^users_.*\.zst$'
+    json: '^users_.*$'
+    csv: '^users_.*\.csv$'
+    prefix: 'users_'
+
+indexes:
+  posts:
+    - dataset
+    - author
+
+field_types:
+  id: text
+  created_at: integer
+  author: text
+  content: text
+  likes: integer
+  username: text
+  email: text
+  # Lingua language detection fields (added by ml_cpu profile)
+  lang: ['varchar', 2]
+  lang_prob: float
+  lang2: ['varchar', 2]
+  lang2_prob: float
+  lang_chars: integer
+
+fields:
+  posts:
+    - id
+    - created_at
+    - author
+    - content
+    - likes
+  users:
+    - id
+    - username
+    - email
+    - profile.bio        # Nested field access with dot notation

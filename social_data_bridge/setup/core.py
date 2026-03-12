@@ -68,18 +68,24 @@ def run_questionnaire(hw):
 
     platform = ask_choice(
         "Platform:",
-        ["reddit", "generic"],
+        ["reddit", "custom"],
         default="reddit",
     )
-    settings["platform"] = platform
 
-    if platform == "reddit":
-        data_types = ask_list("Data types", ["submissions", "comments"])
-    else:
+    if platform == "custom":
+        custom_name = ask("Custom platform name (e.g. twitter, mastodon)")
+        if not custom_name:
+            print("    Error: A name is required for custom platforms.")
+            sys.exit(1)
+        platform = f"custom/{custom_name}"
         data_types = ask_list("Data types (comma-separated)")
         if not data_types:
-            print("    Error: At least one data type is required for generic platform.")
+            print("    Error: At least one data type is required for custom platforms.")
             sys.exit(1)
+    else:
+        data_types = ask_list("Data types", ["submissions", "comments"])
+
+    settings["platform"] = platform
     settings["data_types"] = data_types
 
     all_profiles = ["parse", "ml_cpu", "ml", "postgres_ingest", "postgres_ml"]
@@ -183,18 +189,18 @@ def run_questionnaire(hw):
         else:
             settings["pgtune_output"] = ""
 
-    # ---- Section 5: Generic Platform ----
-    if platform == "generic":
-        section_header("Section 5: Generic Platform")
+    # ---- Section 5: Custom Platform ----
+    if platform.startswith("custom/"):
+        section_header("Section 5: Custom Platform")
         settings["db_schema"] = ask("Database schema name")
-        settings["generic_file_patterns"] = {}
+        settings["custom_file_patterns"] = {}
         for dt in data_types:
             print(f"\n  File patterns for '{dt}':")
             zst = ask(f"  .zst regex pattern for {dt}")
             json_pat = ask(f"  JSON regex pattern for {dt}")
             csv_pat = ask(f"  CSV regex pattern for {dt}")
             prefix = ask(f"  Filename prefix for {dt}")
-            settings["generic_file_patterns"][dt] = {
+            settings["custom_file_patterns"][dt] = {
                 "zst": zst, "json": json_pat, "csv": csv_pat, "prefix": prefix,
             }
 
@@ -322,14 +328,36 @@ def generate_docker_compose_override(settings):
     )
 
 
-def generate_generic_platform_user_yaml(settings):
-    """Generate config/platforms/generic/user.yaml content."""
+def generate_custom_platform_yaml(settings):
+    """Generate config/platforms/custom/<name>.yaml content.
+
+    Custom platforms are self-contained single files (no user.yaml override).
+    """
     config = {
-        "platform": {
-            "db_schema": settings["db_schema"],
-            "data_types": settings["data_types"],
-            "file_patterns": settings["generic_file_patterns"],
-        }
+        "db_schema": settings["db_schema"],
+        "data_types": settings["data_types"],
+        "file_patterns": settings["custom_file_patterns"],
+        "indexes": {},
+        "field_types": {
+            # Common field types — add or modify as needed
+            "id": "text",
+            "created_at": "integer",
+            "timestamp": "integer",
+            "text": "text",
+            "content": "text",
+            "author": "text",
+            "title": "text",
+            "url": "text",
+            "score": "integer",
+            "count": "integer",
+            # Lingua language detection fields (added by ml_cpu profile)
+            "lang": ["varchar", 2],
+            "lang_prob": "float",
+            "lang2": ["varchar", 2],
+            "lang2_prob": "float",
+            "lang_chars": "integer",
+        },
+        "fields": {dt: [] for dt in settings["data_types"]},
     }
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
@@ -440,8 +468,9 @@ def print_summary(settings, files_to_write):
         print(f"    PGTune:              {'provided' if settings.get('pgtune_output') else 'not provided'}")
         print()
 
-    if settings["platform"] == "generic":
-        print(f"  Generic Platform:")
+    if settings["platform"].startswith("custom/"):
+        print(f"  Custom Platform:")
+        print(f"    Name:                {settings['platform'].split('/', 1)[1]}")
         print(f"    Schema:              {settings.get('db_schema')}")
         print()
 
@@ -515,11 +544,12 @@ def main():
                 override_content,
             ))
 
-    # Platform user.yaml (generic only; Reddit is handled by setup/reddit.py)
-    if settings["platform"] == "generic":
+    # Custom platform config (single file; Reddit is handled by setup/reddit.py)
+    if settings["platform"].startswith("custom/"):
+        custom_name = settings["platform"].split("/", 1)[1]
         files_to_write.append((
-            CONFIG_DIR / "platforms" / "generic" / "user.yaml",
-            generate_generic_platform_user_yaml(settings),
+            CONFIG_DIR / "platforms" / "custom" / f"{custom_name}.yaml",
+            generate_custom_platform_yaml(settings),
         ))
 
     # Summary and confirm

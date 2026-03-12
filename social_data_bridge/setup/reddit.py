@@ -26,25 +26,17 @@ from social_data_bridge.setup.utils import (
 REDDIT_CONFIG_DIR = CONFIG_DIR / "platforms" / "reddit"
 
 
-def load_reddit_field_list():
-    """Load field lists from config/platforms/reddit/field_list.yaml."""
-    path = REDDIT_CONFIG_DIR / "field_list.yaml"
-    try:
-        data = yaml.safe_load(path.read_text())
-        return data.get("submissions", []), data.get("comments", [])
-    except (OSError, yaml.YAMLError) as e:
-        print(f"  Error: Could not read {path}: {e}")
-        sys.exit(1)
-
-
 def load_reddit_platform_config():
     """Load platform config from config/platforms/reddit/platform.yaml."""
     path = REDDIT_CONFIG_DIR / "platform.yaml"
     try:
         data = yaml.safe_load(path.read_text())
+        fields = data.get("fields", {})
         indexes = data.get("indexes", {})
         return {
             "db_schema": data.get("db_schema", "reddit"),
+            "submission_fields": fields.get("submissions", []),
+            "comment_fields": fields.get("comments", []),
             "submission_indexes": indexes.get("submissions", []),
             "comment_indexes": indexes.get("comments", []),
         }
@@ -61,8 +53,7 @@ def run_questionnaire():
     """Run the Reddit platform questionnaire. Returns settings dict."""
     settings = {}
 
-    # Load current config from files
-    all_sub_fields, all_com_fields = load_reddit_field_list()
+    # Load current config from platform.yaml
     platform_config = load_reddit_platform_config()
 
     section_header("Reddit Platform Configuration")
@@ -70,8 +61,11 @@ def run_questionnaire():
     settings["db_schema"] = ask("Database schema name", platform_config["db_schema"])
 
     # Field list selection
-    print("  The default field list is defined in config/platforms/reddit/field_list.yaml.")
-    print("  You can remove fields here. Adding new fields also requires field_types.yaml.")
+    all_sub_fields = platform_config["submission_fields"]
+    all_com_fields = platform_config["comment_fields"]
+
+    print("  The default field list is defined in config/platforms/reddit/platform.yaml.")
+    print("  You can remove fields here. Adding new fields also requires updating field_types.")
     customize_fields = ask_bool("Remove fields from the default list?", False)
     if customize_fields:
         print("\n  Submissions fields (deselect to exclude):")
@@ -103,13 +97,15 @@ def run_questionnaire():
 # ============================================================================
 
 def generate_reddit_platform_user_yaml(settings, base_config):
-    """Generate config/platforms/reddit/user.yaml content."""
+    """Generate config/platforms/reddit/user.yaml content.
+
+    user.yaml is directly deep-merged over platform.yaml (flat structure, no scoping).
+    """
     config = {}
 
-    # Platform overrides (schema, indexes)
-    platform = {}
+    # Schema override
     if settings.get("db_schema") != base_config["db_schema"]:
-        platform["db_schema"] = settings["db_schema"]
+        config["db_schema"] = settings["db_schema"]
 
     # Indexes (only if customized)
     indexes = {}
@@ -118,19 +114,16 @@ def generate_reddit_platform_user_yaml(settings, base_config):
     if "reddit_com_indexes" in settings:
         indexes["comments"] = settings["reddit_com_indexes"]
     if indexes:
-        platform["indexes"] = indexes
+        config["indexes"] = indexes
 
-    if platform:
-        config["platform"] = platform
-
-    # Field list (only if customized)
-    field_list = {}
+    # Fields (only if customized)
+    fields = {}
     if "reddit_sub_fields" in settings:
-        field_list["submissions"] = settings["reddit_sub_fields"]
+        fields["submissions"] = settings["reddit_sub_fields"]
     if "reddit_com_fields" in settings:
-        field_list["comments"] = settings["reddit_com_fields"]
-    if field_list:
-        config["field_list"] = field_list
+        fields["comments"] = settings["reddit_com_fields"]
+    if fields:
+        config["fields"] = fields
 
     if not config:
         return None  # No overrides needed
@@ -193,6 +186,9 @@ def main():
 
     if not files_to_write:
         print("  No configuration changes needed. Using defaults.\n")
+        state = load_setup_state()
+        if state:
+            print_pipeline_commands(state.get("profiles", []))
         return
 
     if not ask_bool("Write these files?", True):
