@@ -7,8 +7,8 @@
 
 processing:
   # Data types to process - these map to keys in the platform's fields config
-  # Define your data types in config/platforms/<platform>/platform.yaml
-  data_types: []  # Override in user.yaml or set via platform config
+  # Define your data types in config/sources/<source>/platform.yaml
+  data_types: []  # Override in source config or set via platform config
   parallel_mode: true       # If true: parse multiple files in parallel
   parse_workers: 8           # Number of parallel workers for CSV parsing
   cleanup_temp: false        # Delete intermediate files after processing

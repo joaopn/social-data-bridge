@@ -1,7 +1,7 @@
 """Reddit platform configuration for Social Data Bridge.
 
 Configures Reddit-specific settings: database schema, field lists, and indexes.
-Generates overrides in config/sources/reddit/platform.yaml or legacy config/platforms/reddit/user.yaml.
+Generates overrides in config/sources/reddit/platform.yaml.
 """
 
 import sys
@@ -15,8 +15,8 @@ except ImportError:
 from social_data_bridge.setup.utils import (
     ROOT, CONFIG_DIR,
     ask, ask_bool, ask_list, ask_multi_select,
-    section_header, load_setup_state, write_files, print_pipeline_commands,
-    load_source_config, get_source_profiles,
+    section_header, write_files, print_pipeline_commands,
+    get_source_profiles,
 )
 
 
@@ -24,12 +24,12 @@ from social_data_bridge.setup.utils import (
 # Reddit config loading
 # ============================================================================
 
-REDDIT_CONFIG_DIR = CONFIG_DIR / "platforms" / "reddit"
+REDDIT_TEMPLATE = CONFIG_DIR / "templates" / "reddit.yaml"
 
 
 def load_reddit_platform_config():
-    """Load platform config from config/platforms/reddit/platform.yaml."""
-    path = REDDIT_CONFIG_DIR / "platform.yaml"
+    """Load platform config from config/templates/reddit.yaml."""
+    path = REDDIT_TEMPLATE
     try:
         data = yaml.safe_load(path.read_text())
         fields = data.get("fields", {})
@@ -65,7 +65,7 @@ def run_questionnaire():
     all_sub_fields = platform_config["submission_fields"]
     all_com_fields = platform_config["comment_fields"]
 
-    print("  The default field list is defined in config/platforms/reddit/platform.yaml.")
+    print("  The default field list is defined in config/templates/reddit.yaml.")
     print("  You can remove fields here. Adding new fields also requires updating field_types.")
     customize_fields = ask_bool("Remove fields from the default list?", False)
     if customize_fields:
@@ -98,9 +98,9 @@ def run_questionnaire():
 # ============================================================================
 
 def generate_reddit_platform_user_yaml(settings, base_config):
-    """Generate config/platforms/reddit/user.yaml content.
+    """Generate Reddit platform override YAML content.
 
-    user.yaml is directly deep-merged over platform.yaml (flat structure, no scoping).
+    Overrides are deep-merged into config/sources/<name>/platform.yaml.
     """
     config = {}
 
@@ -185,11 +185,11 @@ def apply_overrides_to_platform_yaml(source_name, override_yaml):
     source_platform_path.write_text(yaml.dump(base, default_flow_style=False, sort_keys=False))
 
 
-def main(source_name=None):
+def main(source_name):
     """Configure Reddit-specific fields, indexes, and schema.
 
     Args:
-        source_name: Source name (e.g. 'reddit'). If None, uses legacy paths.
+        source_name: Source name (required, e.g. 'reddit').
     """
     print()
     print("  Social Data Bridge - Reddit Platform Configuration")
@@ -205,54 +205,24 @@ def main(source_name=None):
 
     if reddit_yaml is None:
         print("  No configuration changes needed. Using defaults.\n")
-        if source_name:
-            profiles = get_source_profiles(source_name)
-            print_pipeline_commands(profiles, source_name)
-        else:
-            state = load_setup_state()
-            if state:
-                print_pipeline_commands(state.get("profiles", []))
-        return
-
-    # Determine output path
-    if source_name:
-        # New source-based: merge overrides into source's platform.yaml
-        source_platform_path = CONFIG_DIR / "sources" / source_name / "platform.yaml"
-        if source_platform_path.exists():
-            # Show what will change
-            print_summary(settings, [(source_platform_path, reddit_yaml)])
-            if not ask_bool("Apply these overrides?", True):
-                print("\n  Aborted.\n")
-                sys.exit(0)
-            print()
-            apply_overrides_to_platform_yaml(source_name, reddit_yaml)
-            print(f"  Updated:   config/sources/{source_name}/platform.yaml")
-        else:
-            print(f"  Error: Source platform config not found: {source_platform_path}\n")
-            sys.exit(1)
-
-        print(f"\n  Done! Reddit platform configuration has been updated.")
         profiles = get_source_profiles(source_name)
         print_pipeline_commands(profiles, source_name)
-    else:
-        # Legacy: write to config/platforms/reddit/user.yaml
-        files_to_write = [(
-            CONFIG_DIR / "platforms" / "reddit" / "user.yaml",
-            reddit_yaml,
-        )]
+        return
 
-        print_summary(settings, files_to_write)
+    source_platform_path = CONFIG_DIR / "sources" / source_name / "platform.yaml"
+    if not source_platform_path.exists():
+        print(f"  Error: Source platform config not found: {source_platform_path}\n")
+        sys.exit(1)
 
-        if not ask_bool("Write these files?", True):
-            print("\n  Aborted. No files written.\n")
-            sys.exit(0)
+    print_summary(settings, [(source_platform_path, reddit_yaml)])
+    if not ask_bool("Apply these overrides?", True):
+        print("\n  Aborted.\n")
+        sys.exit(0)
 
-        print()
-        write_files(files_to_write)
-        print(f"\n  Done! Reddit platform configuration has been generated.")
+    print()
+    apply_overrides_to_platform_yaml(source_name, reddit_yaml)
+    print(f"  Updated:   config/sources/{source_name}/platform.yaml")
 
-        state = load_setup_state()
-        if state:
-            print_pipeline_commands(state.get("profiles", []))
-        else:
-            print()
+    print(f"\n  Done! Reddit platform configuration has been updated.")
+    profiles = get_source_profiles(source_name)
+    print_pipeline_commands(profiles, source_name)

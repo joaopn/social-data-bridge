@@ -345,17 +345,12 @@ def load_platform_config(
     source: str = None
 ) -> Dict[str, Any]:
     """
-    Load platform-specific configuration.
-
-    Resolution order:
-        1. If source is provided: config/sources/<source>/platform.yaml
-        2. Legacy custom platforms: config/platforms/custom/<name>.yaml
-        3. Legacy built-in platforms: config/platforms/<platform>/platform.yaml + user.yaml
+    Load platform-specific configuration from config/sources/<source>/platform.yaml.
 
     Args:
         config_dir: Base configuration directory
-        platform: Platform name. If None, reads from PLATFORM env var (default: reddit)
-        source: Source name. If provided, loads from config/sources/<source>/platform.yaml
+        platform: Platform name (unused, kept for signature compatibility)
+        source: Source name. Loads from config/sources/<source>/platform.yaml
 
     Returns:
         Platform configuration dictionary
@@ -363,43 +358,18 @@ def load_platform_config(
     Raises:
         ConfigurationError: If config file is not found
     """
-    if platform is None:
-        platform = os.environ.get('PLATFORM', 'reddit')
+    if not source:
+        source = os.environ.get('SOURCE') or os.environ.get('PLATFORM', 'reddit')
 
-    # Source-specific config takes priority
-    if source:
-        source_path = Path(config_dir) / "sources" / source / "platform.yaml"
-        config = load_yaml_file(source_path)
-        if config is not None:
-            return config
-        # Fall through to legacy paths if source config doesn't exist
-
-    if platform.startswith('custom/'):
-        # Custom platform: single self-contained file
-        name = platform.split('/', 1)[1]
-        if not name:
-            raise ConfigurationError("Custom platform name is empty. Use PLATFORM=custom/<name>")
-        config_path = Path(config_dir) / "platforms" / "custom" / f"{name}.yaml"
-        config = load_yaml_file(config_path)
-        if config is None:
-            raise ConfigurationError(f"Custom platform config not found: {config_path}")
+    source_path = Path(config_dir) / "sources" / source / "platform.yaml"
+    config = load_yaml_file(source_path)
+    if config is not None:
         return config
 
-    # Built-in platform: platform.yaml + optional user.yaml merge
-    platform_dir = Path(config_dir) / "platforms" / platform
-
-    base_path = platform_dir / "platform.yaml"
-    config = load_yaml_file(base_path)
-    if config is None:
-        raise ConfigurationError(f"Platform config not found: {base_path}")
-
-    # Apply user.yaml overrides if present
-    user_path = platform_dir / "user.yaml"
-    user_config = load_yaml_file(user_path)
-    if user_config is not None:
-        config = deep_merge(config, user_config)
-
-    return config
+    raise ConfigurationError(
+        f"Platform config not found: {source_path}\n"
+        f"Run 'python sdb.py source add {source}' to configure this source."
+    )
 
 
 def get_platform_fields(platform_config: Dict, data_type: str) -> List[str]:

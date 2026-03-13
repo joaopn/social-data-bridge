@@ -16,8 +16,8 @@ from social_data_bridge.setup.utils import (
     ROOT, CONFIG_DIR,
     detect_hardware,
     ask, ask_int, ask_bool, ask_list, ask_multi_select, ask_password,
-    section_header, require_setup_state, update_env_file, write_files,
-    print_pipeline_commands, load_source_config, get_source_profiles,
+    section_header, require_source_state, update_env_file, write_files,
+    print_pipeline_commands,
 )
 
 
@@ -317,11 +317,11 @@ def print_summary(settings, files_to_write):
 # Main
 # ============================================================================
 
-def main(source_name=None):
+def main(source_name):
     """Configure classifiers for a source.
 
     Args:
-        source_name: Source name. If None, uses legacy setup_state.yaml.
+        source_name: Source name (required).
     """
     print()
     print("  Social Data Bridge - Classifier Configuration")
@@ -331,10 +331,8 @@ def main(source_name=None):
     print("  Press Enter to accept defaults shown in [brackets].")
     print()
 
-    # Load state from source config or legacy setup_state
-    state = require_setup_state(source_name)
+    state = require_source_state(source_name)
     profiles = state["profiles"]
-    source = state.get("source", source_name)
 
     has_ml_cpu = "ml_cpu" in profiles
     has_ml = "ml" in profiles
@@ -350,33 +348,20 @@ def main(source_name=None):
     # Run questionnaire
     settings = run_questionnaire(hw, state)
 
-    # Build file list — write to source dir if available, else legacy
+    # Build file list
     files_to_write = []
+    source_dir = CONFIG_DIR / "sources" / source_name
 
-    if source:
-        source_dir = CONFIG_DIR / "sources" / source
-        if has_ml_cpu:
-            files_to_write.append((
-                source_dir / "ml_cpu.yaml",
-                generate_ml_cpu_user_yaml(settings),
-            ))
-        if has_ml:
-            files_to_write.append((
-                source_dir / "ml.yaml",
-                generate_ml_user_yaml(settings),
-            ))
-    else:
-        # Legacy paths
-        if has_ml_cpu:
-            files_to_write.append((
-                CONFIG_DIR / "ml_cpu" / "user.yaml",
-                generate_ml_cpu_user_yaml(settings),
-            ))
-        if has_ml:
-            files_to_write.append((
-                CONFIG_DIR / "ml" / "user.yaml",
-                generate_ml_user_yaml(settings),
-            ))
+    if has_ml_cpu:
+        files_to_write.append((
+            source_dir / "ml_cpu.yaml",
+            generate_ml_cpu_user_yaml(settings),
+        ))
+    if has_ml:
+        files_to_write.append((
+            source_dir / "ml.yaml",
+            generate_ml_user_yaml(settings),
+        ))
 
     # Summary and confirm
     print_summary(settings, files_to_write)
@@ -396,13 +381,9 @@ def main(source_name=None):
     print(f"\n  Done! Classifier configuration has been generated.")
 
     platform = state["platform"]
-    if platform == "reddit" and source:
+    if platform == "reddit":
         print("\n  Next step:")
-        print(f"    python sdb.py source configure {source}  # Customize Reddit fields/indexes")
-        print()
-    elif platform == "reddit":
-        print("\n  Next step:")
-        print("    python sdb.py setup-reddit     # Configure Reddit fields and indexes")
+        print(f"    python sdb.py source configure {source_name}  # Customize Reddit fields/indexes")
         print()
     else:
-        print_pipeline_commands(profiles, source)
+        print_pipeline_commands(profiles, source_name)

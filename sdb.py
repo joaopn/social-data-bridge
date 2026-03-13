@@ -24,6 +24,7 @@ Usage:
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -70,33 +71,7 @@ def _get_configured_db_services():
         services.append("postgres")
     if (db_dir / "mongo.yaml").exists():
         services.append("mongo")
-
-    if not services:
-        # Fallback: check legacy setup_state.yaml
-        state = _load_legacy_state()
-        if state:
-            databases = state.get("databases")
-            if databases:
-                return list(databases)
-            profiles = state.get("profiles", [])
-            if any(p.startswith("postgres") for p in profiles):
-                services.append("postgres")
-            if "mongo_ingest" in profiles:
-                services.append("mongo")
-
     return services
-
-
-def _load_legacy_state():
-    """Load legacy setup_state.yaml. Returns dict or None."""
-    state_path = CONFIG_DIR / "setup_state.yaml"
-    if not state_path.exists():
-        return None
-    try:
-        import yaml
-        return yaml.safe_load(state_path.read_text())
-    except Exception:
-        return None
 
 
 # ============================================================================
@@ -293,18 +268,6 @@ DB_GENERATED_FILES = [
     ".env",
 ]
 
-# Legacy config files from old setup (for backward compat cleanup)
-LEGACY_GENERATED_FILES = [
-    "config/setup_state.yaml",
-    "config/parse/user.yaml",
-    "config/ml_cpu/user.yaml",
-    "config/ml/user.yaml",
-    "config/postgres/user.yaml",
-    "config/postgres_ml/user.yaml",
-    "config/mongo/user.yaml",
-    "config/platforms/reddit/user.yaml",
-]
-
 
 def cmd_db_unsetup(args):
     """Remove database configuration and optionally database data."""
@@ -378,20 +341,23 @@ def cmd_db_unsetup(args):
                 if confirm2 in ("y", "yes"):
                     print()
                     print("  Stopping PostgreSQL...")
-                    docker_compose("--profile", "postgres", "down")
+                    docker_compose("--profile", "postgres", "down", "--timeout", "30")
                     print("  Fixing directory permissions...")
-                    volume_args = ["-v", f"{pgdata.resolve()}:/pgdata"]
-                    chmod_paths = ["/pgdata"]
+                    # Mount the parent directory so we can chown both the parent and pgdata
+                    db_parent = pgdata.resolve().parent
+                    volume_args = ["-v", f"{db_parent}:/dbparent"]
+                    chown_paths = ["/dbparent"]
                     for ts_name, ts_path in tablespace_paths.items():
                         ts_dir = Path(ts_path)
                         if not ts_dir.is_absolute():
                             ts_dir = ROOT / ts_dir
                         if ts_dir.exists():
                             volume_args += ["-v", f"{ts_dir.resolve()}:/tablespace/{ts_name}"]
-                            chmod_paths.append(f"/tablespace/{ts_name}")
+                            chown_paths.append(f"/tablespace/{ts_name}")
+                    uid_gid = f"{os.getuid()}:{os.getgid()}"
                     subprocess.run(
                         ["docker", "run", "--rm"] + volume_args +
-                        ["postgres:18", "chmod", "-R", "a+rwX"] + chmod_paths,
+                        ["postgres:18", "chown", "-R", uid_gid] + chown_paths,
                         cwd=ROOT,
                     )
                     print(f"  Removing {pgdata}...")
@@ -428,12 +394,14 @@ def cmd_db_unsetup(args):
                 if confirm2 in ("y", "yes"):
                     print()
                     print("  Stopping MongoDB...")
-                    docker_compose("--profile", "mongo", "down")
+                    docker_compose("--profile", "mongo", "down", "--timeout", "30")
                     print("  Fixing directory permissions...")
+                    mongo_parent = mongo_data.resolve().parent
+                    uid_gid = f"{os.getuid()}:{os.getgid()}"
                     subprocess.run(
                         ["docker", "run", "--rm",
-                         "-v", f"{mongo_data.resolve()}:/mongodata",
-                         "mongo:8", "chmod", "-R", "a+rwX", "/mongodata"],
+                         "-v", f"{mongo_parent}:/dbparent",
+                         "mongo:8", "chown", "-R", uid_gid, "/dbparent"],
                         cwd=ROOT,
                     )
                     print(f"  Removing {mongo_data}...")
@@ -752,48 +720,6 @@ def cmd_run(args):
 
 
 # ============================================================================
-# sdb setup (legacy)
-# ============================================================================
-
-def cmd_legacy_setup(args):
-    """Legacy: Run full interactive configuration (core + classifiers + platform)."""
-    from social_data_bridge.setup.core import main as core_main
-    from social_data_bridge.setup.utils import ask_bool
-
-    print("  Step 1: Core configuration\n")
-    core_main()
-
-    state = _load_legacy_state()
-    if not state:
-        print("\n  Error: Core setup did not create state file.\n")
-        return 1
-
-    platform = state.get("platform")
-    profiles = state.get("profiles", [])
-    has_classifiers = "ml_cpu" in profiles or "ml" in profiles
-
-    if has_classifiers:
-        print("\n  Step 2: Classifier configuration (optional)\n")
-        try:
-            if ask_bool("Customize classifier settings?", False):
-                from social_data_bridge.setup.classifiers import main as classifiers_main
-                classifiers_main()
-            else:
-                print("  Skipped. Using default classifier configuration.\n")
-        except KeyboardInterrupt:
-            print("\n")
-            return 1
-
-    if platform == "reddit":
-        step_n = 3 if has_classifiers else 2
-        print(f"\n  Step {step_n}: Reddit platform configuration\n")
-        from social_data_bridge.setup.reddit import main as reddit_main
-        reddit_main()
-
-    return 0
-
-
-# ============================================================================
 # Argument parser
 # ============================================================================
 
@@ -861,10 +787,6 @@ def build_parser():
                             help="Source name (auto-selects if only one configured)")
     run_parser.add_argument("--build", action="store_true", help="Rebuild Docker image")
     run_parser.set_defaults(func=cmd_run)
-
-    # ---- sdb setup (legacy) ----
-    setup_parser = subparsers.add_parser("setup", help="Legacy: full interactive setup")
-    setup_parser.set_defaults(func=cmd_legacy_setup)
 
     return parser
 

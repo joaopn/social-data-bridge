@@ -99,30 +99,16 @@ def detect_dump_files(dumps_dir: str, data_types: List[str], file_patterns: Dict
         elif 'zst' in dt_patterns:
             patterns[data_type] = re.compile(dt_patterns['zst'])
 
-    search_dirs = [dumps_path]
-    for subfolder in data_types:
-        subfolder_path = dumps_path / subfolder
-        if subfolder_path.is_dir():
-            search_dirs.append(subfolder_path)
-
-    for search_dir in search_dirs:
-        if not search_dir.exists():
+    for data_type in data_types:
+        type_dir = dumps_path / data_type
+        if not type_dir.is_dir() or data_type not in patterns:
             continue
-        for filepath in search_dir.iterdir():
-            if not filepath.is_file():
+        for filepath in type_dir.iterdir():
+            if not filepath.is_file() or not is_compressed(filepath.name):
                 continue
-            if not is_compressed(filepath.name):
-                continue
-            filename = filepath.name
-
-            for data_type in data_types:
-                if data_type not in patterns:
-                    continue
-
-                match = patterns[data_type].match(filename)
-                if match:
-                    files.append((str(filepath), data_type, filename))
-                    break
+            match = patterns[data_type].match(filepath.name)
+            if match:
+                files.append((str(filepath), data_type, filepath.name))
 
     # Sort by data type index then filename
     type_order = {dt: i for i, dt in enumerate(data_types)}

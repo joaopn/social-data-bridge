@@ -239,7 +239,7 @@ def generate_platform_yaml(settings):
 
 def generate_reddit_platform_yaml(settings):
     """Generate config/sources/reddit/platform.yaml by copying base config + adding paths."""
-    base_path = CONFIG_DIR / "platforms" / "reddit" / "platform.yaml"
+    base_path = CONFIG_DIR / "templates" / "reddit.yaml"
     try:
         base_config = yaml.safe_load(base_path.read_text())
     except (OSError, ValueError) as e:

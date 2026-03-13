@@ -19,7 +19,6 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 CONFIG_DIR = ROOT / "config"
-STATE_FILE = CONFIG_DIR / "setup_state.yaml"
 
 
 # ============================================================================
@@ -212,63 +211,31 @@ def section_header(title):
     print(f"{'=' * 60}\n")
 
 
-# ============================================================================
-# State management (legacy — kept for backward compatibility)
-# ============================================================================
-
-def load_setup_state():
-    """Load setup state from config/setup_state.yaml. Returns dict or None."""
-    if not STATE_FILE.exists():
-        return None
-    try:
-        return yaml.safe_load(STATE_FILE.read_text())
-    except (OSError, yaml.YAMLError) as e:
-        print(f"  Warning: Could not read {STATE_FILE}: {e}")
-        return None
-
-
-def save_setup_state(state):
-    """Write setup state to config/setup_state.yaml."""
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(yaml.dump(state, default_flow_style=False, sort_keys=False))
-
-
-def require_setup_state(source_name=None):
-    """Load setup state, exit with message if missing.
-
-    Tries new source-based config first, then falls back to legacy state file.
+def require_source_state(source_name):
+    """Load source state from config/sources/<name>/. Exits if not found.
 
     Args:
-        source_name: Optional source name for source-based lookup.
+        source_name: Source name (required).
+
+    Returns:
+        Dict with platform, data_types, profiles, source keys.
     """
-    # Try new source-based approach
-    if source_name:
-        source_config = load_source_config(source_name)
-        if source_config:
-            profiles = get_source_profiles(source_name)
-            platform = source_config.get("platform")
-            if not platform:
-                # Infer platform from source name
-                platform = "reddit" if source_name == "reddit" else f"custom/{source_name}"
-            return {
-                "platform": platform,
-                "data_types": source_config.get("data_types", []),
-                "profiles": profiles,
-                "source": source_name,
-            }
-
-    # Try auto-selecting if only one source
-    sources = list_sources()
-    if sources and not source_name:
-        if len(sources) == 1:
-            return require_setup_state(sources[0])
-
-    # Fall back to legacy
-    state = load_setup_state()
-    if state is None:
-        print("\n  No setup state found. Run 'python sdb.py db setup' first.\n")
+    source_config = load_source_config(source_name)
+    if source_config is None:
+        print(f"\n  Source '{source_name}' not found. Run 'python sdb.py source add {source_name}' first.\n")
         sys.exit(1)
-    return state
+
+    profiles = get_source_profiles(source_name)
+    platform = source_config.get("platform")
+    if not platform:
+        platform = "reddit" if source_name == "reddit" else f"custom/{source_name}"
+
+    return {
+        "platform": platform,
+        "data_types": source_config.get("data_types", []),
+        "profiles": profiles,
+        "source": source_name,
+    }
 
 
 # ============================================================================
