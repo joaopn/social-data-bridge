@@ -3,7 +3,7 @@
 This document is the master configuration reference for Social Data Bridge. It covers every environment variable, configuration file, and tunable setting across all profiles.
 
 > [!TIP]
-> Run `python sdb.py setup` to interactively generate all configuration files. The script auto-detects your hardware, walks you through every setting with sensible defaults, and generates `.env`, `user.yaml` for each profile, and `postgresql.local.conf`. The reference below documents what each setting does.
+> Run `python sdb.py db setup` to configure databases, then `python sdb.py source add <name>` to add sources. The scripts auto-detect your hardware, walk you through every setting with sensible defaults, and generate `.env`, `config/db/*.yaml`, per-source config in `config/sources/<name>/`, and `postgresql.local.conf`. The reference below documents what each setting does.
 
 For profile-specific usage and workflows, see:
 - [Parse Profile](profiles/parse.md)
@@ -19,15 +19,15 @@ All environment variables are set in the `.env` file at the project root. Docker
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PLATFORM` | Platform to use for parsing (`reddit` or `custom/<name>`) | `reddit` |
-| `DUMPS_PATH` | Directory containing `.zst` dump files | `./data/dumps` |
+| `SOURCE` | Source name — selects config from `config/sources/<name>/` | (auto or set by `sdb.py run --source`) |
+| `DUMPS_PATH` | Directory containing compressed dump files | `./data/dumps` |
 | `EXTRACTED_PATH` | Storage for decompressed JSON files | `./data/extracted` |
 | `CSV_PATH` | Storage for parsed CSV files | `./data/csv` |
 | `OUTPUT_PATH` | Storage for classifier output files | `./data/output` |
-| `PGDATA_PATH` | PostgreSQL data directory | `./data/database` |
+| `PGDATA_PATH` | PostgreSQL data directory | `./data/database/postgres` |
 | `DB_NAME` | PostgreSQL database name | `datasets` |
-| `DB_SCHEMA` | PostgreSQL schema name | Set per-platform |
 | `POSTGRES_PORT` | PostgreSQL port exposed to host | `5432` |
-| `MONGO_DATA_PATH` | MongoDB data directory | `./data/mongo` |
+| `MONGO_DATA_PATH` | MongoDB data directory | `./data/database/mongo` |
 | `MONGO_PORT` | MongoDB port exposed to host | `27017` |
 | `MONGO_CACHE_SIZE_GB` | MongoDB WiredTiger cache size in GB | `2` |
 | `HF_HOME` | HuggingFace model cache directory | (system default) |
@@ -36,7 +36,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `PROFILE` | Internal: set automatically by docker-compose | (auto) |
 
 > [!NOTE]
-> - `DB_SCHEMA` is normally set in the platform config (`config/platforms/<platform>/platform.yaml`). The environment variable overrides it.
+> - `SOURCE` controls which source config directory is loaded. When running via `sdb.py run`, it is set automatically (auto-selects if only one source configured, or via `--source`).
 > - `CLASSIFIER` is used with the `ml` profile to run only one GPU classifier instead of all enabled classifiers.
 > - `PROFILE` is set internally by docker-compose service definitions (`ml_cpu` or `ml`). Do not set this manually.
 > - `HF_TOKEN` is optional but recommended to avoid rate limits and to access private models. Obtain one at https://huggingface.co/settings/tokens.
@@ -47,82 +47,80 @@ All environment variables are set in the `.env` file at the project root. Docker
 
 ```
 config/
-├── platforms/                     # Platform-specific configurations
-│   ├── reddit/
-│   │   ├── platform.yaml          # All platform config: schema, patterns, fields, types, indexes
-│   │   └── user.yaml              # User overrides (deep-merged over platform.yaml)
-│   └── custom/
-│       ├── example.yaml           # Example custom platform config
-│       └── <name>.yaml            # Self-contained custom platform configs
+├── db/                            # Global database config (written by sdb db setup)
+│   ├── postgres.yaml             # Port, name, tablespaces
+│   └── mongo.yaml                # Port, cache size
+├── sources/                       # Per-source config (written by sdb source add)
+│   └── <name>/                   # One directory per source
+│       ├── platform.yaml         # Platform config (fields, types, indexes, schema, file patterns)
+│       ├── parse.yaml            # Parse profile overrides
+│       ├── postgres.yaml         # Postgres ingestion overrides (optional)
+│       ├── ml_cpu.yaml           # ML CPU overrides (optional)
+│       ├── ml.yaml               # ML GPU overrides (optional)
+│       ├── postgres_ml.yaml      # Postgres ML overrides (optional)
+│       └── mongo.yaml            # Mongo ingestion overrides (optional)
+├── templates/                     # Platform templates (copied on source add)
+│   └── reddit.yaml               # Base Reddit platform config
 ├── parse/
-│   ├── pipeline.yaml              # Parse profile settings
-│   └── user.yaml                  # User overrides
+│   └── pipeline.yaml             # Parse profile base settings
 ├── ml_cpu/
-│   ├── pipeline.yaml              # CPU classifier pipeline settings
-│   ├── cpu_classifiers.yaml       # Lingua configuration
-│   └── user.yaml                  # User overrides
+│   ├── pipeline.yaml             # CPU classifier pipeline settings
+│   └── cpu_classifiers.yaml      # Lingua configuration
 ├── ml/
-│   ├── pipeline.yaml              # GPU classifier pipeline settings
-│   ├── gpu_classifiers.yaml       # Transformer model configurations
-│   └── user.yaml                  # User overrides
+│   ├── pipeline.yaml             # GPU classifier pipeline settings
+│   └── gpu_classifiers.yaml      # Transformer model configurations
 ├── postgres/
-│   ├── pipeline.yaml              # Database ingestion settings
-│   ├── postgresql.conf            # PostgreSQL server tuning
-│   ├── pg_hba.conf                # PostgreSQL authentication
-│   └── user.yaml                  # User overrides
+│   ├── pipeline.yaml             # Database ingestion settings
+│   ├── postgresql.conf           # PostgreSQL server tuning
+│   ├── pg_hba.conf               # PostgreSQL authentication
+│   └── postgresql.local.conf     # Generated PGTune config (written by sdb db setup)
 ├── mongo/
-│   ├── pipeline.yaml              # MongoDB ingestion settings
-│   ├── mongod.conf                # MongoDB server configuration
-│   └── user.yaml                  # User overrides
+│   ├── pipeline.yaml             # MongoDB ingestion settings
+│   └── mongod.conf               # MongoDB server configuration
 └── postgres_ml/
-    ├── pipeline.yaml              # ML classifier ingestion settings
-    ├── services.yaml              # Classifier table definitions
-    └── user.yaml                  # User overrides
+    ├── pipeline.yaml             # ML classifier ingestion settings
+    └── services.yaml             # Classifier table definitions
 ```
-
-Every profile directory also ships a `user.yaml.example` file that can be copied to `user.yaml` as a starting point.
 
 ---
 
-## 3. User Configuration Overrides (user.yaml)
+## 3. Source Configuration Overrides
 
-Each profile supports a `user.yaml` file that overrides base settings without modifying tracked (version-controlled) files. The easiest way to generate these is with `python sdb.py setup`, but they can also be created manually:
+Each source has per-profile override files in `config/sources/<name>/` that are deep-merged over the base profile configs. These are generated by `python sdb.py source add <name>` but can also be created manually.
 
 ### How it works
 
-1. Copy `user.yaml.example` to `user.yaml` in the relevant config directory.
-2. Uncomment and modify the settings you want to change.
+1. Base config is loaded from `config/{profile}/pipeline.yaml` (and other profile-level files like `cpu_classifiers.yaml`).
+2. Source overrides from `config/sources/<name>/<profile>.yaml` are deep-merged on top.
 3. Overrides are scoped by config filename — each top-level key corresponds to a config file (without the `.yaml` extension).
 4. **List values fully replace the base config** (they are not merged).
 
 ### Example
 
 ```yaml
-# config/ml/user.yaml
-pipeline:              # Overrides settings from pipeline.yaml
+# config/sources/reddit/parse.yaml
+pipeline:
   processing:
-    parse_workers: 16
-
-gpu_classifiers:       # Overrides settings from gpu_classifiers.yaml
-  batch_size: 1000000
+    data_types:
+      - submissions
+      - comments
+    parallel_mode: true
+    parse_workers: 8
 ```
 
-In this example, `pipeline:` overrides keys in `config/ml/pipeline.yaml`, and `gpu_classifiers:` overrides keys in `config/ml/gpu_classifiers.yaml`.
+In this example, the `pipeline:` key overrides settings from `config/parse/pipeline.yaml` for the `reddit` source.
 
-> [!NOTE]
-> Platform `user.yaml` files (`config/platforms/*/user.yaml`) work differently — they are deep-merged directly over `platform.yaml` without scoping by filename.
+### Per-source override files
 
-### Available user.yaml files
-
-| Config directory | Overrides |
-|-----------------|-----------|
-| `config/platforms/reddit/user.yaml` | `platform.yaml` (flat merge) |
-| `config/parse/user.yaml` | `pipeline.yaml` |
-| `config/ml_cpu/user.yaml` | `pipeline.yaml`, `cpu_classifiers.yaml` |
-| `config/ml/user.yaml` | `pipeline.yaml`, `gpu_classifiers.yaml` |
-| `config/postgres/user.yaml` | `pipeline.yaml` |
-| `config/postgres_ml/user.yaml` | `pipeline.yaml`, `services.yaml` |
-| `config/mongo/user.yaml` | `pipeline.yaml` |
+| Source file | Overrides |
+|------------|-----------|
+| `config/sources/<name>/platform.yaml` | Platform config (fields, types, indexes, schema, file patterns) |
+| `config/sources/<name>/parse.yaml` | `config/parse/pipeline.yaml` |
+| `config/sources/<name>/ml_cpu.yaml` | `config/ml_cpu/pipeline.yaml`, `cpu_classifiers.yaml` |
+| `config/sources/<name>/ml.yaml` | `config/ml/pipeline.yaml`, `gpu_classifiers.yaml` |
+| `config/sources/<name>/postgres.yaml` | `config/postgres/pipeline.yaml` |
+| `config/sources/<name>/postgres_ml.yaml` | `config/postgres_ml/pipeline.yaml`, `services.yaml` |
+| `config/sources/<name>/mongo.yaml` | `config/mongo/pipeline.yaml` |
 
 ---
 
@@ -134,7 +132,7 @@ In this example, `pipeline:` overrides keys in `config/ml/pipeline.yaml`, and `g
 
 ```yaml
 processing:
-  data_types: []            # Data types to process (set via platform config or user.yaml)
+  data_types: []            # Data types to process (set via source config)
   parallel_mode: true       # Parse multiple files in parallel
   parse_workers: 8          # Number of parallel workers
   cleanup_temp: false       # Delete intermediate files after processing
@@ -143,7 +141,7 @@ processing:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| `data_types` | Data types to process. Typically set via platform config. | `[]` |
+| `data_types` | Data types to process. Typically set via source config. | `[]` |
 | `parallel_mode` | Parse multiple files in parallel. | `true` |
 | `parse_workers` | Number of parallel CSV parsing workers. | `8` |
 | `cleanup_temp` | Delete intermediate files (extracted JSON) after processing. | `false` |
@@ -209,7 +207,7 @@ cpu_classifiers:            # CPU classifiers to run
 - **Tier 2 (High volume):** Dutch, Swedish, Polish, Malay, Arabic, Vietnamese, Thai, Chinese, Japanese, Korean, Romanian, Greek, Czech, Danish, Finnish, Bokmal, Hebrew
 - **Tier 3 (Moderate/Regional):** Ukrainian, Hungarian, Slovak, Croatian, Serbian, Bulgarian, Slovene, Lithuanian, Latvian, Estonian, Bosnian, Indonesian, Persian
 - **Tier 4 (Indian Regional):** Bengali, Tamil, Telugu, Marathi, Gujarati, Punjabi, Urdu
-- **Tier 5 (Low volume):** Commented out by default — uncomment in `user.yaml` to enable (Afrikaans, Albanian, Armenian, Azerbaijani, Basque, Belarusian, Catalan, Esperanto, and others)
+- **Tier 5 (Low volume):** Commented out by default — uncomment in `cpu_classifiers.yaml` to enable (Afrikaans, Albanian, Armenian, Azerbaijani, Basque, Belarusian, Catalan, Esperanto, and others)
 
 See also: [Classification Profile guide](profiles/classification.md)
 
@@ -305,11 +303,11 @@ database:
   host: postgres             # Docker service name
   port: 5432                 # Override with POSTGRES_PORT env var
   name: datasets             # Override with DB_NAME env var
-  schema: null               # Set via platform config or user.yaml
+  schema: null               # Set via source platform.yaml
   user: postgres
 
 processing:
-  data_types: []             # Set via platform config
+  data_types: []             # Set via source config
   parallel_mode: false       # Extract all -> parse -> ingest sequentially
   parallel_ingestion: true   # Ingest data types concurrently
   parse_workers: 12          # CSV parsing workers
@@ -320,7 +318,7 @@ processing:
   watch_interval: 0          # Run once (0) or poll every N minutes
   prefer_lingua: true        # Ingest lingua CSVs instead of original
 
-indexes: {}                  # Per-data-type index fields (set via platform config)
+indexes: {}                  # Per-data-type index fields (set via source platform.yaml)
 ```
 
 <details>
@@ -331,9 +329,9 @@ indexes: {}                  # Per-data-type index fields (set via platform conf
 | **database.host** | PostgreSQL hostname (Docker service name). | `postgres` |
 | **database.port** | PostgreSQL port. Overridden by `POSTGRES_PORT` env var. | `5432` |
 | **database.name** | Database name. Overridden by `DB_NAME` env var. | `datasets` |
-| **database.schema** | Schema name. Set via platform config or `DB_SCHEMA` env var. | `null` |
+| **database.schema** | Schema name. Set via source `platform.yaml`. | `null` |
 | **database.user** | PostgreSQL user. | `postgres` |
-| **processing.data_types** | Data types to ingest. Set via platform config or `user.yaml`. | `[]` |
+| **processing.data_types** | Data types to ingest. Set via source config. | `[]` |
 | **processing.parallel_mode** | If `true`: extract all, parse in parallel, then ingest all. | `false` |
 | **processing.parallel_ingestion** | Ingest multiple data types concurrently (requires `parallel_mode: true`). | `true` |
 | **processing.parse_workers** | Number of parallel CSV parsing workers. | `12` |
@@ -372,7 +370,7 @@ processing:
 
 | Setting | Description | Default |
 |---------|-------------|---------|
-| **processing.data_types** | Data types to ingest. Set via platform config or `user.yaml`. | `[]` |
+| **processing.data_types** | Data types to ingest. Set via source config. | `[]` |
 | **processing.check_duplicates** | Handle duplicate IDs during ingestion. | `true` |
 | **processing.parallel_ingestion** | Ingest data types concurrently. | `true` |
 | **processing.type_inference_rows** | Number of rows sampled to infer column types from CSV data. | `1000` |
@@ -428,7 +426,7 @@ The PostgreSQL container loads its configuration from `config/postgres/`:
 | `pg_hba.local.conf` | **Local override** — if present, replaces `pg_hba.conf` |
 
 > [!TIP]
-> Run `python sdb.py setup`, which handles PGTune integration and ZFS optimization as part of the interactive setup.
+> Run `python sdb.py db setup`, which handles PGTune integration and ZFS optimization as part of the interactive setup.
 
 **Manual approach:**
 
@@ -452,7 +450,7 @@ database:
   port: 27017              # Override with MONGO_PORT env var
 
 processing:
-  data_types: []           # Set via platform config or user.yaml
+  data_types: []           # Set via source config
   num_insertion_workers: 4  # mongoimport --numInsertionWorkers
   create_indexes: true      # Create indexes after ingestion
   cleanup_temp: false       # Delete extracted JSON after ingestion
@@ -465,14 +463,14 @@ mongo_indexes: {}           # Per-data-type index fields (set via platform confi
 |---------|-------------|---------|
 | **database.host** | MongoDB hostname (Docker service name). | `mongo` |
 | **database.port** | MongoDB port. Overridden by `MONGO_PORT` env var. | `27017` |
-| **processing.data_types** | Data types to process. Set via platform config or `user.yaml`. | `[]` |
+| **processing.data_types** | Data types to process. Set via source config. | `[]` |
 | **processing.num_insertion_workers** | Workers for `mongoimport --numInsertionWorkers`. | `4` |
 | **processing.create_indexes** | Create indexes after ingestion completes. | `true` |
 | **processing.cleanup_temp** | Delete extracted JSON files after ingestion. | `false` |
 | **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
-| **mongo_indexes** | Index fields per data type (e.g., `{submissions: [id, author]}`). Set via platform config. | `{}` |
+| **mongo_indexes** | Index fields per data type (e.g., `{submissions: [id, author]}`). Set via source `platform.yaml`. | `{}` |
 
-Platform-specific settings (`mongo_collection_strategy`, `mongo_db_name_template`, `mongo_indexes`) are configured in `platform.yaml`, not in the pipeline config. See [Platform Configuration](#5-platform-configuration).
+Platform-specific settings (`mongo_collection_strategy`, `mongo_db_name`/`mongo_db_name_template`, `mongo_collections`, `mongo_indexes`) are configured in the source's `platform.yaml`, not in the pipeline config. See [Platform Configuration](#5-platform-configuration).
 
 #### Server: `config/mongo/mongod.conf`
 
@@ -489,23 +487,26 @@ Cache size is controlled via `MONGO_CACHE_SIZE_GB` env var (default: 2 GB), not 
 
 ### Overview
 
-Each platform has a single `platform.yaml` in `config/platforms/<platform>/` that defines everything:
+Each source has a `platform.yaml` in `config/sources/<name>/` that defines the platform-specific settings. For built-in platforms (like Reddit), this is copied from a template in `config/templates/` during `sdb source add`. For custom platforms, it is generated interactively.
 
 | Key | Description |
 |-----|-------------|
-| `db_schema` | Database schema name for this platform. |
-| `data_types` | List of data types this platform supports. |
-| `file_patterns` | Regex patterns for file detection per data type (keys: `zst`, `json`, `csv`, `prefix`). |
+| `db_schema` | Database schema name for this source. |
+| `data_types` | List of data types this source supports. |
+| `file_patterns` | File detection patterns per data type (keys: `dump`, `json`, `csv`, `prefix`, and optionally `dump_glob`, `compression`). |
 | `indexes` | Default index fields per data type (used by the postgres profile). |
 | `mongo_collection_strategy` | `per_file` or `per_data_type` (used by mongo_ingest). |
-| `mongo_db_name_template` | Database name template with `{platform}` and `{data_type}` placeholders. |
+| `mongo_db_name` | Explicit MongoDB database name (custom sources). |
+| `mongo_db_name_template` | Database name template with `{platform}` and `{data_type}` placeholders (built-in platforms). |
+| `mongo_collections` | Per-data-type MongoDB collection names (custom sources). |
 | `mongo_indexes` | Index fields per data type (used by mongo_ingest). |
 | `field_types` | Type definitions for each field (integer, text, boolean, etc.). |
 | `fields` | Fields to extract per data type. |
+| `paths` | Optional per-source data paths (overrides global `DUMPS_PATH`, etc.). |
 
-Built-in platforms (like Reddit) support an optional `user.yaml` in the same directory, deep-merged over `platform.yaml` (lists replace, dicts merge). Custom platforms are single self-contained files with no user.yaml support.
+### Reddit Platform: `config/sources/reddit/platform.yaml`
 
-### Reddit Platform: `config/platforms/reddit/platform.yaml`
+For Reddit, the template `config/templates/reddit.yaml` is copied into `config/sources/reddit/platform.yaml` during `sdb source add reddit`, then customized interactively.
 
 <details>
 <summary><strong>Full config</strong></summary>
@@ -519,11 +520,13 @@ data_types:
 
 file_patterns:
   submissions:
-    zst: '^RS_(\d{4}-\d{2})\.zst$'
+    dump: '^RS_(\d{4}-\d{2})\..+$'       # Any compressed dump file
+    zst: '^RS_(\d{4}-\d{2})\.zst$'       # Legacy: .zst only
     json: '^RS_(\d{4}-\d{2})$'
     csv: '^RS_(\d{4}-\d{2})\.csv$'
     prefix: 'RS_'
   comments:
+    dump: '^RC_(\d{4}-\d{2})\..+$'
     zst: '^RC_(\d{4}-\d{2})\.zst$'
     json: '^RC_(\d{4}-\d{2})$'
     csv: '^RC_(\d{4}-\d{2})\.csv$'
@@ -553,9 +556,9 @@ fields:
 
 </details>
 
-### Custom Platforms: `config/platforms/custom/<name>.yaml`
+### Custom Platforms: `config/sources/<name>/platform.yaml`
 
-Custom platforms are self-contained single files — no base config, no user.yaml merge.
+Custom platform configs are generated interactively during `sdb source add <name>`. Users enter glob patterns for file matching (e.g., `tweets_*.json.gz`) which are converted to regex patterns with auto-detected compression.
 
 <details>
 <summary><strong>Example config</strong></summary>
@@ -565,17 +568,28 @@ db_schema: my_data
 
 data_types:
   - posts
-  - users
+
+paths:
+  dumps: ./data/dumps/my_data
+  extracted: ./data/extracted/my_data
+  csv: ./data/csv/my_data
+  output: ./data/output/my_data
 
 file_patterns:
   posts:
-    zst: '^posts_(\d{4}-\d{2})\.zst$'
-    json: '^posts_(\d{4}-\d{2})$'
-    csv: '^posts_(\d{4}-\d{2})\.csv$'
+    dump: '^posts_.*\.json\.gz$'
+    dump_glob: '*.json.gz'
+    json: '^posts_.*$'
+    csv: '^posts_.*\.csv$'
     prefix: 'posts_'
+    compression: gz
 
-indexes:
-  posts: [dataset, author]
+mongo_collection_strategy: per_data_type
+mongo_db_name: my_data
+mongo_collections:
+  posts: posts
+
+indexes: {}
 
 field_types:
   id: text
@@ -593,7 +607,6 @@ fields:
 
 </details>
 
-1. Create `config/platforms/custom/<name>.yaml` with all required sections.
-2. Run with `PLATFORM=custom/<name>`.
+Run `python sdb.py source add <name>` to generate the config interactively.
 
 See [Custom Platforms](platforms/custom.md) for a complete setup guide.

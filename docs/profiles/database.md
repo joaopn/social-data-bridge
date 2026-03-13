@@ -7,15 +7,15 @@ Social Data Bridge supports two database destinations:
 ## Running
 
 ```bash
-python sdb.py start                  # Start configured database(s)
-python sdb.py run postgres_ingest    # Ingest parsed CSVs into PostgreSQL
-python sdb.py run postgres_ml        # Ingest ML classifier outputs into PostgreSQL
-python sdb.py run mongo_ingest       # Ingest raw JSON into MongoDB
-python sdb.py stop                   # Stop configured database(s)
+python sdb.py db start                  # Start configured database(s)
+python sdb.py run postgres_ingest       # Ingest parsed CSVs into PostgreSQL
+python sdb.py run postgres_ml           # Ingest ML classifier outputs into PostgreSQL
+python sdb.py run mongo_ingest          # Ingest raw JSON into MongoDB
+python sdb.py db stop                   # Stop configured database(s)
 ```
 
 > [!IMPORTANT]
-> Database servers must be running before ingestion profiles can connect. `sdb.py start` starts all databases selected during setup. Use `sdb.py start postgres` or `sdb.py start mongo` to start a specific one.
+> Database servers must be running before ingestion profiles can connect. `sdb.py db start` starts all databases configured during `sdb.py db setup`. Use `sdb.py db start postgres` or `sdb.py db start mongo` to start a specific one.
 
 ---
 
@@ -43,7 +43,7 @@ Use [PGTune](https://pgtune.leopard.in.ua/) to generate optimal settings:
 Append the output to `config/postgres/postgresql.conf`.
 
 > [!TIP]
-> The default configuration is tuned for 60GB RAM, 24 CPUs, SSD storage. Run `python sdb.py setup` to generate a `postgresql.local.conf` with PGTune integration and optional ZFS optimization.
+> The default configuration is tuned for 60GB RAM, 24 CPUs, SSD storage. Run `python sdb.py db setup` to generate a `postgresql.local.conf` with PGTune integration and optional ZFS optimization.
 
 ---
 
@@ -55,7 +55,7 @@ Ingests parsed CSV files into PostgreSQL main tables (e.g., `submissions`, `comm
 
 The postgres_ingest profile is a full pipeline that can also extract and parse if needed:
 
-1. **Input Detection**: Detects .zst, JSON, and CSV files (same as parse profile)
+1. **Input Detection**: Detects compressed dumps, JSON, and CSV files (same as parse profile)
 2. **Extraction/Parsing**: Extracts and parses files that haven't been processed yet
 3. **Ingestion**: Loads CSV data into PostgreSQL tables
 4. **Indexing**: Creates indexes on configured fields
@@ -63,7 +63,7 @@ The postgres_ingest profile is a full pipeline that can also extract and parse i
 
 ### prefer_lingua Behavior
 
-When `prefer_lingua: true` (default), postgres_ingest looks for Lingua-enriched CSVs in `OUTPUT_PATH/lingua/` instead of the original CSVs in `CSV_PATH/`. This means:
+When `prefer_lingua: true` (default), postgres_ingest looks for Lingua-enriched CSVs in `OUTPUT_PATH/<source>/lingua/` instead of the original CSVs in `CSV_PATH/<source>/`. This means:
 - The main table includes language columns (`lang`, `lang_prob`, `lang2`, `lang2_prob`) directly
 - No separate lingua table is needed
 - Falls back to original CSVs if Lingua output is not found
@@ -94,13 +94,14 @@ When a table does not exist yet, the pipeline automatically uses an optimized bu
 ### Indexing
 
 After ingestion, indexes are created on configured fields:
-- Index fields come from the platform's `platform.yaml` (e.g., Reddit: `[dataset, author, subreddit, domain]` for submissions)
+- Index fields come from the source's `platform.yaml` (e.g., Reddit: `[dataset, author, subreddit, domain]` for submissions)
 - `parallel_index_workers` controls `max_parallel_maintenance_workers` per index build
 - Indexes are B-tree by default
 
 ### Configuration
 
-**Config file:** `config/postgres/pipeline.yaml`
+**Base config:** `config/postgres/pipeline.yaml`
+**Source overrides:** `config/sources/<name>/postgres.yaml`
 
 <details>
 <summary><strong>Full options table</strong></summary>
@@ -110,9 +111,9 @@ After ingestion, indexes are created on configured fields:
 | `database.host` | PostgreSQL hostname | `postgres` |
 | `database.port` | PostgreSQL port (override: `POSTGRES_PORT`) | `5432` |
 | `database.name` | Database name (override: `DB_NAME`) | `datasets` |
-| `database.schema` | Schema name (set via platform config) | `null` |
+| `database.schema` | Schema name (set via source `platform.yaml`) | `null` |
 | `database.user` | Database user | `postgres` |
-| `processing.data_types` | Data types to ingest | `[]` (from platform) |
+| `processing.data_types` | Data types to ingest | `[]` (from source config) |
 | `processing.parallel_mode` | Extract/parse/ingest in parallel phases | `false` |
 | `processing.parallel_ingestion` | Ingest data types concurrently | `true` |
 | `processing.parse_workers` | CSV parsing workers | `12` |
@@ -136,21 +137,21 @@ PostgreSQL tablespaces allow spreading tables across multiple physical disks. Th
 
 ### Setup
 
-Run `python sdb.py setup` and answer "yes" to the tablespace question in the PostgreSQL section. The script will:
+Run `python sdb.py db setup` and answer "yes" to the tablespace question in the PostgreSQL section. The script will:
 
 1. Ask you to define tablespaces (name + host path for each disk)
 2. Ask you to assign each data type to a tablespace
-3. Generate the tablespace config in `config/postgres/user.yaml`
+3. Generate the tablespace config in `config/db/postgres.yaml`
 4. Generate `docker-compose.override.yml` with the required volume mounts
 
 `pgdata` is always available as a tablespace option and refers to the default PostgreSQL data directory (no extra volume mount needed).
 
 ### Configuration
 
-Tablespace settings live in `config/postgres/pipeline.yaml` (or `user.yaml` override):
+Tablespace settings live in `config/postgres/pipeline.yaml` (or source overrides):
 
 ```yaml
-# config/postgres/user.yaml
+# config/sources/reddit/postgres.yaml
 pipeline:
   tablespaces:
     nvme1: /mnt/nvme1/pg-tablespace    # name: host_path
@@ -160,7 +161,7 @@ pipeline:
     comments: nvme2                      # "pgdata" = default PG data directory
 ```
 
-The corresponding `docker-compose.override.yml` is auto-generated by `sdb.py setup`:
+The corresponding `docker-compose.override.yml` is auto-generated by `sdb.py db setup`:
 
 ```yaml
 services:
@@ -187,7 +188,7 @@ Ingests ML classifier outputs into separate PostgreSQL tables.
 ### How It Works
 
 1. **Service Discovery**: Reads `config/postgres_ml/services.yaml` for enabled classifiers
-2. **File Detection**: Finds classifier output CSVs in `OUTPUT_PATH/{source_dir}/{data_type}/`
+2. **File Detection**: Finds classifier output CSVs in `OUTPUT_PATH/<source>/{source_dir}/{data_type}/`
 3. **Type Inference**: Samples `type_inference_rows` rows to auto-detect column types
 4. **Table Creation**: Creates tables named `{data_type}{suffix}` (e.g., `submissions_toxicity_en`)
 5. **Ingestion**: Loads CSV data with duplicate handling
@@ -229,7 +230,7 @@ Each classifier entry has:
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `processing.data_types` | Data types to ingest | `[]` (from platform) |
+| `processing.data_types` | Data types to ingest | `[]` (from source config) |
 | `processing.check_duplicates` | Handle duplicate IDs | `true` |
 | `processing.parallel_ingestion` | Ingest data types concurrently | `true` |
 | `processing.type_inference_rows` | Rows to sample for column type inference | `1000` |
@@ -240,9 +241,9 @@ Each classifier entry has:
 
 ## Database Schema
 
-The schema name is set per-platform in `platform.yaml`:
+The schema name is set per-source in `config/sources/<name>/platform.yaml`:
 - Reddit: `reddit` schema
-- Generic: user-defined in `user.yaml`
+- Custom: user-defined during `sdb source add`
 
 ### Table Naming
 
@@ -334,7 +335,7 @@ Ingests raw extracted JSON/NDJSON files directly into MongoDB using `mongoimport
 
 ### How It Works
 
-1. **Extract**: Detects `.zst` dump files, decompresses via `zstd`
+1. **Extract**: Detects compressed dump files, decompresses using format-appropriate tools (`.zst`, `.gz`, `.xz`, `.tar.gz`)
 2. **Ingest**: For each extracted JSON file:
    - Creates a collection with zstd WiredTiger compression
    - Runs `mongoimport` for bulk insertion (blind insert, no upsert)
@@ -343,7 +344,7 @@ Ingests raw extracted JSON/NDJSON files directly into MongoDB using `mongoimport
 
 ### Collection Strategies
 
-Set per-platform in `platform.yaml` via `mongo_collection_strategy`:
+Set per-source in `platform.yaml` via `mongo_collection_strategy`:
 
 | Strategy | Description | Use Case |
 |----------|-------------|----------|
@@ -352,19 +353,20 @@ Set per-platform in `platform.yaml` via `mongo_collection_strategy`:
 
 ### Database Naming
 
-Controlled by `mongo_db_name_template` in `platform.yaml`:
-- Default: `{platform}_{data_type}` (e.g., `reddit_submissions`, `reddit_comments`)
-- `{platform}` and `{data_type}` are available placeholders
+Two approaches configured in the source's `platform.yaml`:
+- **Built-in platforms** use `mongo_db_name_template` with `{platform}` and `{data_type}` placeholders (e.g., `reddit_submissions`, `reddit_comments`)
+- **Custom sources** use explicit `mongo_db_name` + per-data-type `mongo_collections` mapping (e.g., `mongo_db_name: mydata` with `mongo_collections: {posts: posts, users: users}`)
 
 ### Configuration
 
-**Config file:** `config/mongo/pipeline.yaml`
+**Base config:** `config/mongo/pipeline.yaml`
+**Source overrides:** `config/sources/<name>/mongo.yaml`
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `database.host` | MongoDB hostname | `mongo` |
 | `database.port` | MongoDB port (override: `MONGO_PORT`) | `27017` |
-| `processing.data_types` | Data types to process | `[]` (from platform) |
+| `processing.data_types` | Data types to process | `[]` (from source config) |
 | `processing.num_insertion_workers` | `mongoimport --numInsertionWorkers` | `4` |
 | `processing.create_indexes` | Create indexes after ingestion | `true` |
 | `processing.cleanup_temp` | Delete extracted JSON after ingestion | `false` |
@@ -372,10 +374,10 @@ Controlled by `mongo_db_name_template` in `platform.yaml`:
 
 ### Indexes
 
-Index fields are configured per-platform in `platform.yaml` under `mongo_indexes`:
+Index fields are configured per-source in `platform.yaml` under `mongo_indexes`:
 
 ```yaml
-# config/platforms/reddit/platform.yaml
+# config/sources/reddit/platform.yaml
 mongo_indexes:
   submissions: [id, author, subreddit, domain]
   comments: [id, author, subreddit, link_id]

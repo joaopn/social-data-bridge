@@ -1,15 +1,15 @@
 # Parse Profile
 
-The parse profile decompresses `.zst` compressed data dumps and parses JSON to CSV files. It's the entry point of the pipeline — all other profiles depend on its output.
+The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.tar.gz`) and parses JSON to CSV files. It's the entry point of the pipeline — all other profiles depend on its output.
 
 ## Running
 
 ```bash
-python sdb.py run parse
+python sdb.py run parse [--source <name>]
 ```
 
 > [!NOTE]
-> The platform (Reddit or custom) is configured during `python sdb.py setup`.
+> The platform and source are configured during `python sdb.py source add <name>`. When only one source is configured, `--source` is auto-selected.
 
 ---
 
@@ -18,16 +18,21 @@ python sdb.py run parse
 Three-phase pipeline:
 
 ### Phase 1: Input Detection
-- Scans `DUMPS_PATH` for `.zst` files matching platform file patterns
-- Scans `EXTRACTED_PATH` for already-decompressed JSON files
-- Scans `CSV_PATH` for already-parsed CSV files
-- Supports root directory and per-data-type subdirectories
-- Reddit: detects `RS_YYYY-MM.zst` (submissions) and `RC_YYYY-MM.zst` (comments), including torrent directory structure (`submissions/RS_*.zst`, `comments/RC_*.zst`)
+- Scans `DUMPS_PATH/<source>` for compressed files matching platform file patterns
+- Scans `EXTRACTED_PATH/<source>` for already-decompressed JSON files
+- Scans `CSV_PATH/<source>` for already-parsed CSV files
+- File detection is scoped to per-data-type subdirectories
+- Reddit: detects `RS_YYYY-MM.*` (submissions) and `RC_YYYY-MM.*` (comments), including torrent directory structure (`submissions/RS_*.zst`, `comments/RC_*.zst`)
 
 ### Phase 2: Extraction
-- Decompresses `.zst` files using `zstd --long=31` (supports 2GB window)
+- Decompresses files using format-appropriate tools:
+  - `.zst`: `zstd --long=31` (supports 2GB window)
+  - `.gz` / `.json.gz`: `gzip -d`
+  - `.xz`: `xz -d`
+  - `.tar.gz` / `.tgz`: `tar xzf` (extracts all files)
+- Compression format is auto-detected from file extension, or specified per-data-type in `platform.yaml` via the `compression` key
 - Writes to temp file (`.temp`), renames on success for atomicity
-- Output: decompressed NDJSON files in `EXTRACTED_PATH/{data_type}/`
+- Output: decompressed NDJSON files in `EXTRACTED_PATH/<source>/{data_type}/`
 
 ### Phase 3: Parsing
 - Platform-specific JSON-to-CSV conversion
@@ -40,17 +45,18 @@ Three-phase pipeline:
 
 ## Configuration
 
-**Config file:** `config/parse/pipeline.yaml`
+**Base config:** `config/parse/pipeline.yaml`
+**Source overrides:** `config/sources/<name>/parse.yaml`
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `data_types` | Data types to process (must match keys in platform's `fields` config) | `[]` (set via platform) |
+| `data_types` | Data types to process (must match keys in platform's `fields` config) | `[]` (set via source config) |
 | `parallel_mode` | Process multiple files in parallel | `true` |
 | `parse_workers` | Number of parallel workers | `8` |
 | `cleanup_temp` | Delete intermediate JSON files after parsing | `false` |
 | `watch_interval` | Check for new files every N minutes (0 = run once) | `0` |
 
-See [Configuration Reference](../configuration.md) for full details and the user.yaml override system.
+See [Configuration Reference](../configuration.md) for full details and the source override system.
 
 ---
 
@@ -73,7 +79,7 @@ The parse profile delegates to a platform-specific parser based on the `PLATFORM
 ## Output Structure
 
 ```
-CSV_PATH/
+CSV_PATH/<source>/
 ├── submissions/
 │   ├── RS_2024-01.csv
 │   └── RS_2024-02.csv
@@ -88,8 +94,8 @@ CSV files include headers. Column order: `dataset, id, retrieved_utc, ...fields 
 
 ## Resume Behavior
 
-- Skips `.zst` files that already have a corresponding JSON file in `EXTRACTED_PATH`
-- Skips JSON files that already have a corresponding CSV file in `CSV_PATH`
+- Skips compressed files that already have a corresponding JSON file in `EXTRACTED_PATH/<source>/`
+- Skips JSON files that already have a corresponding CSV file in `CSV_PATH/<source>/`
 - To reprocess: delete the output CSV (or JSON) file
 
 ## Watch Mode

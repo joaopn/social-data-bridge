@@ -8,20 +8,20 @@ The Reddit platform (`PLATFORM=reddit`) is the default and includes specialized 
 
 | Type | File Pattern | Description |
 |------|-------------|-------------|
-| `submissions` | `RS_YYYY-MM.zst` | Reddit posts/submissions |
-| `comments` | `RC_YYYY-MM.zst` | Reddit comments |
+| `submissions` | `RS_YYYY-MM.*` | Reddit posts/submissions |
+| `comments` | `RC_YYYY-MM.*` | Reddit comments |
 
 ## File Detection
 
-File patterns (from `config/platforms/reddit/platform.yaml`):
+File patterns (from `config/sources/reddit/platform.yaml`):
 
 | Type | Pattern | Example |
 |------|---------|---------|
-| Compressed | `RS_(\d{4}-\d{2})\.zst` | `RS_2024-01.zst` |
+| Compressed dump | `RS_(\d{4}-\d{2})\..+` | `RS_2024-01.zst`, `RS_2024-01.gz` |
 | Decompressed | `RS_(\d{4}-\d{2})` | `RS_2024-01` |
 | Parsed CSV | `RS_(\d{4}-\d{2})\.csv` | `RS_2024-01.csv` |
 
-Supports both flat directory and torrent directory structure (`submissions/RS_*.zst`, `comments/RC_*.zst`).
+Supports `.zst`, `.gz`, `.xz`, and `.tar.gz` compressed formats. Supports both flat directory and torrent directory structure (`submissions/RS_*.zst`, `comments/RC_*.zst`).
 
 ---
 
@@ -140,13 +140,13 @@ The `removed_by_category` field (Priority 3) maps to canonical values:
 **Content:**
 `body`
 
-Edit the `fields` section in `config/platforms/reddit/platform.yaml` (or override via `user.yaml`) to customize which fields are extracted.
+Edit the `fields` section in `config/sources/reddit/platform.yaml` to customize which fields are extracted, or use `python sdb.py source configure reddit` to reconfigure interactively.
 
 ---
 
 ## Field Types
 
-Defined in the `field_types` section of `config/platforms/reddit/platform.yaml`:
+Defined in the `field_types` section of `config/sources/reddit/platform.yaml`:
 
 | Type | Fields |
 |------|--------|
@@ -168,4 +168,4 @@ Default indexes (from `platform.yaml`):
 
 **Comments:** `dataset`, `author`, `subreddit`, `link_id`
 
-Override via `user.yaml` in the postgres profile directory.
+Override via the source's `platform.yaml` or `postgres.yaml`, or use `python sdb.py source configure reddit`.

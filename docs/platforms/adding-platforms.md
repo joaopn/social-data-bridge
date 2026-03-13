@@ -2,7 +2,7 @@
 
 Social Data Bridge supports two ways to add new platforms:
 
-1. **Custom platform** (config-only) — Create a single YAML file. No code required.
+1. **Custom platform** (config-only) — Run `sdb source add <name>` and select `custom`. No code required.
 2. **Built-in platform** (with custom parser) — For platforms needing specialized logic (computed fields, format handling, etc.).
 
 ---
@@ -11,33 +11,13 @@ Social Data Bridge supports two ways to add new platforms:
 
 If your data is standard JSON/NDJSON, use the custom platform system. No code changes needed.
 
-Create `config/platforms/custom/<name>.yaml`:
-
-```yaml
-db_schema: my_platform
-data_types:
-  - posts
-  - comments
-file_patterns:
-  posts:
-    zst: '^posts_(\d{4}-\d{2})\.zst$'
-    json: '^posts_(\d{4}-\d{2})$'
-    csv: '^posts_(\d{4}-\d{2})\.csv$'
-    prefix: 'posts_'
-indexes:
-  posts: [author, created_at]
-field_types:
-  created_at: integer
-  author: text
-  content: text
-fields:
-  posts:
-    - created_at
-    - author
-    - content
+```bash
+python sdb.py source add <name>
 ```
 
-Run with `PLATFORM=custom/<name>`. See [Custom Platforms](custom.md) for full details.
+Select `custom` as the platform type. The interactive setup generates `config/sources/<name>/platform.yaml` with file patterns, fields, types, and indexes.
+
+See [Custom Platforms](custom.md) for full details.
 
 ---
 
@@ -45,11 +25,9 @@ Run with `PLATFORM=custom/<name>`. See [Custom Platforms](custom.md) for full de
 
 For platforms needing specialized parsing logic (like Reddit's deletion detection or base-36 ID conversion):
 
-### 1. Create Platform Configuration
+### 1. Create Platform Template
 
-Create `config/platforms/{platform}/platform.yaml` with all sections (`db_schema`, `data_types`, `file_patterns`, `indexes`, `field_types`, `fields`).
-
-Users can override any section via an optional `user.yaml` in the same directory (deep-merged over `platform.yaml`, lists replace).
+Create `config/templates/{platform}.yaml` with all sections (`db_schema`, `data_types`, `file_patterns`, `indexes`, `field_types`, `fields`). This template is copied to `config/sources/<name>/platform.yaml` when a source is added with `sdb source add`.
 
 ### 2. Create Parser Module
 
@@ -95,8 +73,6 @@ def get_platform_parser(platform):
 ### 4. Run
 
 ```bash
-python sdb.py run parse
+python sdb.py source add <name>     # Select your platform during setup
+python sdb.py run parse --source <name>
 ```
-
-> [!NOTE]
-> The platform is configured during `python sdb.py setup`. Select your platform during setup.

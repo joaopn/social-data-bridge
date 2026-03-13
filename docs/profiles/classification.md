@@ -6,10 +6,10 @@ The `ml_cpu` and `ml` profiles run classifiers on parsed CSV files. The `ml_cpu`
 
 ```bash
 # CPU language detection
-python sdb.py run ml_cpu
+python sdb.py run ml_cpu [--source <name>]
 
 # GPU transformer classifiers (requires NVIDIA GPU)
-python sdb.py run ml
+python sdb.py run ml [--source <name>]
 
 # Run a single GPU classifier
 CLASSIFIER=toxic_roberta docker compose --profile ml up
@@ -210,9 +210,9 @@ Both profiles check for existing output files before processing:
 - To reprocess: delete the specific output file or the entire classifier output directory
 
 ```bash
-rm -rf data/output/lingua/          # Reprocess lingua only
-rm -rf data/output/toxic_roberta/   # Reprocess toxic_roberta only
-rm -rf data/output/                 # Reprocess all classifiers
+rm -rf data/output/<source>/lingua/          # Reprocess lingua only
+rm -rf data/output/<source>/toxic_roberta/   # Reprocess toxic_roberta only
+rm -rf data/output/<source>/                 # Reprocess all classifiers
 ```
 
 ### Running a Single Classifier
@@ -224,7 +224,7 @@ CLASSIFIER=toxic_roberta docker compose --profile ml up
 ```
 
 > [!NOTE]
-> This is a per-run override. For standard usage, configure classifiers during `python sdb.py setup` and run with `python sdb.py run ml`.
+> This is a per-run override. For standard usage, configure classifiers during `python sdb.py source add-classifiers <name>` and run with `python sdb.py run ml`.
 
 ### Watch Mode
 

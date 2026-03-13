@@ -7,28 +7,33 @@
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![MongoDB 8](https://img.shields.io/badge/MongoDB-8-47A248.svg?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![ONNX](https://img.shields.io/badge/ONNX-Runtime-005CED.svg?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
-A Docker-based toolkit for large-scale processing, classification, and database ingestion of social media data dumps. Supports PostgreSQL (parsed CSVs) and MongoDB (raw JSON) as database destinations. Designed for the [Reddit data dumps](https://github.com/ArthurHeitmann/arctic_shift), with support for multiple platforms through a configurable architecture.
+A toolkit for large-scale processing, ML classification, and database ingestion of social media data dumps. Supports PostgreSQL (parsed CSVs) and MongoDB (raw data) as database destinations. Designed for the [Reddit data dumps](https://github.com/ArthurHeitmann/arctic_shift), with support for multiple platforms through a configurable architecture.
 
 </div>
 
 ### TL;DR
 
 ```bash
-# 1. Configure (auto-detects hardware, generates all config files)
-python sdb.py setup
+# 1. Configure databases 
+python sdb.py db setup                      # Configure PostgreSQL/MongoDB (one-time)
+python sdb.py db start                      # Start database(s)
 
-# 2. Run the pipeline
-python sdb.py run parse              # Decompress .zst → parse JSON → CSV
-python sdb.py run ml_cpu             # Language detection (Lingua, CPU)
-python sdb.py run ml                 # GPU classifiers (toxicity, emotions)
-python sdb.py start                  # Start database(s)
-python sdb.py run postgres_ingest    # Ingest CSVs into PostgreSQL
-python sdb.py run postgres_ml        # Ingest classifier outputs
-python sdb.py run mongo_ingest       # Ingest raw JSON into MongoDB
+# 2. Add a source and run desired tasks
+python sdb.py source add reddit             # Add a data source (interactive setup)
+python sdb.py run parse                     # Decompress dumps → parse files → CSV
+python sdb.py run ml_cpu                    # OPTIONAL: adds language detection
+python sdb.py run postgres_ingest           # Ingest CSVs into PostgreSQL
+python sdb.py run mongo_ingest              # Ingest raw data into MongoDB
 
-# 3. Check progress
-python sdb.py status
+# 3. Check status
+python sdb.py db status                     # Database status
+python sdb.py source status                 # Ingestion source status
+
+# OPTIONAL: ML classifiers
+python sdb.py run ml                       # GPU classifiers (toxicity, emotions)
+python sdb.py run postgres_ml              # Ingest classifier outputs
 ```
 
 ---
@@ -51,7 +56,7 @@ python sdb.py status
 **Social Data Bridge** provides a complete pipeline for working with large-scale social media data dumps:
 
 - **Multi-platform support** — Reddit (with specialized features) or custom JSON/CSV platforms
-- **Automatic detection and decompression** of `.zst` dump files
+- **Automatic detection and decompression** of `.zst`, `.gz`, `.xz`, and `.tar.gz` dump files
 - **Parsing** JSON to clean CSVs with configurable field extraction
 - **Modular classification** — CPU-based (Lingua) and GPU-based (transformers) with multi-GPU parallelization and language filtering
 - **PostgreSQL ingestion** of parsed CSVs with finetuned settings and duplicate handling
@@ -62,7 +67,7 @@ python sdb.py status
 
 ```mermaid
 flowchart TD
-    ZST[".zst dump files"]
+    ZST["Compressed dump files\n(.zst, .gz, .xz, .tar.gz)"]
     CSV["Parsed CSVs"]
     LINGUA["CSVs with language"]
     ML_OUT["ML Classifier outputs"]
@@ -103,10 +108,10 @@ flowchart TD
 
 #### 1. Get monthly data dumps
 
-Download the Reddit data dumps from [arctic_shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place the torrent directory in `data/dumps/`:
+Download the Reddit data dumps from [arctic_shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place the torrent directory in `data/dumps/reddit/`:
 
 ```
-data/dumps/
+data/dumps/reddit/
 ├── submissions/
 │   ├── RS_2024-01.zst
 │   └── RS_2024-02.zst
@@ -117,31 +122,32 @@ data/dumps/
 
 #### 2. Configure
 
-Run the interactive setup to auto-detect your hardware and generate all configuration files:
+Set up databases and add Reddit as a data source:
 
 ```bash
-python sdb.py setup
+python sdb.py db setup              # Configure databases (PostgreSQL, MongoDB)
+python sdb.py source add reddit     # Add Reddit source (interactive setup)
 ```
 
-The setup walks you through core settings (paths, parse, PostgreSQL), optionally classifier tuning, and Reddit-specific field/index configuration — all with sensible defaults. It generates `.env`, `user.yaml` for each profile, and `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration).
+`db setup` configures database connections, generates `.env`, `config/db/*.yaml`, and `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration). `source add` walks you through platform selection, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/reddit/`.
 
 For manual configuration or to understand what each setting does, see the [Configuration Reference](docs/configuration.md).
 
 #### 3. Run
 
-Run the profiles in order. The setup prints the commands for your selection, but the full pipeline is:
+Run the desired profiles. The setup prints the commands for your selection, but the full pipeline is:
 
 ```bash
 python sdb.py run parse              # Parse Reddit data to CSV
 python sdb.py run ml_cpu             # CPU language detection (Lingua)
 python sdb.py run ml                 # GPU classifiers (optional, requires NVIDIA GPU)
-python sdb.py start                  # Start configured database(s)
+python sdb.py db start               # Start configured database(s)
 python sdb.py run postgres_ingest    # Ingest CSVs into PostgreSQL
 python sdb.py run postgres_ml        # Ingest classifier outputs into PostgreSQL
 python sdb.py run mongo_ingest       # Ingest raw JSON into MongoDB
 ```
 
-Use `python sdb.py status` to check configuration and ingestion progress at any time.
+Use `python sdb.py source status` to check processing and ingestion progress at any time. When multiple sources are configured, use `--source` to target a specific one (e.g., `python sdb.py run parse --source reddit`).
 
 #### 4. Analyze
 
@@ -159,38 +165,48 @@ With an optimized PostgreSQL database running, you can send large-scale analytic
 <details>
 <summary><h2>◾ CLI Reference</h2></summary>
 
-All operations go through `sdb.py`:
+All operations go through `sdb.py` with three command groups:
 
 ```
-python sdb.py <command> [options]
+python sdb.py <db|source|run> [options]
 ```
 
-### Configuration
+### Database Management (`sdb.py db`)
 
 | Command | Description |
 |---------|-------------|
-| `sdb.py setup` | Full interactive configuration: core → classifiers → platform |
-| `sdb.py setup-reddit` | Configure Reddit fields, indexes, and schema |
-| `sdb.py add-classifiers` | Configure Lingua and GPU classifier settings |
-| `sdb.py unsetup` | Remove all generated configuration and optionally delete the database |
+| `sdb.py db setup` | Configure databases (PostgreSQL, MongoDB) — global, one-time |
+| `sdb.py db start [postgres\|mongo]` | Start database services (all configured if unspecified) |
+| `sdb.py db stop [postgres\|mongo]` | Stop database services (all configured if unspecified) |
+| `sdb.py db status` | Show database config and health |
+| `sdb.py db unsetup` | Remove database config; data deletion behind double confirmation |
 
-`setup` is the main entrypoint — it runs core configuration first, then optionally walks you through classifier and platform setup. The individual commands (`setup-reddit`, `add-classifiers`) can be re-run independently to update specific settings.
+`db setup` generates `.env`, `config/db/*.yaml`, and `config/postgres/postgresql.local.conf`. Database deletion in `db unsetup` requires two separate confirmations. Data files are never deleted — their locations are printed for manual cleanup.
 
-`unsetup` removes all generated files (`.env`, `user.yaml` overrides, `setup_state.yaml`, etc.). Database deletion requires two separate confirmations. Data files (CSVs, dumps, classifier outputs) are never deleted — their locations are printed for manual cleanup.
+### Source Management (`sdb.py source`)
 
-### Pipeline
+| Command | Description |
+|---------|-------------|
+| `sdb.py source add <name>` | Add a new data source (interactive setup) |
+| `sdb.py source configure <name>` | Reconfigure existing source (platform-specific) |
+| `sdb.py source add-classifiers <name>` | Add ML classifiers for a source |
+| `sdb.py source remove <name>` | Remove source configuration |
+| `sdb.py source list` | List configured sources |
+| `sdb.py source status [name]` | Show source processing/ingestion status |
+
+`source add` walks you through platform selection, file patterns, fields, indexes, and optional classifier configuration. All per-source config is written to `config/sources/<name>/`.
+
+### Pipeline (`sdb.py run`)
 
 | Command | Description |
 |---------|-------------|
 | `sdb.py run <profile>` | Run a pipeline profile |
+| `sdb.py run <profile> --source <name>` | Run for a specific source (auto-selects if only one configured) |
 | `sdb.py run <profile> --build` | Rebuild the Docker image before running |
-| `sdb.py start [service]` | Start configured databases (postgres, mongo, or all) |
-| `sdb.py stop [service]` | Stop configured databases (postgres, mongo, or all) |
-| `sdb.py status` | Show configuration and ingestion progress |
 
 Valid profiles: `parse`, `ml_cpu`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`.
 
-`status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database.
+`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database.
 
 </details>
 
@@ -198,7 +214,7 @@ Valid profiles: `parse`, `ml_cpu`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 
 | Profile | Description | Input | Output |
 |---------|-------------|-------|--------|
-| `parse` | Decompress `.zst`, parse JSON to CSV | `.zst` dump files | `CSV_PATH/` |
+| `parse` | Decompress dumps, parse JSON to CSV | Compressed dump files (`.zst`, `.gz`, `.xz`, `.tar.gz`) | `CSV_PATH/` |
 | `ml_cpu` | Lingua language detection (CPU) | Parsed CSVs | `OUTPUT_PATH/lingua/` |
 | `ml` | Transformer classifiers (GPU) | Parsed CSVs + Lingua output | `OUTPUT_PATH/{classifier}/` |
 | `postgres` | PostgreSQL database server | — | — |
@@ -222,7 +238,7 @@ For detailed configuration and algorithm documentation, see the per-profile docs
 | `reddit` | Specialized Reddit features: waterfall deletion detection, base-36 ID conversion, format compatibility | Yes |
 | `custom/<name>` | Simple JSON-to-CSV for arbitrary data: dot-notation, array indexing, type enforcement | No |
 
-The default platform is Reddit. To process arbitrary JSON/NDJSON data, select `custom` during `sdb.py setup` and configure your platform in a single YAML file.
+The default platform is Reddit. To process arbitrary JSON/NDJSON data, select `custom` during `sdb.py source add` and configure your platform interactively.
 
 - [Reddit Platform Reference](docs/platforms/reddit.md)
 - [Custom Platform Setup](docs/platforms/custom.md)
@@ -231,7 +247,7 @@ The default platform is Reddit. To process arbitrary JSON/NDJSON data, select `c
 
 - **Add new platforms**: Create config files and an optional custom parser. See [Adding Platforms](docs/platforms/adding-platforms.md).
 - **Add custom classifiers**: Config-only (add a HuggingFace model via YAML) or custom Python. See [Custom Classifiers](docs/guides/custom-classifiers.md).
-- **Full configuration reference**: All environment variables, YAML files, and the user.yaml override system. See [Configuration](docs/configuration.md).
+- **Full configuration reference**: All environment variables, YAML files, and the source override system. See [Configuration](docs/configuration.md).
 
 ## ◾ Storage Requirements
 
@@ -245,7 +261,7 @@ Storage needs depend on pipeline mode and selected fields (estimates for full Re
 
 See [Database Profiles](docs/profiles/database.md#storage-requirements) for details on pipeline modes.
 
-**Multi-disk setups:** If your database doesn't fit on a single drive, use [PostgreSQL tablespaces](docs/profiles/database.md#tablespaces) to spread tables across multiple disks. Run `python sdb.py setup` to configure tablespaces interactively.
+**Multi-disk setups:** If your database doesn't fit on a single drive, use [PostgreSQL tablespaces](docs/profiles/database.md#tablespaces) to spread tables across multiple disks. Run `python sdb.py db setup` to configure tablespaces interactively.
 
 ## ◾ FAQ and Troubleshooting
 
@@ -259,14 +275,14 @@ Yes! Use `python sdb.py run ml_cpu` or `python sdb.py run ml` independently. The
 <details>
 <summary><strong>Can I use this for non-Reddit data?</strong></summary>
 
-Yes! Select `custom` during `python sdb.py setup` to process arbitrary JSON/NDJSON data. See the [Custom Platform](docs/platforms/custom.md) setup guide.
+Yes! Select `custom` during `python sdb.py source add <name>` to process arbitrary JSON/NDJSON data. See the [Custom Platform](docs/platforms/custom.md) setup guide.
 
 </details>
 
 <details>
 <summary><strong>How do I add support for a new platform?</strong></summary>
 
-See [Adding New Platforms](docs/platforms/adding-platforms.md). Create configuration files in `config/platforms/{platform}/` and optionally a custom parser.
+See [Adding New Platforms](docs/platforms/adding-platforms.md). Create a platform template in `config/templates/` and optionally a custom parser.
 
 </details>
 
@@ -276,9 +292,9 @@ See [Adding New Platforms](docs/platforms/adding-platforms.md). Create configura
 Delete the relevant output directories and rerun the profile:
 
 ```bash
-rm -rf data/output/toxic_roberta/                  # Reprocess a specific classifier
-rm -rf data/output/                                 # Reprocess all classifiers
-rm -rf data/output/ data/csv/ data/extracted/       # Full reprocess
+rm -rf data/output/<source>/toxic_roberta/          # Reprocess a specific classifier
+rm -rf data/output/<source>/                        # Reprocess all classifiers
+rm -rf data/output/<source>/ data/csv/<source>/ data/extracted/<source>/  # Full reprocess
 ```
 
 </details>

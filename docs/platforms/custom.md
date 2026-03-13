@@ -1,6 +1,6 @@
 # Custom Platforms
 
-Custom platforms (`PLATFORM=custom/<name>`) provide simple JSON-to-CSV conversion for arbitrary data sources, without platform-specific logic. Each custom platform is a single self-contained YAML file.
+Custom platforms (`PLATFORM=custom/<name>`) provide simple JSON-to-CSV conversion for arbitrary data sources, without platform-specific logic. Each custom source gets a `platform.yaml` in `config/sources/<name>/`.
 
 ---
 
@@ -8,40 +8,68 @@ Custom platforms (`PLATFORM=custom/<name>`) provide simple JSON-to-CSV conversio
 
 ### 1. Prepare Your Data
 
-Place your decompressed NDJSON files in `data/extracted/{data_type}/`:
+Place your compressed or decompressed data files in `data/dumps/<source>/{data_type}/` or `data/extracted/<source>/{data_type}/`:
 
 ```
-data/extracted/
+data/dumps/mydata/
 ├── posts/
-│   ├── data_2024-01
-│   └── data_2024-02
+│   ├── data_2024-01.json.gz
+│   └── data_2024-02.json.gz
 └── users/
-    └── users_export
+    └── users_export.json.gz
 ```
 
-> [!NOTE]
-> Custom platforms currently require pre-extracted files placed directly in `data/extracted/`. Automatic `.zst` decompression uses platform-specific filename patterns.
+Supported compressed formats: `.zst`, `.gz`, `.json.gz`, `.xz`, `.tar.gz`.
 
-### 2. Configure Platform
+### 2. Configure Source
 
-Create a single file `config/platforms/custom/<name>.yaml` (see `example.yaml`):
+Run the interactive setup:
+
+```bash
+python sdb.py source add mydata
+```
+
+Select `custom` as the platform type. The setup will walk you through:
+- **Data types** — define your data categories (e.g., posts, users)
+- **File patterns** — enter glob patterns (e.g., `data_*.json.gz`) for automatic file detection and compression auto-detection
+- **Fields** — configure which JSON fields to extract, with support for dot-notation nested access
+- **Field types** — set PostgreSQL column types for each field
+- **Indexes** — choose index fields for database ingestion
+
+This generates `config/sources/mydata/platform.yaml` and per-profile override files.
+
+To manually create the config instead, create `config/sources/<name>/platform.yaml`:
 
 ```yaml
 db_schema: my_data
 data_types:
   - posts
   - users
+paths:
+  dumps: ./data/dumps/mydata
+  extracted: ./data/extracted/mydata
+  csv: ./data/csv/mydata
+  output: ./data/output/mydata
 file_patterns:
   posts:
-    zst: '^posts_(\d{4}-\d{2})\.zst$'
-    json: '^posts_(\d{4}-\d{2})$'
-    csv: '^posts_(\d{4}-\d{2})\.csv$'
-    prefix: 'posts_'
+    dump: '^data_.*\.json\.gz$'
+    dump_glob: '*.json.gz'
+    json: '^data_.*$'
+    csv: '^data_.*\.csv$'
+    prefix: 'data_'
+    compression: gz
   users:
-    zst: '^users_.*\.zst$'
+    dump: '^users_.*\.json\.gz$'
+    dump_glob: '*.json.gz'
     json: '^users_.*$'
     csv: '^users_.*\.csv$'
     prefix: 'users_'
+    compression: gz
+mongo_collection_strategy: per_data_type
+mongo_db_name: mydata
+mongo_collections:
+  posts: posts
+  users: users
 field_types:
   id: text
   created_at: integer
@@ -68,20 +96,18 @@ indexes:
     - author
 ```
 
-Custom platform files are self-contained — no `user.yaml` override, no base to merge with.
-
 ### 3. Run
 
 ```bash
-PLATFORM=custom/mydata python sdb.py run parse
+python sdb.py run parse --source mydata
 
 # Classification works the same way
-PLATFORM=custom/mydata python sdb.py run ml_cpu
-PLATFORM=custom/mydata python sdb.py run ml
+python sdb.py run ml_cpu --source mydata
+python sdb.py run ml --source mydata
 ```
 
 > [!TIP]
-> The platform is configured during `python sdb.py setup`. If you select "custom", the base settings and file patterns will be generated for you.
+> When only one source is configured, `--source` is auto-selected and can be omitted.
 
 ---
 
@@ -107,6 +133,5 @@ PLATFORM=custom/mydata python sdb.py run ml
 
 ## Limitations
 
-- Requires pre-extracted files in `data/extracted/` (no automatic `.zst` decompression from `data/dumps/`)
-- No automatic file detection — file patterns must be configured
 - No computed fields (unlike Reddit's `id10`, `is_deleted`, `removal_type`)
+- No automatic file detection — file patterns must be configured (glob patterns are converted to regex during setup)
