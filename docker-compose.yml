@@ -7,6 +7,8 @@
 #   postgres        - PostgreSQL database server only
 #   postgres_ingest - Base table ingestion (requires postgres running)
 #   postgres_ml     - ML classifier table ingestion (requires postgres running)
+#   postgres_mcp    - PostgreSQL MCP server (requires postgres running)
+#   mongo_mcp       - MongoDB MCP server (requires mongo running)
 #
 # Platform selection (for parse profile):
 #   PLATFORM=reddit docker compose --profile parse up         # Default
@@ -187,6 +189,48 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # ==========================================================================
+  # Profile: postgres_mcp - PostgreSQL MCP server (SSE)
+  # Requires: postgres profile to be running
+  # ==========================================================================
+  postgres-mcp:
+    profiles: [postgres_mcp]
+    image: crystaldba/postgres-mcp
+    restart: unless-stopped
+    command: >-
+      --access-mode=${POSTGRES_MCP_ACCESS_MODE:-restricted}
+      --transport=sse
+    environment:
+      DATABASE_URI: postgresql://postgres:postgres@postgres:${POSTGRES_PORT:-5432}/${DB_NAME:-datasets}
+    ports:
+      - "${POSTGRES_MCP_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ==========================================================================
+  # Profile: mongo_mcp - MongoDB MCP server (Streamable HTTP)
+  # Uses: kiliczsh/mcp-mongo-server (built from source)
+  # Requires: mongo profile to be running
+  # ==========================================================================
+  mongo-mcp:
+    profiles: [mongo_mcp]
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp-mongo
+    restart: unless-stopped
+    environment:
+      MCP_MONGODB_URI: mongodb://mongo:27017
+      MCP_MONGODB_READONLY: "${MONGO_MCP_READ_ONLY:-true}"
+      MCP_PORT: "3000"
+    ports:
+      - "${MONGO_MCP_PORT:-3000}:3000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    # Note: internal port is always 3000 (set via MCP_PORT -> --port in entrypoint).
+    # MONGO_MCP_PORT only changes the host-side mapping.
 
   # ==========================================================================
   # Profile: mongo_ingest - Raw JSON ingestion to MongoDB

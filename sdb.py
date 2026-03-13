@@ -5,8 +5,9 @@ Unified entrypoint for database management, source configuration, and pipeline e
 
 Usage:
     sdb.py db setup                          Configure databases (PostgreSQL, MongoDB)
-    sdb.py db start [postgres|mongo]         Start database services (all if unspecified)
-    sdb.py db stop [postgres|mongo]          Stop database services (all if unspecified)
+    sdb.py db mcp                            Configure MCP servers for databases
+    sdb.py db start [postgres|mongo]         Start database services + MCPs (all if unspecified)
+    sdb.py db stop [postgres|mongo]          Stop database services + MCPs (all if unspecified)
     sdb.py db status                         Show database config and health
     sdb.py db unsetup                        Remove database config (and optionally data)
 
@@ -74,6 +75,36 @@ def _get_configured_db_services():
     return services
 
 
+def _get_configured_mcp_services():
+    """Determine which MCP services are configured."""
+    mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
+    if not mcp_path.exists():
+        return []
+    try:
+        import yaml
+        config = yaml.safe_load(mcp_path.read_text()) or {}
+    except Exception:
+        return []
+    services = []
+    if config.get("postgres", {}).get("enabled"):
+        services.append("postgres_mcp")
+    if config.get("mongo", {}).get("enabled"):
+        services.append("mongo_mcp")
+    return services
+
+
+def _load_mcp_config():
+    """Load MCP config from config/db/mcp.yaml. Returns dict or empty."""
+    mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
+    if not mcp_path.exists():
+        return {}
+    try:
+        import yaml
+        return yaml.safe_load(mcp_path.read_text()) or {}
+    except Exception:
+        return {}
+
+
 # ============================================================================
 # sdb db setup
 # ============================================================================
@@ -82,6 +113,62 @@ def cmd_db_setup(args):
     """Run interactive database configuration."""
     from social_data_bridge.setup.db import main as db_main
     db_main()
+    return 0
+
+
+# ============================================================================
+# sdb db mcp
+# ============================================================================
+
+def cmd_db_mcp(args):
+    """Configure or delete MCP servers for databases."""
+    if args.delete:
+        return _cmd_db_mcp_delete()
+    from social_data_bridge.setup.mcp import main as mcp_main
+    mcp_main()
+    return 0
+
+
+def _cmd_db_mcp_delete():
+    """Remove MCP configuration and stop MCP containers."""
+    mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
+    if not mcp_path.exists():
+        print("\n  No MCP configuration found.\n")
+        return 0
+
+    # Stop MCP containers
+    mcp_services = _get_configured_mcp_services()
+    if mcp_services:
+        configured = _get_configured_db_services()
+        compose_args = []
+        for svc in configured:
+            mcp_profile = f"{svc}_mcp"
+            if mcp_profile in mcp_services:
+                compose_args += ["--profile", svc, "--profile", mcp_profile]
+        if compose_args:
+            print("  Stopping MCP containers...")
+            docker_compose(*compose_args, "down")
+
+    # Remove config file
+    mcp_path.unlink()
+    print(f"  Removed:   config/db/mcp.yaml")
+
+    # Remove MCP env vars from .env
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        mcp_keys = {"POSTGRES_MCP_PORT", "POSTGRES_MCP_ACCESS_MODE",
+                     "MONGO_MCP_PORT", "MONGO_MCP_READ_ONLY"}
+        lines = env_path.read_text().splitlines()
+        new_lines = []
+        for line in lines:
+            stripped = line.lstrip("# ").strip()
+            key = stripped.split("=", 1)[0] if "=" in stripped else stripped
+            if key not in mcp_keys:
+                new_lines.append(line)
+        env_path.write_text("\n".join(new_lines) + "\n")
+        print(f"  Updated:   .env")
+
+    print("\n  MCP configuration removed. Databases are not affected.\n")
     return 0
 
 
@@ -108,8 +195,13 @@ def cmd_db_start(args):
         targets = configured
 
     compose_args = []
+    mcp_services = _get_configured_mcp_services()
     for svc in targets:
         compose_args += ["--profile", svc]
+        # Include MCP profile alongside its parent DB
+        mcp_profile = f"{svc}_mcp"
+        if mcp_profile in mcp_services:
+            compose_args += ["--profile", mcp_profile]
     compose_args += ["up", "-d"]
 
     result = docker_compose(*compose_args)
@@ -133,8 +225,12 @@ def cmd_db_stop(args):
         targets = configured
 
     compose_args = []
+    mcp_services = _get_configured_mcp_services()
     for svc in targets:
         compose_args += ["--profile", svc]
+        mcp_profile = f"{svc}_mcp"
+        if mcp_profile in mcp_services:
+            compose_args += ["--profile", mcp_profile]
     compose_args += ["down"]
 
     result = docker_compose(*compose_args)
@@ -205,6 +301,31 @@ def cmd_db_status(args):
         state_dir = mongo_data / "state_tracking"
         _print_ingestion_state(state_dir, "_mongo_")
 
+    # MCP servers
+    mcp_config = _load_mcp_config()
+    if mcp_config:
+        pg_mcp = mcp_config.get("postgres", {})
+        if pg_mcp.get("enabled"):
+            port = pg_mcp.get("port", 8000)
+            access = pg_mcp.get("access_mode", "restricted")
+            running = "yes" if "postgres-mcp" in running_services else "no"
+            print(f"\n  PostgreSQL MCP:")
+            print(f"    Port:      {port}")
+            print(f"    Access:    {access}")
+            print(f"    Endpoint:  http://localhost:{port}/sse")
+            print(f"    Running:   {running}")
+
+        mongo_mcp = mcp_config.get("mongo", {})
+        if mongo_mcp.get("enabled"):
+            port = mongo_mcp.get("port", 3000)
+            read_only = mongo_mcp.get("read_only", True)
+            running = "yes" if "mongo-mcp" in running_services else "no"
+            print(f"\n  MongoDB MCP:")
+            print(f"    Port:      {port}")
+            print(f"    Read-only: {read_only}")
+            print(f"    Endpoint:  http://localhost:{port}/sse")
+            print(f"    Running:   {running}")
+
     print()
     return 0
 
@@ -263,6 +384,7 @@ def _print_ingestion_state(state_dir, label_split):
 DB_GENERATED_FILES = [
     "config/db/postgres.yaml",
     "config/db/mongo.yaml",
+    "config/db/mcp.yaml",
     "config/postgres/postgresql.local.conf",
     "docker-compose.override.yml",
     ".env",
@@ -736,6 +858,11 @@ def build_parser():
 
     db_setup_p = db_sub.add_parser("setup", help="Configure databases (PostgreSQL, MongoDB)")
     db_setup_p.set_defaults(func=cmd_db_setup)
+
+    db_mcp_p = db_sub.add_parser("mcp", help="Configure MCP servers for databases")
+    db_mcp_p.add_argument("--delete", action="store_true",
+                           help="Remove MCP configuration and stop MCP containers")
+    db_mcp_p.set_defaults(func=cmd_db_mcp)
 
     db_start_p = db_sub.add_parser("start", help="Start database services")
     db_start_p.add_argument("service", nargs="?", choices=["postgres", "mongo"],
