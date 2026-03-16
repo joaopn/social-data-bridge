@@ -27,7 +27,7 @@ file_workers: 1            # Number of files to process in parallel (each loads 
                            # Increase to improve GPU utilization with lightweight models
 tokenize_workers: 4        # Parallel workers for tokenization (0 = single-threaded)
 batch_size: 2000000        # Rows per disk I/O batch (prevents memory blow-up on large files)
-classifier_batch_size: 32  # Batch size per GPU for inference
+classifier_batch_size: 8  # Batch size per GPU for inference
 
 # Language filtering settings
 use_lingua: true           # If true, use 'lang' column from Lingua output for filtering

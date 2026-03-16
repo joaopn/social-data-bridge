@@ -9,25 +9,26 @@
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![ONNX](https://img.shields.io/badge/ONNX-Runtime-005CED.svg?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
-A toolkit for large-scale processing, ML classification, and database ingestion of social media data dumps. Supports PostgreSQL and MongoDB as database destinations, and bundles MCP servers for AI tool access. Designed for the [Reddit data dumps](https://github.com/ArthurHeitmann/arctic_shift), with support for multiple platforms through a configurable architecture.
+A robust pipeline for processing, classifying, and ingesting large-scale JSON data dumps into research-ready databases. Interactive CLI setup, step-by-step execution with automatic resume and recovery. Built for [Reddit Arctic Shift dumps](https://github.com/ArthurHeitmann/arctic_shift) and configurable to any high-volume record-based dataset.
+
 
 </div>
 
 ### TL;DR
 
 ```bash
-# 1. Configure databases
+# Configure databases
 python sdb.py db setup                      # Configure PostgreSQL/MongoDB (one-time)
 python sdb.py db start                      # Start database(s)
 
-# 2. Add a source and run desired tasks
+# Process and ingest data
 python sdb.py source add reddit             # Add a data source (interactive setup)
-python sdb.py run parse                     # Decompress dumps → parse to structured files
+python sdb.py run parse                     # Decompress dumps → parse to cleaned, structured files
 python sdb.py run postgres_ingest           # Ingest parsed files into PostgreSQL
 python sdb.py run mongo_ingest              # Ingest raw data into MongoDB
 
-# OPTIONAL services
-python sdb.py run lingua                    # Adds language detection to files
+# Optional data-enrichment
+python sdb.py run lingua                    # Adds language detection to parsed files
 python sdb.py db mcp                        # MCP servers for AI tool access
 python sdb.py run ml                        # GPU classifiers (toxicity, emotions)
 python sdb.py run postgres_ml               # Ingest classifier outputs

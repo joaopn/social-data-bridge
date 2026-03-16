@@ -87,6 +87,11 @@ def run_questionnaire(hw, source_name, db_setup):
         "Intermediate file format", ["parquet", "csv"], default="parquet",
     )
 
+    if settings["file_format"] == "parquet":
+        rg_size = ask_int("Parquet row-group size (larger = better compression, more RAM)", 1_000_000)
+        if rg_size != 1_000_000:
+            settings["parquet_row_group_size"] = rg_size
+
     # ---- Profiles ----
     section_header("Profiles")
 
@@ -119,7 +124,7 @@ def run_questionnaire(hw, source_name, db_setup):
 
         if "postgres_ingest" in profiles:
             settings["pg_prefer_lingua"] = ask_bool(
-                "Prefer Lingua CSVs (includes lang columns in base tables)?",
+                "Use Lingua files (includes lang columns in base tables)?",
                 defaults["pg_prefer_lingua"],
             )
             settings["pg_parallel_index_workers"] = ask_int(
@@ -232,6 +237,10 @@ def generate_platform_yaml(settings):
     """Generate config/sources/<name>/platform.yaml for custom platforms."""
     config = {
         "file_format": settings.get("file_format", "parquet"),
+    }
+    if "parquet_row_group_size" in settings:
+        config["parquet_row_group_size"] = settings["parquet_row_group_size"]
+    config.update({
         "db_schema": settings.get("db_schema", settings["source_name"]),
         "data_types": settings["data_types"],
         "paths": {
@@ -241,7 +250,7 @@ def generate_platform_yaml(settings):
             "output": settings["output_path"],
         },
         "file_patterns": settings.get("custom_file_patterns", {}),
-    }
+    })
 
     if "mongo_collection_strategy" in settings:
         config["mongo_collection_strategy"] = settings["mongo_collection_strategy"]
@@ -288,6 +297,8 @@ def generate_reddit_platform_yaml(settings):
         sys.exit(1)
 
     base_config["file_format"] = settings.get("file_format", "parquet")
+    if "parquet_row_group_size" in settings:
+        base_config["parquet_row_group_size"] = settings["parquet_row_group_size"]
     base_config["paths"] = {
         "dumps": settings["dumps_path"],
         "extracted": settings["extracted_path"],
@@ -373,6 +384,8 @@ def print_summary(settings, files_to_write):
     print(f"  Source:      {source_name}")
     print(f"  Platform:    {settings['platform']}")
     print(f"  File format: {settings.get('file_format', 'parquet')}")
+    if "parquet_row_group_size" in settings:
+        print(f"  Row-group:   {settings['parquet_row_group_size']:,} rows")
     print(f"  Data types:  {', '.join(settings['data_types'])}")
     print(f"  Profiles:    {', '.join(profiles)}")
     print()

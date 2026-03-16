@@ -13,3 +13,9 @@ processing:
   parse_workers: 8           # Number of parallel workers for CSV parsing
   cleanup_temp: false        # Delete intermediate files after processing
   watch_interval: 0          # Check for new files every N minutes (0 = run once)
+
+# Parquet output tuning (only applies when file_format: parquet in platform.yaml)
+# Set parquet_row_group_size in config/sources/<source>/platform.yaml
+# Default: 1000000 (1M rows per row-group)
+# Affects compression, predicate pushdown granularity, and bloom filter selectivity
+# in external-table engines (DuckDB, StarRocks, ClickHouse)

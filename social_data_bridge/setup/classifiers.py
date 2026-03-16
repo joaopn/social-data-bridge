@@ -54,23 +54,41 @@ def compute_classifier_defaults(hw, profiles):
 
     d = {}
 
-    # Lingua
+    # Lingua — read batch_size from base config
+    base_lingua = {}
+    try:
+        lingua_config_path = CONFIG_DIR / "lingua" / "cpu_classifiers.yaml"
+        if lingua_config_path.exists():
+            base_lingua_raw = yaml.safe_load(lingua_config_path.read_text()) or {}
+            base_lingua = base_lingua_raw.get("lingua", {})
+    except Exception:
+        pass
+
     d["lingua_workers"] = cores
     d["lingua_file_workers"] = max(1, cores // 8)
-    d["lingua_batch_size"] = 2_000_000 if ram >= 16 else 500_000
+    d["lingua_batch_size"] = base_lingua.get("batch_size", 2_000_000)
     d["lingua_low_accuracy"] = False
 
-    # GPU ML
+    # GPU ML — read defaults from base config (gpu_classifiers.yaml)
+    base_ml = {}
+    try:
+        base_config_path = CONFIG_DIR / "ml" / "gpu_classifiers.yaml"
+        if base_config_path.exists():
+            base_ml = yaml.safe_load(base_config_path.read_text()) or {}
+    except Exception:
+        pass
+
     d["gpu_ids"] = [g["index"] for g in gpus] if gpus else [0]
     d["ml_file_workers"] = max(1, len(gpus))
     d["ml_tokenize_workers"] = min(max(1, cores // 2), 8)
-    if min_vram >= 12000:
-        d["ml_classifier_batch_size"] = 64
-    elif min_vram >= 8000:
-        d["ml_classifier_batch_size"] = 32
-    else:
-        d["ml_classifier_batch_size"] = 16
-    d["ml_classifiers"] = ["toxic_roberta", "go_emotions"]
+    d["ml_classifier_batch_size"] = base_ml.get("classifier_batch_size", 16)
+
+    # Collect classifier names from base config (top-level keys with dict values that have 'type')
+    base_classifiers = [
+        k for k, v in base_ml.items()
+        if isinstance(v, dict) and "type" in v
+    ]
+    d["ml_classifiers"] = base_classifiers or ["toxic_roberta", "go_emotions"]
 
     return d
 
@@ -190,7 +208,7 @@ def run_questionnaire(hw, state):
         settings["ml_tokenize_workers"] = ask_int("Tokenize workers", defaults["ml_tokenize_workers"])
         settings["ml_classifier_batch_size"] = ask_int("Classifier batch size", defaults["ml_classifier_batch_size"])
 
-        available_classifiers = ["toxic_roberta", "go_emotions"]
+        available_classifiers = defaults["ml_classifiers"]
         settings["ml_classifiers"] = ask_multi_select(
             "Classifiers to run:",
             available_classifiers,

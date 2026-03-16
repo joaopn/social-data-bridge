@@ -405,8 +405,8 @@ class TransformerClassifier:
         self.max_length = classifier_config.get('max_length', 512)
         
         # Disk I/O batch size (rows per batch for reading/writing CSV)
-        # Per-classifier, else global, else 2M rows to match Lingua behavior
-        self.batch_size = classifier_config.get('batch_size', 
+        # Per-classifier, else global, else 2M rows
+        self.batch_size = classifier_config.get('batch_size',
                                                  global_config.get('batch_size', 2_000_000))
         
         # Minimum token count - per-classifier, else global, else 0 (no filter)

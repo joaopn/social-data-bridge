@@ -19,7 +19,7 @@ from ...core.parser import (
     quote_field,
     flatten_record,
     flatten_record_parquet,
-    write_parquet_file,
+    BatchedParquetWriter,
 )
 
 
@@ -40,6 +40,7 @@ def process_single_file(
     data_type_config: Dict,
     fields_to_extract: List[str],
     file_format: str = 'csv',
+    parquet_row_group_size: int = 0,
 ) -> tuple:
     """
     Process a single JSON file and write to CSV or Parquet.
@@ -64,24 +65,30 @@ def process_single_file(
 
     try:
         if file_format == 'parquet':
-            # Parquet: accumulate rows as dicts, write with Polars at end
-            rows = []
-            with open(input_file, 'r', encoding='utf-8', errors='replace') as infile:
-                for line in infile:
-                    cleaned_line = line.replace('\x00', '')
-                    if not cleaned_line.strip():
-                        continue
-                    try:
-                        data = json.loads(cleaned_line)
-                        values = transform_json(data, dataset, data_type_config, fields_to_extract, file_format='parquet')
-                        rows.append(dict(zip(columns, values)))
-                        line_count += 1
-                    except json.JSONDecodeError as e:
-                        error_count += 1
-                        logging.error(f"Failed to decode line in {input_file}: {cleaned_line[:100]}... Error: {e}")
-                        continue
-
-            write_parquet_file(rows, columns, data_type_config, str(output_path))
+            # Parquet: stream rows via BatchedParquetWriter (bounded memory)
+            writer_kwargs = {}
+            if parquet_row_group_size:
+                writer_kwargs['batch_size'] = parquet_row_group_size
+            writer = BatchedParquetWriter(columns, data_type_config, str(output_path), **writer_kwargs)
+            try:
+                with open(input_file, 'r', encoding='utf-8', errors='replace') as infile:
+                    for line in infile:
+                        cleaned_line = line.replace('\x00', '')
+                        if not cleaned_line.strip():
+                            continue
+                        try:
+                            data = json.loads(cleaned_line)
+                            values = transform_json(data, dataset, data_type_config, fields_to_extract, file_format='parquet')
+                            writer.append(dict(zip(columns, values)))
+                            line_count += 1
+                        except json.JSONDecodeError as e:
+                            error_count += 1
+                            logging.error(f"Failed to decode line in {input_file}: {cleaned_line[:100]}... Error: {e}")
+                            continue
+                writer.close()
+            except Exception:
+                writer.cleanup()
+                raise
 
         else:
             # CSV: original row-by-row write
@@ -163,6 +170,8 @@ def parse_to_csv(
     ext = '.parquet' if file_format == 'parquet' else '.csv'
     output_file = output_dir / f"{input_path.name}{ext}"
 
+    parquet_row_group_size = platform_config.get('parquet_row_group_size', 0)
+
     # Process the file
     _, output_path = process_single_file(
         input_file=str(input_path),
@@ -171,6 +180,7 @@ def parse_to_csv(
         data_type_config=field_types,
         fields_to_extract=fields_to_extract,
         file_format=file_format,
+        parquet_row_group_size=parquet_row_group_size,
     )
 
     # Clean up empty log file

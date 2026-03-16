@@ -195,6 +195,100 @@ def build_parquet_schema(columns: List[str], field_types: Dict) -> dict:
     return schema
 
 
+PARQUET_ROW_GROUP_SIZE = 1_000_000
+"""Default number of rows per Parquet row-group.
+
+Matches the conventional 1M-row size used by Spark/Hive/DuckDB.
+Configurable per-source via ``parquet_row_group_size`` in platform.yaml."""
+
+
+class BatchedParquetWriter:
+    """Incrementally writes row dicts to a Parquet file via PyArrow row-groups.
+
+    Accumulates rows up to *batch_size*, converts to a Polars DataFrame,
+    writes as a row-group through PyArrow's ParquetWriter, then discards the
+    batch.  This keeps memory bounded regardless of total file size.
+
+    Usage::
+
+        writer = BatchedParquetWriter(columns, field_types, output_path)
+        for row_dict in stream:
+            writer.append(row_dict)
+        writer.close()          # flushes remaining rows + atomic rename
+    """
+
+    def __init__(
+        self,
+        columns: List[str],
+        field_types: Dict,
+        output_path: str,
+        batch_size: int = PARQUET_ROW_GROUP_SIZE,
+    ):
+        self._columns = columns
+        self._schema = build_parquet_schema(columns, field_types)
+        self._output_path = Path(output_path)
+        self._temp_path = self._output_path.with_suffix(
+            self._output_path.suffix + '.temp'
+        )
+        self._batch_size = batch_size
+        self._buffer: List[Dict[str, Any]] = []
+        self._pq_writer = None
+        self._total_rows = 0
+
+        if self._temp_path.exists():
+            self._temp_path.unlink()
+
+    # ------------------------------------------------------------------
+
+    def append(self, row_dict: Dict[str, Any]) -> None:
+        """Add a single row dict.  Flushes automatically when batch is full."""
+        self._buffer.append(row_dict)
+        if len(self._buffer) >= self._batch_size:
+            self._flush()
+
+    def _flush(self) -> None:
+        if not self._buffer:
+            return
+
+        import polars as pl
+        import pyarrow.parquet as pq
+
+        df = pl.DataFrame(self._buffer, schema=self._schema, orient='row')
+        table = df.to_arrow()
+
+        if self._pq_writer is None:
+            self._pq_writer = pq.ParquetWriter(str(self._temp_path), table.schema)
+        self._pq_writer.write_table(table)
+
+        self._total_rows += len(self._buffer)
+        self._buffer.clear()
+
+    def close(self) -> int:
+        """Flush remaining rows, close writer, atomic-rename to final path.
+
+        Returns the total number of rows written.
+        """
+        try:
+            self._flush()
+            if self._pq_writer is not None:
+                self._pq_writer.close()
+                self._pq_writer = None
+            if self._temp_path.exists():
+                self._temp_path.rename(self._output_path)
+        except Exception:
+            self.cleanup()
+            raise
+        return self._total_rows
+
+    def cleanup(self) -> None:
+        """Close writer and remove temp file (for error paths)."""
+        if self._pq_writer is not None:
+            self._pq_writer.close()
+            self._pq_writer = None
+        if self._temp_path.exists():
+            self._temp_path.unlink()
+
+
 def write_parquet_file(
     rows: List[Dict[str, Any]],
     columns: List[str],
@@ -204,6 +298,9 @@ def write_parquet_file(
     """Write a list of row dicts as a Parquet file with proper dtypes.
 
     Uses a temp file + atomic rename.  Returns the number of rows written.
+
+    NOTE: For large files, prefer ``BatchedParquetWriter`` which streams
+    rows to disk incrementally without holding everything in memory.
     """
     import polars as pl
     output_path = Path(output_path)
