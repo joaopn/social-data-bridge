@@ -194,8 +194,11 @@ def get_file_identifier(filepath: str) -> str:
     if is_compressed(name):
         stem = strip_compression_extension(name)
         # decompress_gz also strips .json (extracted files have no extension)
+        # CSV input files keep .csv extension after decompression
         if stem.endswith('.json'):
             stem = stem[:-5]
+        elif stem.endswith('.csv'):
+            stem = stem[:-4]
         return stem
     return Path(filepath).stem
 

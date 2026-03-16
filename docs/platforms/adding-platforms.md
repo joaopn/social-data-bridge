@@ -9,7 +9,7 @@ Social Data Bridge supports two ways to add new platforms:
 
 ## Option 1: Custom Platform (Recommended)
 
-If your data is standard JSON/NDJSON, use the custom platform system. No code changes needed.
+If your data is standard JSON/NDJSON or CSV, use the custom platform system. No code changes needed.
 
 ```bash
 python sdb.py source add <name>

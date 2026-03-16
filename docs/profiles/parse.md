@@ -1,6 +1,6 @@
 # Parse Profile
 
-The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.tar.gz`) and parses JSON to structured files (Parquet or CSV). It's the entry point of the pipeline — all other profiles depend on its output.
+The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.tar.gz`) and parses JSON or CSV input to structured files (Parquet or CSV). It's the entry point of the pipeline — all other profiles depend on its output.
 
 ## Running
 
@@ -32,12 +32,13 @@ Three-phase pipeline:
   - `.tar.gz` / `.tgz`: `tar xzf` (extracts all files)
 - Compression format is auto-detected from file extension, or specified per-data-type in `platform.yaml` via the `compression` key
 - Writes to temp file (`.temp`), renames on success for atomicity
-- Output: decompressed NDJSON files in `EXTRACTED_PATH/<source>/{data_type}/`
+- Output: decompressed files in `EXTRACTED_PATH/<source>/{data_type}/` (NDJSON files have no extension, CSV files keep `.csv`)
 
 ### Phase 3: Parsing
-- Platform-specific JSON parsing to Parquet or CSV (controlled by `file_format` in `platform.yaml`)
+- Platform-specific parsing to Parquet or CSV (controlled by `file_format` in `platform.yaml`)
 - Reddit: applies waterfall deletion detection, base-36 ID conversion, format compatibility (see [Reddit Platform](../platforms/reddit.md))
-- Custom: simple field extraction with dot-notation and type enforcement (see [Custom Platforms](../platforms/custom.md))
+- Custom NDJSON: field extraction with dot-notation and type enforcement (see [Custom Platforms](../platforms/custom.md))
+- Custom CSV: column selection, type casting, and robust handling of messy files via Polars (see [Custom Platforms](../platforms/custom.md))
 - **Parquet** (default for new sources): typed columns via Polars/PyArrow, null-byte stripping only (no CSV escaping)
 - **CSV** (alternate, for external tool compatibility): writes CSV with headers, full escape handling
 - Uses temp files for atomic writes
@@ -73,7 +74,7 @@ See [Configuration Reference](../configuration.md) for full details and the sour
 The parse profile delegates to a platform-specific parser based on the `PLATFORM` environment variable:
 
 - **Reddit** (default): Specialized parsing with deletion detection, base-36 ID conversion, and format compatibility. See [Reddit Platform](../platforms/reddit.md).
-- **Custom** (`custom/<name>`): Simple JSON-to-CSV with configurable field extraction. See [Custom Platforms](../platforms/custom.md).
+- **Custom** (`custom/<name>`): JSON and CSV parsing with configurable field extraction and type enforcement. See [Custom Platforms](../platforms/custom.md).
 
 ---
 

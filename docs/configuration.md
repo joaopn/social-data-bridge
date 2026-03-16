@@ -516,6 +516,8 @@ Each source has a `platform.yaml` in `config/sources/<name>/` that defines the p
 | `db_schema` | Database schema name for this source. |
 | `data_types` | List of data types this source supports. |
 | `file_format` | Output format: `parquet` (default) or `csv` (alternate, for external tool compatibility). |
+| `input_format` | Input file format: `ndjson` (default) or `csv`. CSV input uses Polars for robust parsing. Custom platforms only. |
+| `input_csv_delimiter` | Delimiter for CSV input files (default: `,`). Supports tab (`\t`), pipe (`|`), etc. Only used when `input_format: csv`. |
 | `file_patterns` | File detection patterns per data type (keys: `dump`, `json`, `csv`, `parquet`, `prefix`, and optionally `dump_glob`, `compression`). |
 | `indexes` | Default index fields per data type (used by the postgres profile). |
 | `mongo_collection_strategy` | `per_file` or `per_data_type` (used by mongo_ingest). |
@@ -584,14 +586,16 @@ fields:
 
 ### Custom Platforms: `config/sources/<name>/platform.yaml`
 
-Custom platform configs are generated interactively during `sdb source add <name>`. Users enter glob patterns for file matching (e.g., `tweets_*.json.gz`) which are converted to regex patterns with auto-detected compression.
+Custom platform configs are generated interactively during `sdb source add <name>`. Users choose an input format (NDJSON or CSV) and enter glob patterns for file matching (e.g., `tweets_*.json.gz`, `data_*.csv.zst`) which are converted to regex patterns with auto-detected compression.
 
 <details>
 <summary><strong>Example config</strong></summary>
 
 ```yaml
 db_schema: my_data
-file_format: parquet                       # 'parquet' (default) or 'csv'
+file_format: parquet                       # Output: 'parquet' (default) or 'csv'
+# input_format: csv                        # Input: 'ndjson' (default) or 'csv'
+# input_csv_delimiter: ","                 # CSV delimiter (default: comma)
 
 data_types:
   - posts

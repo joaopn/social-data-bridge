@@ -2,7 +2,7 @@
 
 Social Data Bridge supports two database destinations:
 - **PostgreSQL** — ingests parsed files (Parquet or CSV) via three profiles: `postgres` (server), `postgres_ingest` (main tables), `postgres_ml` (classifier outputs)
-- **MongoDB** — ingests raw JSON/NDJSON directly after extraction via two profiles: `mongo` (server), `mongo_ingest` (bulk import)
+- **MongoDB** — ingests raw JSON/NDJSON/CSV directly after extraction via two profiles: `mongo` (server), `mongo_ingest` (bulk import)
 
 Both databases support optional authentication and MCP servers for AI tool access.
 
@@ -379,14 +379,15 @@ WiredTiger cache size is controlled via the `MONGO_CACHE_SIZE_GB` environment va
 
 ## mongo_ingest Profile
 
-Ingests raw extracted JSON/NDJSON files directly into MongoDB using `mongoimport`. Operates on raw data right after decompression — no CSV parsing needed.
+Ingests raw extracted files directly into MongoDB using `mongoimport`. Supports both JSON/NDJSON and CSV input — the file format is auto-detected from the file extension. Operates on raw data right after decompression — no intermediate parsing needed.
 
 ### How It Works
 
 1. **Extract**: Detects compressed dump files, decompresses using format-appropriate tools (`.zst`, `.gz`, `.xz`, `.tar.gz`)
-2. **Ingest**: For each extracted JSON file:
+2. **Ingest**: For each extracted file:
    - Creates a collection with zstd WiredTiger compression
    - Runs `mongoimport` for bulk insertion (blind insert, no upsert)
+   - Auto-detects CSV files (by `.csv` extension) and passes `--type csv --headerline` to mongoimport
    - Records the file in the `_sdb_metadata` collection for state tracking
 3. **Index**: Creates configured indexes on each collection
 

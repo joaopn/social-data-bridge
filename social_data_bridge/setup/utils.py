@@ -497,24 +497,28 @@ def detect_compression_from_glob(glob_pattern):
     return None
 
 
-def derive_file_patterns(dump_glob, compression):
+def derive_file_patterns(dump_glob, compression, input_format='ndjson'):
     """Derive dump regex, json regex, csv regex, and prefix from a dump glob.
 
     Args:
         dump_glob: Shell glob pattern for dump files (e.g., 'tweets_*.json.gz')
         compression: Detected compression format string
+        input_format: Input file format ('ndjson' or 'csv')
 
     Returns:
         Dict with keys: dump, json, csv, prefix, compression, dump_glob
     """
     import fnmatch
 
+    def _glob_to_regex(glob_pattern):
+        """Convert a glob pattern to a clean anchored regex."""
+        regex = fnmatch.translate(glob_pattern)
+        if regex.startswith('(?s:') and regex.endswith(')\\Z'):
+            regex = regex[4:-3]
+        return '^' + regex + '$'
+
     # Convert glob to regex for dump matching
-    dump_regex = fnmatch.translate(dump_glob)
-    # fnmatch.translate produces (?s:...)\\Z — strip wrapper for a clean regex
-    if dump_regex.startswith('(?s:') and dump_regex.endswith(')\\Z'):
-        dump_regex = dump_regex[4:-3]
-    dump_regex = '^' + dump_regex + '$'
+    dump_regex = _glob_to_regex(dump_glob)
 
     # Derive the stem pattern by stripping compression extension from the glob
     stem_glob = dump_glob
@@ -532,29 +536,25 @@ def derive_file_patterns(dump_glob, compression):
     elif lower.endswith('.xz'):
         stem_glob = dump_glob[:-3]
 
-    # If the stem still has .json, strip it (extracted files have no extension)
-    if stem_glob.lower().endswith('.json'):
-        stem_glob = stem_glob[:-5]
-
-    # Build json regex from stem
-    json_regex = fnmatch.translate(stem_glob)
-    if json_regex.startswith('(?s:') and json_regex.endswith(')\\Z'):
-        json_regex = json_regex[4:-3]
-    json_regex = '^' + json_regex + '$'
+    if input_format == 'csv':
+        # CSV input: decompressed files keep .csv extension (e.g., data_2024.csv)
+        # Build json regex BEFORE stripping .csv so it matches the decompressed file
+        json_regex = _glob_to_regex(stem_glob)
+        # Strip .csv for output patterns only
+        if stem_glob.lower().endswith('.csv'):
+            stem_glob = stem_glob[:-4]
+    else:
+        # NDJSON: existing behavior — strip .json THEN build json_regex
+        # (extracted NDJSON files have no extension)
+        if stem_glob.lower().endswith('.json'):
+            stem_glob = stem_glob[:-5]
+        json_regex = _glob_to_regex(stem_glob)
 
     # Build csv regex (stem + .csv)
-    csv_glob = stem_glob + '.csv'
-    csv_regex = fnmatch.translate(csv_glob)
-    if csv_regex.startswith('(?s:') and csv_regex.endswith(')\\Z'):
-        csv_regex = csv_regex[4:-3]
-    csv_regex = '^' + csv_regex + '$'
+    csv_regex = _glob_to_regex(stem_glob + '.csv')
 
     # Build parquet regex (stem + .parquet)
-    parquet_glob = stem_glob + '.parquet'
-    parquet_regex = fnmatch.translate(parquet_glob)
-    if parquet_regex.startswith('(?s:') and parquet_regex.endswith(')\\Z'):
-        parquet_regex = parquet_regex[4:-3]
-    parquet_regex = '^' + parquet_regex + '$'
+    parquet_regex = _glob_to_regex(stem_glob + '.parquet')
 
     # Derive prefix (everything before the first wildcard)
     prefix = dump_glob.split('*')[0] if '*' in dump_glob else dump_glob

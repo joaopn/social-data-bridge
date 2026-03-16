@@ -1,6 +1,6 @@
 # Custom Platforms
 
-Custom platforms (`PLATFORM=custom/<name>`) provide simple JSON parsing to structured files (Parquet or CSV) for arbitrary data sources, without platform-specific logic. Each custom source gets a `platform.yaml` in `config/sources/<name>/`.
+Custom platforms (`PLATFORM=custom/<name>`) provide JSON and CSV parsing to structured files (Parquet or CSV) for arbitrary data sources, without platform-specific logic. Each custom source gets a `platform.yaml` in `config/sources/<name>/`.
 
 ---
 
@@ -13,13 +13,14 @@ Place your compressed or decompressed data files in `data/dumps/<source>/{data_t
 ```
 data/dumps/mydata/
 ├── posts/
-│   ├── data_2024-01.json.gz
+│   ├── data_2024-01.json.gz      # JSON/NDJSON input
 │   └── data_2024-02.json.gz
 └── users/
-    └── users_export.json.gz
+    └── users_export.csv.zst      # CSV input (with headers)
 ```
 
-Supported compressed formats: `.zst`, `.gz`, `.json.gz`, `.xz`, `.tar.gz`.
+Supported input formats: JSON/NDJSON (one object per line) and CSV (with header row).
+Supported compression: `.zst`, `.gz`, `.json.gz`, `.xz`, `.tar.gz`.
 
 ### 2. Configure Source
 
@@ -30,10 +31,11 @@ python sdb.py source add mydata
 ```
 
 Select `custom` as the platform type. The setup will walk you through:
-- **File format** — Parquet (default, recommended) or CSV
+- **Input format** — NDJSON (default) or CSV (with configurable delimiter)
+- **Output format** — Parquet (default, recommended) or CSV
 - **Data types** — define your data categories (e.g., posts, users)
-- **File patterns** — enter glob patterns (e.g., `data_*.json.gz`) for automatic file detection and compression auto-detection
-- **Fields** — configure which JSON fields to extract, with support for dot-notation nested access
+- **File patterns** — enter glob patterns (e.g., `data_*.json.gz`, `export_*.csv.zst`) for automatic file detection and compression auto-detection
+- **Fields** — configure which fields to extract (JSON dot-notation for NDJSON, column headers for CSV)
 - **Field types** — set PostgreSQL column types for each field
 - **Indexes** — choose index fields for PostgreSQL and MongoDB ingestion
 
@@ -43,7 +45,9 @@ To manually create the config instead, create `config/sources/<name>/platform.ya
 
 ```yaml
 db_schema: my_data
-file_format: parquet                 # 'parquet' (default) or 'csv'
+file_format: parquet                 # Output format: 'parquet' (default) or 'csv'
+# input_format: csv                 # Input format: 'ndjson' (default) or 'csv'
+# input_csv_delimiter: ","          # CSV delimiter (default: comma). Supports tab, pipe, etc.
 data_types:
   - posts
   - users
@@ -117,10 +121,12 @@ python sdb.py run ml --source mydata
 
 ## Features
 
-- **Dot-notation nested field access**: Access nested JSON with `user.profile.name`
-- **Array indexing**: Access array elements with `items.0.id`
+- **JSON and CSV input**: Accepts NDJSON (one JSON object per line) or CSV files with headers
+- **Robust CSV handling**: Powered by Polars — handles ragged rows, encoding issues, mixed quoting, and configurable delimiters (comma, tab, pipe)
+- **Dot-notation nested field access**: Access nested JSON with `user.profile.name` (NDJSON input)
+- **Array indexing**: Access array elements with `items.0.id` (NDJSON input)
 - **Type enforcement**: Field types defined in YAML are enforced during parsing
-- **No platform-specific logic**: Pure JSON-to-CSV conversion
+- **No platform-specific logic**: Pure data transformation, no assumptions about content
 - **Self-contained config**: One file per platform, no merging
 
 ## Supported Field Types
@@ -139,3 +145,5 @@ python sdb.py run ml --source mydata
 
 - No computed fields (unlike Reddit's `id10`, `is_deleted`, `removal_type`)
 - No automatic file detection — file patterns must be configured (glob patterns are converted to regex during setup)
+- CSV input requires headers in the first row (headerless CSV is not supported)
+- Dot-notation and array indexing are only available for NDJSON input (CSV fields are flat column names)

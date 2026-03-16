@@ -63,6 +63,12 @@ def ensure_collection(
         client.close()
 
 
+def _redact_uri(uri: str) -> str:
+    """Replace password in a MongoDB URI with ***."""
+    import re
+    return re.sub(r'://([^:]+):([^@]+)@', r'://\1:***@', uri)
+
+
 def mongoimport_file(
     filepath: str,
     db_name: str,
@@ -75,28 +81,37 @@ def mongoimport_file(
     log_dir: str = "/data/mongo/logs",
 ) -> None:
     """
-    Ingest a JSON/NDJSON file using mongoimport subprocess.
+    Ingest a file using mongoimport subprocess.
 
+    Supports JSON/NDJSON (default) and CSV (auto-detected from file extension).
     Logs are appended to {log_dir}/mongoimport_{db}_{collection}.log.
-    Raises subprocess.CalledProcessError on failure.
+    Raises RuntimeError on failure (never exposes credentials in exceptions).
     """
+    uri = get_mongo_uri(host, port, user, password)
     command = [
         "mongoimport",
-        f"--uri={get_mongo_uri(host, port, user, password)}",
+        f"--uri={uri}",
         "--db", db_name,
         "--collection", collection_name,
         "--file", filepath,
         "--numInsertionWorkers", str(num_workers),
     ]
 
+    # Auto-detect CSV input from file extension
+    if filepath.lower().endswith('.csv'):
+        command.extend(["--type", "csv", "--headerline"])
+
     # Ensure log directory exists
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, f"mongoimport_{db_name}_{collection_name}.log")
 
+    # Build redacted command for logging (never write credentials to logs)
+    redacted_command = [_redact_uri(arg) if '://' in arg else arg for arg in command]
+
     with open(log_file, 'a') as log:
         log.write(f"\n{'='*60}\n")
         log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-        log.write(f"Command: {' '.join(command)}\n")
+        log.write(f"Command: {' '.join(redacted_command)}\n")
         log.write(f"File: {filepath}\n")
         log.write(f"{'='*60}\n")
         result = subprocess.run(
@@ -107,9 +122,9 @@ def mongoimport_file(
         )
 
     if result.returncode != 0:
-        raise subprocess.CalledProcessError(
-            result.returncode, command,
-            output=f"mongoimport failed. See log: {log_file}",
+        raise RuntimeError(
+            f"mongoimport failed for {filepath} -> {db_name}.{collection_name}. "
+            f"See log: {log_file}"
         )
 
 

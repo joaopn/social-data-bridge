@@ -156,6 +156,19 @@ def run_questionnaire(hw, source_name, db_setup):
         if has_postgres:
             settings["db_schema"] = ask("PostgreSQL schema name", source_name)
 
+        # ---- Input format ----
+        section_header("Input Format")
+        print("  NDJSON: one JSON object per line (default for most data dumps)")
+        print("  CSV: comma/tab/pipe-separated values with headers")
+        settings["input_format"] = ask_choice(
+            "Raw input file format", ["ndjson", "csv"], default="ndjson",
+        )
+        if settings["input_format"] == "csv":
+            delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", ",")
+            if delimiter == "\\t":
+                delimiter = "\t"
+            settings["input_csv_delimiter"] = delimiter
+
         settings["custom_file_patterns"] = {}
         for dt in data_types:
             print(f"\n  File patterns for '{dt}':")
@@ -177,7 +190,8 @@ def run_questionnaire(hw, source_name, db_setup):
                     default="zst",
                 )
 
-            patterns = derive_file_patterns(dump_glob, compression)
+            input_format = settings.get("input_format", "ndjson")
+            patterns = derive_file_patterns(dump_glob, compression, input_format=input_format)
             settings["custom_file_patterns"][dt] = patterns
             print(f"    Detected: compression={compression}, prefix={patterns['prefix']}")
 
@@ -238,6 +252,10 @@ def generate_platform_yaml(settings):
     config = {
         "file_format": settings.get("file_format", "parquet"),
     }
+    if settings.get("input_format", "ndjson") != "ndjson":
+        config["input_format"] = settings["input_format"]
+    if settings.get("input_csv_delimiter", ",") != ",":
+        config["input_csv_delimiter"] = settings["input_csv_delimiter"]
     if "parquet_row_group_size" in settings:
         config["parquet_row_group_size"] = settings["parquet_row_group_size"]
     config.update({
@@ -383,6 +401,11 @@ def print_summary(settings, files_to_write):
 
     print(f"  Source:      {source_name}")
     print(f"  Platform:    {settings['platform']}")
+    input_fmt = settings.get('input_format', 'ndjson')
+    if input_fmt != 'ndjson':
+        print(f"  Input fmt:   {input_fmt}")
+        if settings.get('input_csv_delimiter', ',') != ',':
+            print(f"  Delimiter:   {repr(settings['input_csv_delimiter'])}")
     print(f"  File format: {settings.get('file_format', 'parquet')}")
     if "parquet_row_group_size" in settings:
         print(f"  Row-group:   {settings['parquet_row_group_size']:,} rows")

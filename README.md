@@ -9,7 +9,7 @@
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![ONNX](https://img.shields.io/badge/ONNX-Runtime-005CED.svg?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
-A robust pipeline for processing, classifying, and ingesting large-scale JSON data dumps into research-ready databases. Interactive CLI setup, step-by-step execution with automatic resume and recovery. Built for [Reddit Arctic Shift dumps](https://github.com/ArthurHeitmann/arctic_shift) and configurable to any high-volume record-based dataset.
+A researcher-focused pipeline for processing, classifying, and ingesting large-scale JSON and CSV data dumps into analysis-ready databases. Interactive CLI setup, step-by-step execution with automatic resume and recovery. Built for [Reddit Arctic Shift dumps](https://github.com/ArthurHeitmann/arctic_shift) and configurable to any high-volume record-based dataset.
 
 
 </div>
@@ -57,12 +57,12 @@ python sdb.py source status                 # Ingestion source status
 
 **Social Data Bridge** provides a complete pipeline for working with large-scale social media data dumps:
 
-- **Multi-platform support** — Reddit (with specialized features) or custom JSON platforms
+- **Multi-platform support** — Reddit (with specialized features) or custom JSON/CSV platforms
 - **Automatic detection and decompression** of `.zst`, `.gz`, `.xz`, and `.tar.gz` dump files
-- **Parsing** JSON to structured files (Parquet or CSV) with configurable field extraction
+- **Parsing** JSON and CSV input to structured files (Parquet or CSV) with configurable field extraction
 - **Modular classification** — CPU-based (Lingua) and GPU-based (transformers) with multi-GPU parallelization and language filtering
 - **PostgreSQL ingestion** of parsed files with finetuned settings and duplicate handling
-- **MongoDB ingestion** of raw JSON directly after extraction, for raw data inspection
+- **MongoDB ingestion** of raw JSON or CSV directly after extraction, for raw data inspection
 - **Optional authentication** with admin, read-only, and MCP-specific database users
 - **MCP servers** for PostgreSQL and MongoDB, exposing databases to AI tools (Claude Desktop, VS Code, Cursor)
 - **Config-based** addition of new platforms and classifiers
@@ -239,14 +239,14 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 
 | Profile | Description | Input | Output |
 |---------|-------------|-------|--------|
-| `parse` | Decompress dumps, parse JSON to Parquet/CSV | Compressed dump files (`.zst`, `.gz`, `.xz`, `.tar.gz`) | `PARSED_PATH/` |
+| `parse` | Decompress dumps, parse JSON/CSV to Parquet/CSV | Compressed dump files (`.zst`, `.gz`, `.xz`, `.tar.gz`) | `PARSED_PATH/` |
 | `lingua` | Lingua language detection (CPU) | Parsed files | `OUTPUT_PATH/lingua/` |
 | `ml` | Transformer classifiers (GPU) | Parsed files + Lingua output | `OUTPUT_PATH/{classifier}/` |
 | `postgres` | PostgreSQL database server | — | — |
 | `postgres_ingest` | Ingest into PostgreSQL | Parsed files (or Lingua-enriched) | PostgreSQL tables |
 | `postgres_ml` | Ingest ML outputs into PostgreSQL | Classifier output files | PostgreSQL tables |
 | `mongo` | MongoDB database server | — | — |
-| `mongo_ingest` | Ingest raw JSON into MongoDB | Extracted JSON/NDJSON | MongoDB collections |
+| `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV | MongoDB collections |
 
 > [!NOTE]
 > GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). All profiles track progress and resume automatically — rerun any profile safely without reprocessing completed files.
@@ -261,9 +261,9 @@ For detailed configuration and algorithm documentation, see the per-profile docs
 | Platform | Description | Default |
 |----------|-------------|---------|
 | `reddit` | Specialized Reddit features: waterfall deletion detection, base-36 ID conversion, format compatibility | Yes |
-| `custom/<name>` | JSON parsing for arbitrary data: dot-notation, array indexing, type enforcement | No |
+| `custom/<name>` | JSON and CSV parsing for arbitrary data: dot-notation, array indexing, type enforcement | No |
 
-The default platform is Reddit. To process arbitrary JSON/NDJSON data, select `custom` during `sdb.py source add` and configure your platform interactively.
+The default platform is Reddit. To process arbitrary JSON/NDJSON or CSV data, select `custom` during `sdb.py source add` and configure your platform interactively.
 
 - [Reddit Platform Reference](docs/platforms/reddit.md)
 - [Custom Platform Setup](docs/platforms/custom.md)
@@ -300,7 +300,7 @@ Yes! Use `python sdb.py run lingua` or `python sdb.py run ml` independently. The
 <details>
 <summary><strong>Can I use this for non-Reddit data?</strong></summary>
 
-Yes! Select `custom` during `python sdb.py source add <name>` to process arbitrary JSON/NDJSON data. See the [Custom Platform](docs/platforms/custom.md) setup guide.
+Yes! Select `custom` during `python sdb.py source add <name>` to process arbitrary JSON/NDJSON or CSV data. See the [Custom Platform](docs/platforms/custom.md) setup guide.
 
 </details>
 
