@@ -184,7 +184,7 @@ class PipelineState:
     
     def recover_from_mongodb(self):
         """
-        Recover processed files list by querying the _sdb_metadata collection in MongoDB.
+        Recover processed files list by querying the _sdp_metadata collection in MongoDB.
 
         Uses the db_config dict which should contain: host, port, db_name, and optionally data_type.
         Works for both per_file and per_data_type collection strategies.

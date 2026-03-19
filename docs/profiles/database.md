@@ -333,12 +333,12 @@ Estimates for full Reddit data dumps:
 **MongoDB**: State files in `$MONGO_DATA_PATH/state_tracking/`:
 - `{PLATFORM}_mongo_ingest_{data_type}.json` — tracks ingested files
 
-Additionally, MongoDB stores ingested file IDs in a `_sdb_metadata` collection per database, enabling state recovery even if state files are lost.
+Additionally, MongoDB stores ingested file IDs in a `_sdp_metadata` collection per database, enabling state recovery even if state files are lost.
 
 ### Database Recovery
 
 - **PostgreSQL**: On first run, if no state file exists, `postgres_ingest` queries the database for unique datasets already present.
-- **MongoDB**: On first run, if no state file exists, `mongo_ingest` queries the `_sdb_metadata` collection to rebuild the list of already-ingested files.
+- **MongoDB**: On first run, if no state file exists, `mongo_ingest` queries the `_sdp_metadata` collection to rebuild the list of already-ingested files.
 
 ### Reprocessing
 
@@ -388,7 +388,7 @@ Ingests raw extracted files directly into MongoDB using `mongoimport`. Supports 
    - Creates a collection with zstd WiredTiger compression
    - Runs `mongoimport` for bulk insertion (blind insert, no upsert)
    - Auto-detects CSV files (by `.csv` extension) and passes `--type csv --headerline` to mongoimport
-   - Records the file in the `_sdb_metadata` collection for state tracking
+   - Records the file in the `_sdp_metadata` collection for state tracking
 3. **Index**: Creates configured indexes on each collection
 
 ### Collection Strategies

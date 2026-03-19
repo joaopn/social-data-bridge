@@ -38,6 +38,14 @@ CONFIG_DIR = ROOT / "config"
 
 VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
 
+# Map profile names to docker compose service names (only where they differ)
+PROFILE_SERVICE_MAP = {
+    "ml": "ml-gpu",
+    "postgres_ingest": "postgres-ingest",
+    "postgres_ml": "postgres-ml",
+    "mongo_ingest": "mongo-ingest",
+}
+
 
 # ============================================================================
 # Helpers
@@ -1345,9 +1353,11 @@ def cmd_run(args):
     for key, value in env_overrides.items():
         os.environ[key] = value
 
-    compose_args = ["--profile", profile, "up"]
+    service = PROFILE_SERVICE_MAP.get(profile, profile)
+    compose_args = ["--profile", profile, "run", "--rm"]
     if args.build:
         compose_args.append("--build")
+    compose_args.append(service)
 
     print(f"  Source: {source} (platform: {platform})")
     result = docker_compose(*compose_args)

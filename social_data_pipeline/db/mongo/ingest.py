@@ -180,14 +180,14 @@ def record_ingested_file(
     password: str = None,
 ) -> None:
     """
-    Record an ingested file in the _sdb_metadata collection.
+    Record an ingested file in the _sdp_metadata collection.
 
     Stores file_id, data_type, collection_name, and timestamp.
     Used for state recovery when the state JSON file is lost.
     """
     client = _get_client(host, port, user, password)
     try:
-        metadata = client[db_name]['_sdb_metadata']
+        metadata = client[db_name]['_sdp_metadata']
         metadata.update_one(
             {'file_id': file_id, 'data_type': data_type},
             {
@@ -213,7 +213,7 @@ def get_ingested_files(
     data_type: Optional[str] = None,
 ) -> List[str]:
     """
-    Get list of ingested file_ids from the _sdb_metadata collection.
+    Get list of ingested file_ids from the _sdp_metadata collection.
 
     Args:
         db_name: MongoDB database name
@@ -226,7 +226,7 @@ def get_ingested_files(
     """
     client = _get_client(host, port, user, password)
     try:
-        metadata = client[db_name]['_sdb_metadata']
+        metadata = client[db_name]['_sdp_metadata']
         query = {'data_type': data_type} if data_type else {}
         return [doc['file_id'] for doc in metadata.find(query, {'file_id': 1, '_id': 0})]
     finally:
