@@ -36,9 +36,6 @@ AutoTokenizer = None
 # Thread-local storage for worker models
 _thread_local = threading.local()
 
-# Mandatory fields always included in output (required for ON CONFLICT resolution)
-# Same as base table ingestion - ensures consistent duplicate handling
-MANDATORY_FIELDS = ['id', 'dataset', 'retrieved_utc']
 
 
 def _lazy_import_deps():
@@ -804,12 +801,13 @@ class TransformerClassifier:
                 df_out = df_out.drop(["_text", "_lang_ok", "_text_ok"])
             
             # Filter to specified fields if configured
-            # Always keep: mandatory fields (id, dataset, retrieved_utc) for ON CONFLICT resolution
+            # Always keep: mandatory fields (from platform config) for ON CONFLICT resolution
             # Plus: specified fields + classifier output columns (id2label values)
             classifier_cols = set(id2label.values())
-            
-            # Start with mandatory fields (same as base table for consistent duplicate handling)
-            cols_to_keep = [f for f in MANDATORY_FIELDS if f in df_out.columns]
+
+            # Start with mandatory fields (from platform config, for consistent duplicate handling)
+            mandatory_fields = self.global_config.get('mandatory_fields', [])
+            cols_to_keep = [f for f in mandatory_fields if f in df_out.columns]
             
             # Add configured fields (excluding mandatory to avoid duplicates)
             if self.fields:

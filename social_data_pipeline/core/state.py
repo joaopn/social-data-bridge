@@ -13,22 +13,24 @@ from datetime import datetime
 class PipelineState:
     """Manages pipeline state for resume capability."""
     
-    def __init__(self, state_file: str = "/data/output/pipeline_state.json", db_config: dict = None, 
-                 data_types: list = None, file_prefixes: dict = None):
+    def __init__(self, state_file: str = "/data/output/pipeline_state.json", db_config: dict = None,
+                 data_types: list = None, file_prefixes: dict = None, state_field: str = None):
         """
         Initialize pipeline state manager.
-        
+
         Args:
             state_file: Path to state JSON file
             db_config: Optional database config dict for recovery (postgres_ingest profile)
                       Expected keys: name, user, host, port, schema
             data_types: Optional list of data types (table names) for database recovery
             file_prefixes: Optional dict mapping data_type -> file prefix for recovery
+            state_field: Column name used for tracking ingested datasets in database recovery
         """
         self.state_file = Path(state_file)
         self.db_config = db_config
         self.data_types = data_types or []
         self.file_prefixes = file_prefixes or {}
+        self.state_field = state_field
         self._load_state()
     
     def _load_state(self):
@@ -57,11 +59,15 @@ class PipelineState:
     
     def recover_from_database(self):
         """
-        Recover processed files list by querying unique datasets from database tables.
-        Only applicable for postgres_ingest profile. Call this after database connection is available.
+        Recover processed files list by querying unique values of the state_field
+        from database tables. Only applicable for postgres_ingest profile.
         """
         if not self.db_config:
             print("[sdp] No database config provided, cannot recover from database")
+            return
+
+        if not self.state_field:
+            print("[sdp] No state_field configured, cannot recover from database")
             return
         
         try:
@@ -97,17 +103,17 @@ class PipelineState:
                     for data_type in self.data_types:
                         if table_exists(data_type):
                             curr.execute(f"""
-                                SELECT DISTINCT dataset FROM {schema}.{data_type} ORDER BY dataset
+                                SELECT DISTINCT {self.state_field} FROM {schema}.{data_type} ORDER BY {self.state_field}
                             """)
                             type_count = 0
                             prefix = self.file_prefixes.get(data_type, f"{data_type}_")
                             for row in curr.fetchall():
-                                dataset = row[0].strip()  # dataset is char(7), may have trailing space
-                                file_id = f"{prefix}{dataset}"
+                                value = row[0].strip()  # char(N) may have trailing space
+                                file_id = f"{prefix}{value}"
                                 if file_id not in recovered:
                                     recovered.append(file_id)
                                     type_count += 1
-                            print(f"[sdp] Found {type_count} datasets in {data_type} table")
+                            print(f"[sdp] Found {type_count} ingested files in {data_type} table")
                         else:
                             print(f"[sdp] {data_type} table does not exist yet")
                         

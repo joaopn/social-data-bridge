@@ -184,6 +184,10 @@ def run_pipeline(config_dir: str = "/app/config"):
 
     file_format = platform_config.get('file_format', 'csv')
 
+    # Primary key and upsert ordering from platform config
+    pk_column = platform_config.get('primary_key')
+    order_field = platform_config.get('upsert_order_field')
+
     print(f"[sdp] Database: {db_config.get('name')}@{db_config.get('host')}:{db_config.get('port')}")
     print(f"[sdp] Schema: {db_config.get('schema')}")
     print(f"[sdp] Output dir: {output_dir}")
@@ -374,6 +378,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     user=db_config['user'],
                     column_list=column_list,
                     column_types=column_types,
+                    pk_column=pk_column,
                     tablespace=get_tablespace(dt),
                     password=password
                 )
@@ -402,32 +407,31 @@ def run_pipeline(config_dir: str = "/app/config"):
                         local_fail += 1
                         raise  # Abort fast load on any failure
                 
-                # Step 4: Delete duplicates
-                # Determine order column (retrieved_utc if present, else None)
-                order_col = 'retrieved_utc' if 'retrieved_utc' in column_list else None
-                delete_duplicates(
-                    table=table_name,
-                    schema=db_config['schema'],
-                    dbname=db_config['name'],
-                    host=db_config['host'],
-                    port=db_config['port'],
-                    user=db_config['user'],
-                    order_column=order_col,
-                    password=password
-                )
-                
-                # Step 5: Finalize (add PK, add FK if enabled)
-                finalize_fast_load_table(
-                    table=table_name,
-                    schema=db_config['schema'],
-                    dbname=db_config['name'],
-                    host=db_config['host'],
-                    port=db_config['port'],
-                    user=db_config['user'],
-                    fk_reference_table=dt if use_foreign_key else None,
-                    tablespace=get_tablespace(dt),
-                    password=password
-                )
+                # Step 4-5: Dedup and finalize (only if platform defines a primary key)
+                if pk_column:
+                    delete_duplicates(
+                        table=table_name,
+                        schema=db_config['schema'],
+                        dbname=db_config['name'],
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user'],
+                        pk_column=pk_column,
+                        order_column=order_field if order_field and order_field in column_list else None,
+                        password=password
+                    )
+                    finalize_fast_load_table(
+                        table=table_name,
+                        schema=db_config['schema'],
+                        dbname=db_config['name'],
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user'],
+                        pk_column=pk_column,
+                        fk_reference_table=dt if use_foreign_key else None,
+                        tablespace=get_tablespace(dt),
+                        password=password
+                    )
                 
                 print(f"[sdp] Fast load completed for {table_name}")
                 return local_success, local_fail
@@ -493,7 +497,9 @@ def run_pipeline(config_dir: str = "/app/config"):
                             column_overrides=column_overrides,
                             use_foreign_key=use_foreign_key,
                             suffix=suffix,
-                            password=password
+                            password=password,
+                            pk_column=pk_column,
+                            order_field=order_field
                         )
 
                         states[dt].mark_completed(file_id)

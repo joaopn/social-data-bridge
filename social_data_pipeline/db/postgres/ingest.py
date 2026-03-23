@@ -38,16 +38,6 @@ def _connect(dbname, user, host, port, password=None, **kwargs):
     return psycopg.connect(**params)
 
 
-# Mandatory fields always included (in this order at start of columns)
-MANDATORY_FIELDS = ['dataset', 'id', 'retrieved_utc']
-
-# Mandatory field SQL definitions
-MANDATORY_FIELD_SQL = {
-    'dataset': 'character(7) NOT NULL',
-    'id': 'character varying(7) PRIMARY KEY',
-    'retrieved_utc': 'integer'
-}
-
 # All TEXT fields use STORAGE EXTERNAL (uncompressed TOAST)
 # This disables PostgreSQL compression - use filesystem compression (ZFS, BTRFS) instead
 
@@ -217,7 +207,7 @@ def get_column_list(data_type: str, platform_config: Dict, csv_file: str = None)
     """
     Get ordered list of columns for a data type.
 
-    Order: [dataset, id, retrieved_utc, ...fields from platform config..., (lingua fields if applicable)]
+    Order: [mandatory_fields..., ...fields from platform config..., (lingua fields if applicable)]
 
     Args:
         data_type: Data type key (e.g., 'submissions', 'comments')
@@ -234,8 +224,8 @@ def get_column_list(data_type: str, platform_config: Dict, csv_file: str = None)
     if not yaml_fields:
         raise ConfigurationError(f"No fields configured for data type: {data_type}")
 
-    # Mandatory fields first, then YAML fields
-    columns = MANDATORY_FIELDS + yaml_fields
+    mandatory_fields = platform_config.get('mandatory_fields', [])
+    columns = mandatory_fields + yaml_fields
 
     # Append lingua columns if this is a lingua file
     if csv_file and 'lingua' in csv_file:
@@ -261,13 +251,13 @@ def get_create_table_query(
     filesystem compression (ZFS, BTRFS).
 
     Args:
-        data_type: 'submissions' or 'comments'
+        data_type: Data type name (e.g., 'submissions', 'comments')
         schema: Database schema name
         table: Table name
         platform_config: Loaded platform configuration dict (must contain 'fields' and 'field_types')
         csv_file: Optional CSV file path - if contains 'lingua', lingua columns are included
         unlogged: If True, create UNLOGGED table (faster, no WAL, no crash recovery)
-        include_pk: If True, include PRIMARY KEY on id column
+        include_pk: If True, include PRIMARY KEY on the primary_key column
         tablespace: Optional tablespace name (None = default pg_default)
 
     Returns:
@@ -284,26 +274,31 @@ def get_create_table_query(
     if not field_types:
         raise ConfigurationError("No field_types configured in platform config")
 
+    pk_column = platform_config.get('primary_key')
+    mandatory_fields = platform_config.get('mandatory_fields', [])
+
     # Get column list (includes lingua columns if csv_file is a lingua file)
     columns = get_column_list(data_type, platform_config, csv_file)
-    
+
     # Build column definitions
     col_defs = []
     for col in columns:
-        if col == 'id':
-            # Handle id column with optional PRIMARY KEY
-            if include_pk:
-                col_defs.append(f"    {col} {MANDATORY_FIELD_SQL[col]}")
-            else:
-                col_defs.append(f"    {col} character varying(7)")
-        elif col in MANDATORY_FIELD_SQL:
-            col_defs.append(f"    {col} {MANDATORY_FIELD_SQL[col]}")
-        elif col in field_types:
+        if col in field_types:
             sql_type = yaml_type_to_sql(field_types[col])
-            col_defs.append(f"    {col} {sql_type}")
         else:
-            # Default to TEXT for unknown fields
-            col_defs.append(f"    {col} TEXT")
+            sql_type = 'TEXT STORAGE EXTERNAL'
+
+        # Append constraints
+        constraints = []
+        if col == pk_column and include_pk:
+            constraints.append('PRIMARY KEY')
+        if col in mandatory_fields and col != pk_column:
+            constraints.append('NOT NULL')
+
+        if constraints:
+            col_defs.append(f"    {col} {sql_type} {' '.join(constraints)}")
+        else:
+            col_defs.append(f"    {col} {sql_type}")
 
     columns_sql = ",\n".join(col_defs)
 
@@ -340,10 +335,10 @@ def get_ingest_query(
     Parquet uses pg_parquet extension (FORMAT parquet).
 
     Args:
-        data_type: 'submissions' or 'comments'
+        data_type: Data type name (e.g., 'submissions', 'comments')
         schema: Database schema name
         table: Table name
-        check_duplicates: Whether to handle duplicate IDs
+        check_duplicates: Whether to handle duplicate primary keys
         platform_config: Loaded platform configuration dict (must contain 'fields')
         csv_file: Optional file path - if contains 'lingua', lingua columns are included
 
@@ -354,12 +349,21 @@ def get_ingest_query(
     full_table = f"{schema}.{table}"
     temp_table = f"temp_{data_type}"
 
+    pk_column = platform_config.get('primary_key')
+    order_field = platform_config.get('upsert_order_field')
+
+    if check_duplicates and not pk_column:
+        raise ConfigurationError(
+            "check_duplicates requires a primary_key in platform config. "
+            "Either set primary_key or disable check_duplicates."
+        )
+
     # Get column list from platform config (includes lingua columns if csv_file is a lingua file)
     columns_list = get_column_list(data_type, platform_config, csv_file)
     columns = ", ".join(columns_list)
 
-    # Fields to update on conflict (all except 'id' which is the primary key)
-    update_fields = [col for col in columns_list if col != 'id']
+    # Fields to update on conflict (all except the primary key)
+    update_fields = [col for col in columns_list if col != pk_column]
     update_set = ",\n                ".join(
         f"{col} = EXCLUDED.{col}" for col in update_fields
     )
@@ -381,6 +385,16 @@ def get_ingest_query(
             WITH ({copy_options});
             """
     else:
+        # Build ORDER BY and WHERE clauses based on platform config
+        if order_field and order_field in columns_list:
+            order_by = f"{pk_column}, {order_field} DESC"
+            where_clause = f"""
+            WHERE
+                {full_table}.{order_field} < EXCLUDED.{order_field}"""
+        else:
+            order_by = pk_column
+            where_clause = ""
+
         return f"""
             CREATE TEMPORARY TABLE {temp_table}
             AS SELECT * FROM {full_table} LIMIT 0;
@@ -390,10 +404,10 @@ def get_ingest_query(
             WITH ({copy_options});
 
             WITH latest_rows AS (
-                SELECT DISTINCT ON (id)
+                SELECT DISTINCT ON ({pk_column})
                     {columns}
                 FROM {temp_table}
-                ORDER BY id, retrieved_utc DESC
+                ORDER BY {order_by}
             )
             INSERT INTO {full_table}
                 ({columns})
@@ -401,10 +415,8 @@ def get_ingest_query(
                 {columns}
             FROM
                 latest_rows
-            ON CONFLICT (id) DO UPDATE SET
-                {update_set}
-            WHERE
-                {full_table}.retrieved_utc < EXCLUDED.retrieved_utc;
+            ON CONFLICT ({pk_column}) DO UPDATE SET
+                {update_set}{where_clause};
 
             DROP TABLE {temp_table};
             """
@@ -512,14 +524,15 @@ def delete_duplicates(
     port: int = 5432,
     user: str = 'postgres',
     password: str = None,
-    order_column: Optional[str] = 'retrieved_utc'
+    pk_column: str = None,
+    order_column: Optional[str] = None
 ) -> int:
     """
-    Delete duplicate rows keeping the best one per id.
-    
+    Delete duplicate rows keeping the best one per primary key.
+
     Uses ctid + ROW_NUMBER() window function. No temporary index needed -
     PostgreSQL's external merge sort handles this efficiently for rare duplicates.
-    
+
     Args:
         table: Table name
         schema: Schema name
@@ -527,26 +540,27 @@ def delete_duplicates(
         host: Database host
         port: Database port
         user: Database user
+        pk_column: Primary key column name
         order_column: Column to use for ordering duplicates (keeps highest value).
-                      If None, arbitrary row is kept per id.
-        
+                      If None, arbitrary row is kept per pk.
+
     Returns:
         Number of rows deleted
     """
     full_table = f"{schema}.{table}"
-    
+
     # Build ORDER BY clause
     if order_column:
-        order_by = f"id, {order_column} DESC"
+        order_by = f"{pk_column}, {order_column} DESC"
     else:
-        order_by = "id"
-    
+        order_by = pk_column
+
     query = f"""
         DELETE FROM {full_table}
         WHERE ctid IN (
             SELECT ctid FROM (
                 SELECT ctid, ROW_NUMBER() OVER (
-                    PARTITION BY id ORDER BY {order_by}
+                    PARTITION BY {pk_column} ORDER BY {order_by}
                 ) as rn
                 FROM {full_table}
             ) sub WHERE rn > 1
@@ -573,6 +587,7 @@ def finalize_fast_load_table(
     port: int = 5432,
     user: str = 'postgres',
     password: str = None,
+    pk_column: str = None,
     fk_reference_table: Optional[str] = None,
     tablespace: str = None
 ):
@@ -586,14 +601,15 @@ def finalize_fast_load_table(
         host: Database host
         port: Database port
         user: Database user
+        pk_column: Primary key column name
         fk_reference_table: If provided, add FK constraint referencing this table (same schema)
         tablespace: Optional tablespace name for PK index (None = default)
     """
     full_table = f"{schema}.{table}"
 
     # Add PRIMARY KEY
-    print(f"[sdp] Adding PRIMARY KEY to {full_table}...")
-    add_pk_query = f"ALTER TABLE {full_table} ADD PRIMARY KEY (id);"
+    print(f"[sdp] Adding PRIMARY KEY ({pk_column}) to {full_table}...")
+    add_pk_query = f"ALTER TABLE {full_table} ADD PRIMARY KEY ({pk_column});"
 
     with _connect(dbname, user, host, port, password) as conn:
         with conn.cursor() as curr:
@@ -609,8 +625,8 @@ def finalize_fast_load_table(
         ref_table = f"{schema}.{fk_reference_table}"
         if table_exists(fk_reference_table, schema, dbname, host, port, user, password):
             print(f"[sdp] Adding FOREIGN KEY to {full_table} -> {ref_table}...")
-            fk_name = f"fk_{table}_id"
-            add_fk_query = f"ALTER TABLE {full_table} ADD CONSTRAINT {fk_name} FOREIGN KEY (id) REFERENCES {ref_table}(id);"
+            fk_name = f"fk_{table}_{pk_column}"
+            add_fk_query = f"ALTER TABLE {full_table} ADD CONSTRAINT {fk_name} FOREIGN KEY ({pk_column}) REFERENCES {ref_table}({pk_column});"
 
             with _connect(dbname, user, host, port, password) as conn:
                 with conn.cursor() as curr:
@@ -709,6 +725,7 @@ def create_fast_load_classifier_table(
     column_list: List[str],
     column_types: Dict[str, str],
     password: str = None,
+    pk_column: str = None,
     tablespace: str = None
 ):
     """
@@ -716,14 +733,15 @@ def create_fast_load_classifier_table(
 
     Args:
         table_name: Classifier table name (e.g., 'submissions_lingua')
-        data_type: 'submissions' or 'comments' (for FK reference later)
+        data_type: Data type name (for FK reference later)
         schema: Schema name
         dbname: Database name
         host: Database host
         port: Database port
         user: Database user
         column_list: List of column names in CSV order
-        column_types: Dict of column_name -> sql_type (excludes 'id')
+        column_types: Dict of column_name -> sql_type
+        pk_column: Primary key column name
         tablespace: Optional tablespace name (None = default pg_default)
     """
     ts_label = f" on tablespace {tablespace}" if tablespace else ""
@@ -733,7 +751,7 @@ def create_fast_load_classifier_table(
 
     create_query = get_classifier_create_table_query(
         table_name, data_type, schema, column_list, column_types,
-        use_foreign_key=False, include_pk=False, tablespace=tablespace
+        pk_column=pk_column, use_foreign_key=False, include_pk=False, tablespace=tablespace
     )
     execute_query(create_query, dbname, host, port, user, password)
 
@@ -1048,8 +1066,6 @@ def infer_classifier_schema(
         all_cols = schema.names
         column_types = {}
         for field in schema:
-            if field.name == 'id':
-                continue
             if field.name in column_overrides:
                 column_types[field.name] = yaml_type_to_sql(column_overrides[field.name])
             else:
@@ -1071,8 +1087,8 @@ def infer_classifier_schema(
         if not all_cols:
             raise ValueError(f"No columns found in CSV: {csv_file}")
 
-        # Collect sample values for each column (except 'id' which is always varchar)
-        samples: Dict[str, List[str]] = {col: [] for col in all_cols if col != 'id'}
+        # Collect sample values for each column
+        samples: Dict[str, List[str]] = {col: [] for col in all_cols}
 
         for i, row in enumerate(reader):
             if i >= n_rows:
@@ -1080,12 +1096,10 @@ def infer_classifier_schema(
             for col in samples:
                 samples[col].append(row.get(col, ""))
 
-    # Infer types (id is always varchar(7) PRIMARY KEY, handled separately)
+    # Infer types from samples, with column_overrides taking precedence
     column_types = {}
     nullable_cols = []
     for col in all_cols:
-        if col == 'id':
-            continue  # id handled separately in table creation
         if col in column_overrides:
             column_types[col] = yaml_type_to_sql(column_overrides[col])
         else:
@@ -1104,6 +1118,7 @@ def get_classifier_create_table_query(
     schema: str,
     column_list: List[str],
     column_types: Dict[str, str],
+    pk_column: str = None,
     use_foreign_key: bool = True,
     unlogged: bool = False,
     include_pk: bool = True,
@@ -1113,19 +1128,20 @@ def get_classifier_create_table_query(
     Generate CREATE TABLE query for a classifier output table.
 
     Classifier tables have:
-    - id VARCHAR(7) PRIMARY KEY (unless include_pk=False)
-    - Optional FOREIGN KEY to main table (submissions/comments)
+    - Primary key column with PRIMARY KEY (unless include_pk=False), type from column_types
+    - Optional FOREIGN KEY to main table
     - All other columns from CSV with inferred types
 
     Args:
         table_name: Full table name (e.g., 'submissions_lingua')
-        data_type: 'submissions' or 'comments' (for FK reference)
+        data_type: Data type name (for FK reference)
         schema: Database schema name
         column_list: List of column names in CSV order
-        column_types: Dict of column_name -> sql_type (excludes 'id')
+        column_types: Dict of column_name -> sql_type
+        pk_column: Primary key column name
         use_foreign_key: If True, add FK constraint to main table
         unlogged: If True, create UNLOGGED table (faster, no WAL, no crash recovery)
-        include_pk: If True, include PRIMARY KEY on id column
+        include_pk: If True, include PRIMARY KEY on pk_column
         tablespace: Optional tablespace name (None = default pg_default)
 
     Returns:
@@ -1133,22 +1149,22 @@ def get_classifier_create_table_query(
     """
     full_table = f"{schema}.{table_name}"
     main_table = f"{schema}.{data_type}"
-    
+
     # Build column definitions in CSV order
     col_defs = []
     for col in column_list:
-        if col == 'id':
+        sql_type = column_types.get(col, 'text')
+        if col == pk_column:
             if include_pk:
-                col_defs.append("    id character varying(7) PRIMARY KEY")
+                col_defs.append(f"    {col} {sql_type} PRIMARY KEY")
             else:
-                col_defs.append("    id character varying(7)")
+                col_defs.append(f"    {col} {sql_type}")
         else:
-            sql_type = column_types.get(col, 'text')
             col_defs.append(f"    {col} {sql_type}")
-    
+
     # Add foreign key constraint if enabled (only if also including PK)
-    if use_foreign_key and include_pk:
-        col_defs.append(f"    CONSTRAINT fk_{table_name}_id FOREIGN KEY (id) REFERENCES {main_table}(id)")
+    if use_foreign_key and include_pk and pk_column:
+        col_defs.append(f"    CONSTRAINT fk_{table_name}_{pk_column} FOREIGN KEY ({pk_column}) REFERENCES {main_table}({pk_column})")
 
     columns_sql = ",\n".join(col_defs)
 
@@ -1168,6 +1184,8 @@ def get_classifier_ingest_query(
     schema: str,
     column_list: List[str],
     check_duplicates: bool,
+    pk_column: str = None,
+    order_field: str = None,
     nullable_cols: Optional[List[str]] = None,
     csv_file: str = None
 ) -> str:
@@ -1180,7 +1198,9 @@ def get_classifier_ingest_query(
         table_name: Full table name (e.g., 'submissions_lingua')
         schema: Database schema name
         column_list: List of column names in CSV order
-        check_duplicates: Whether to handle duplicate IDs
+        check_duplicates: Whether to handle duplicate primary keys
+        pk_column: Primary key column name
+        order_field: Column for ordering during upsert (keeps highest value)
         nullable_cols: Columns that may have empty strings to treat as NULL
         csv_file: Optional file path for format detection
 
@@ -1189,6 +1209,12 @@ def get_classifier_ingest_query(
     """
     full_table = f"{schema}.{table_name}"
     temp_table = f"temp_{table_name}"
+
+    if check_duplicates and not pk_column:
+        raise ValueError(
+            f"check_duplicates requires pk_column for table {table_name}. "
+            "Either pass pk_column or disable check_duplicates."
+        )
 
     columns = ", ".join(column_list)
 
@@ -1201,20 +1227,13 @@ def get_classifier_ingest_query(
         if nullable_cols:
             force_null_cols = ", ".join(nullable_cols)
             copy_options += f", FORCE_NULL ({force_null_cols})"
-    
-    # Fields to update on conflict (all except 'id' which is the primary key)
-    update_fields = [col for col in column_list if col != 'id']
+
+    # Fields to update on conflict (all except the primary key)
+    update_fields = [col for col in column_list if col != pk_column]
     update_set = ",\n                ".join(
         f"{col} = EXCLUDED.{col}" for col in update_fields
     )
-    
-    # Determine ORDER BY clause for deduplication
-    # Use retrieved_utc if available to prefer most recent version
-    if 'retrieved_utc' in column_list:
-        order_by = "id, retrieved_utc DESC"
-    else:
-        order_by = "id"
-    
+
     if not check_duplicates:
         return f"""
             COPY {full_table}({columns})
@@ -1222,14 +1241,16 @@ def get_classifier_ingest_query(
             WITH ({copy_options});
             """
     else:
-        # Only add WHERE clause if retrieved_utc exists (for preferring newer versions)
-        if 'retrieved_utc' in column_list:
+        # Build ORDER BY and WHERE clauses based on config
+        if order_field and order_field in column_list:
+            order_by = f"{pk_column}, {order_field} DESC"
             where_clause = f"""
             WHERE
-                {full_table}.retrieved_utc < EXCLUDED.retrieved_utc"""
+                {full_table}.{order_field} < EXCLUDED.{order_field}"""
         else:
+            order_by = pk_column
             where_clause = ""
-        
+
         return f"""
             CREATE TEMPORARY TABLE {temp_table}
             AS SELECT * FROM {full_table} LIMIT 0;
@@ -1239,7 +1260,7 @@ def get_classifier_ingest_query(
             WITH ({copy_options});
 
             WITH latest_rows AS (
-                SELECT DISTINCT ON (id)
+                SELECT DISTINCT ON ({pk_column})
                     {columns}
                 FROM {temp_table}
                 ORDER BY {order_by}
@@ -1250,7 +1271,7 @@ def get_classifier_ingest_query(
                 {columns}
             FROM
                 latest_rows
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT ({pk_column}) DO UPDATE SET
                 {update_set}{where_clause};
 
             DROP TABLE {temp_table};
@@ -1314,17 +1335,19 @@ def ingest_classifier_csv(
     type_inference_rows: int = 1000,
     column_overrides: Optional[Dict[str, str]] = None,
     use_foreign_key: bool = True,
-    suffix: Optional[str] = None
+    suffix: Optional[str] = None,
+    pk_column: str = None,
+    order_field: str = None
 ):
     """
     Ingest a classifier CSV file into PostgreSQL.
-    
+
     Auto-infers column types from CSV data. Creates table if needed.
     Ingests the full CSV file directly via COPY (identical to base table ingestion).
-    
+
     Args:
         csv_file: Path to the CSV file
-        data_type: 'submissions' or 'comments'
+        data_type: Data type name (e.g., 'submissions', 'comments')
         classifier_name: Name of the classifier (e.g., 'lingua') - used for logging
         dbname: Database name
         schema: Schema name
@@ -1336,6 +1359,8 @@ def ingest_classifier_csv(
         column_overrides: Optional column type overrides
         use_foreign_key: If True, add FK constraint to main table (default: True)
         suffix: Suffix for table name (e.g., '_lingua'). If None, uses _{classifier_name}
+        pk_column: Primary key column name
+        order_field: Column for ordering during upsert conflict resolution
     """
     # Determine table suffix
     if suffix is None:
@@ -1371,8 +1396,8 @@ def ingest_classifier_csv(
         
         # Create table
         create_query = get_classifier_create_table_query(
-            table_name, data_type, schema, column_list, column_types, 
-            use_foreign_key=actual_use_fk
+            table_name, data_type, schema, column_list, column_types,
+            pk_column=pk_column, use_foreign_key=actual_use_fk
         )
         execute_query(create_query, dbname, host, port, user, password)
         fk_status = " (with FK)" if actual_use_fk else " (no FK)"
@@ -1387,7 +1412,9 @@ def ingest_classifier_csv(
     
     # Ingest data (COPY entire CSV directly, just like base table)
     ingest_query = get_classifier_ingest_query(
-        table_name, schema, column_list, check_duplicates, nullable_cols, csv_file=csv_file
+        table_name, schema, column_list, check_duplicates,
+        pk_column=pk_column, order_field=order_field,
+        nullable_cols=nullable_cols, csv_file=csv_file
     )
     execute_query(ingest_query, dbname, host, port, user, password, args=[_pg_server_path(csv_file)])
     

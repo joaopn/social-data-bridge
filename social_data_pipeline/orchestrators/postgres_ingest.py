@@ -294,6 +294,10 @@ def run_pipeline(config_dir: str = "/app/config"):
     file_format = platform_config.get('file_format', 'csv')
     ext = 'parquet' if file_format == 'parquet' else 'csv'
 
+    # Primary key and upsert ordering from platform config
+    pk_column = platform_config.get('primary_key')
+    order_field = platform_config.get('upsert_order_field')
+
     # Tablespace configuration
     tablespaces = config.get('tablespaces', {})
     table_tablespaces = config.get('table_tablespaces', {})
@@ -337,7 +341,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                 'password': db_config.get('password')
             },
             data_types=[dt],
-            file_prefixes={dt: file_prefixes.get(dt)}
+            file_prefixes={dt: file_prefixes.get(dt)},
+            state_field=platform_config.get('state_field')
         )
 
         # If state is empty, try to recover from database
@@ -547,6 +552,12 @@ def run_pipeline(config_dir: str = "/app/config"):
         parallel_ingestion = get_required(config, 'processing', 'parallel_ingestion')
         check_duplicates = get_required(config, 'processing', 'check_duplicates')
         cleanup_temp = get_required(config, 'processing', 'cleanup_temp')
+
+        if check_duplicates and not pk_column:
+            raise ConfigurationError(
+                "check_duplicates is enabled but no primary_key is defined in platform config. "
+                "Either set primary_key in platform.yaml or set check_duplicates: false in the postgres profile."
+            )
         # Ensure database and schema exist
         ensure_database_exists(
             dbname=db_config['name'],
@@ -671,28 +682,30 @@ def run_pipeline(config_dir: str = "/app/config"):
                         local_fail += 1
                         raise  # Abort fast load on any failure
                 
-                # Step 3: Delete duplicates
-                delete_duplicates(
-                    table=data_type,
-                    schema=db_config['schema'],
-                    dbname=db_config['name'],
-                    host=db_config['host'],
-                    port=db_config['port'],
-                    user=db_config['user'],
-                    password=password
-                )
-
-                # Step 4: Finalize (add PK)
-                finalize_fast_load_table(
-                    table=data_type,
-                    schema=db_config['schema'],
-                    dbname=db_config['name'],
-                    host=db_config['host'],
-                    port=db_config['port'],
-                    user=db_config['user'],
-                    tablespace=get_tablespace(data_type),
-                    password=password
-                )
+                # Step 3-4: Dedup and add PK (only if platform defines a primary key)
+                if pk_column:
+                    delete_duplicates(
+                        table=data_type,
+                        schema=db_config['schema'],
+                        dbname=db_config['name'],
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user'],
+                        password=password,
+                        pk_column=pk_column,
+                        order_column=order_field
+                    )
+                    finalize_fast_load_table(
+                        table=data_type,
+                        schema=db_config['schema'],
+                        dbname=db_config['name'],
+                        host=db_config['host'],
+                        port=db_config['port'],
+                        user=db_config['user'],
+                        pk_column=pk_column,
+                        tablespace=get_tablespace(data_type),
+                        password=password
+                    )
                 
                 print(f"[sdp] Completed {data_type}")
                 return local_success, local_fail

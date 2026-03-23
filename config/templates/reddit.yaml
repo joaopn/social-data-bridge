@@ -59,10 +59,29 @@ mongo_indexes:
     - subreddit
     - link_id
 
+# Mandatory fields: always prepended to column list (before fields listed per data_type)
+mandatory_fields:
+  - dataset
+  - id
+  - retrieved_utc
+
+# Primary key column (used for deduplication, ON CONFLICT, and table constraints)
+primary_key: id
+
+# Column used for ordering during upsert conflict resolution (keeps highest value).
+# Set to null or omit if not applicable.
+upsert_order_field: retrieved_utc
+
+# Column used for tracking which files have been ingested (for state recovery from database).
+# Must contain a value derived from the source filename (e.g., "2023-01" from RS_2023-01).
+state_field: dataset
+
 # Field type definitions
 # Used for data type enforcement during CSV parsing and database schema generation
-# Note: dataset, id, and retrieved_utc types are hardcoded (mandatory fields)
 field_types:
+  dataset: ['char', 7]
+  id: ['varchar', 7]
+  retrieved_utc: integer
   created_utc: integer
   author_created_utc: integer
   score: integer

@@ -26,8 +26,6 @@ except ImportError:
 # Output columns this classifier adds
 OUTPUT_COLUMNS = ['lang', 'lang_prob', 'lang2', 'lang2_prob', 'lang_chars']
 
-# Mandatory fields for ingest output (required for ON CONFLICT resolution)
-INGEST_MANDATORY_FIELDS = ['id', 'dataset', 'retrieved_utc']
 
 
 _cached_detector = None
@@ -105,7 +103,7 @@ def _build_text_expr(text_columns: List[str], remove_strings: List[str], remove_
 
 def _get_ingest_columns(config: Dict) -> List[str]:
     """Get list of columns to include in ingest output."""
-    columns = list(INGEST_MANDATORY_FIELDS)
+    columns = list(config.get('mandatory_fields', []))
 
     extra_fields = config.get('fields', [])
     if extra_fields:
