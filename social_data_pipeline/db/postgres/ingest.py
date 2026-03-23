@@ -833,6 +833,47 @@ def create_index(
                 raise
 
 
+def get_tables_in_schema(
+    schema: str,
+    dbname: str,
+    host: str = '127.0.0.1',
+    port: int = 5432,
+    user: str = 'postgres',
+    password: str = None
+) -> List[str]:
+    """Get list of table names in a schema."""
+    query = """
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = %s AND table_type = 'BASE TABLE'
+        ORDER BY table_name
+    """
+    with _connect(dbname, user, host, port, password) as conn:
+        with conn.cursor() as curr:
+            curr.execute(query, (schema,))
+            return [row[0] for row in curr.fetchall()]
+
+
+def get_indexes_on_table(
+    schema: str,
+    table: str,
+    dbname: str,
+    host: str = '127.0.0.1',
+    port: int = 5432,
+    user: str = 'postgres',
+    password: str = None
+) -> List[str]:
+    """Get list of index names on a table."""
+    query = """
+        SELECT indexname FROM pg_indexes
+        WHERE schemaname = %s AND tablename = %s
+        ORDER BY indexname
+    """
+    with _connect(dbname, user, host, port, password) as conn:
+        with conn.cursor() as curr:
+            curr.execute(query, (schema, table))
+            return [row[0] for row in curr.fetchall()]
+
+
 def ensure_database_exists(
     dbname: str,
     host: str = '127.0.0.1',

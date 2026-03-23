@@ -11,6 +11,7 @@ Usage:
     sdp.py db status                         Show database config and health
     sdp.py db unsetup                        Remove database config (and optionally data)
     sdp.py db recover-password               Reset database admin password
+    sdp.py db create-indexes [--source <name>] Interactively create database indexes
 
     sdp.py source add <name>                 Add a new source (interactive setup)
     sdp.py source configure <name>           Reconfigure existing source (platform-specific)
@@ -1083,6 +1084,404 @@ def cmd_db_recover_password(args):
 
 
 # ============================================================================
+# sdp db create-indexes
+# ============================================================================
+
+def _format_duration(seconds):
+    """Format seconds into a human-readable duration string."""
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"{minutes}m {secs:.0f}s"
+
+
+def _psql_query(port, db_name, query, password=None):
+    """Run a psql query via docker compose exec and return rows as lists of strings."""
+    env = dict(os.environ)
+    if password:
+        env["PGPASSWORD"] = password
+    result = subprocess.run(
+        ["docker", "compose", "exec", "-T", "postgres",
+         "psql", "-U", "postgres", "-p", str(port), "-d", db_name,
+         "-t", "-A", "-F", "\t", "-c", query],
+        cwd=ROOT, capture_output=True, text=True, env=env,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    return [line.split("\t") for line in lines]
+
+
+def _psql_exec(port, db_name, statement, password=None):
+    """Execute a psql statement via docker compose exec. Returns (success, stderr)."""
+    env = dict(os.environ)
+    if password:
+        env["PGPASSWORD"] = password
+    result = subprocess.run(
+        ["docker", "compose", "exec", "-T", "postgres",
+         "psql", "-U", "postgres", "-p", str(port), "-d", db_name,
+         "-c", statement],
+        cwd=ROOT, capture_output=True, text=True, env=env,
+    )
+    return result.returncode == 0, result.stderr.strip()
+
+
+def _mongosh_eval(port, script, password=None):
+    """Run a mongosh script via docker compose exec and return stdout."""
+    cmd = ["docker", "compose", "exec", "-T", "mongo", "mongosh", "--quiet"]
+    env_vars = load_env()
+    if password:
+        mongo_user = env_vars.get("MONGO_ADMIN_USER", "admin")
+        cmd += ["-u", mongo_user, "-p", password, "--authenticationDatabase", "admin"]
+    cmd += ["--eval", script]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    return result.stdout.strip()
+
+
+def _interactive_pg_indexes(source, platform_config, password):
+    """Interactive PostgreSQL index creation. Returns {table: [new_fields]} for config persistence."""
+    from social_data_pipeline.setup.utils import ask_multi_select, ask_list, section_header
+    import time
+    import yaml
+
+    section_header("PostgreSQL Index Creation")
+
+    db_yaml = _load_db_yaml("postgres")
+    port = int(db_yaml.get("port", 5432))
+    db_name = db_yaml.get("name", "datasets")
+    schema = platform_config.get("db_schema", source)
+
+    # Load parallel_index_workers from source postgres config if available
+    source_pg_path = CONFIG_DIR / "sources" / source / "postgres.yaml"
+    parallel_workers = 8
+    if source_pg_path.exists():
+        try:
+            source_pg = yaml.safe_load(source_pg_path.read_text()) or {}
+            parallel_workers = source_pg.get("processing", {}).get("parallel_index_workers", 8)
+        except Exception:
+            pass
+
+    try:
+        rows = _psql_query(port, db_name,
+            f"SELECT table_name FROM information_schema.tables "
+            f"WHERE table_schema = '{schema}' AND table_type = 'BASE TABLE' ORDER BY table_name",
+            password)
+        tables = [r[0] for r in rows]
+    except Exception as e:
+        print(f"\n  Could not connect to PostgreSQL: {e}")
+        print("  Is it running? (sdp db start)\n")
+        return {}
+
+    if not tables:
+        print(f"\n  No tables found in schema '{schema}'.\n")
+        return {}
+
+    print(f"  Schema: {schema}")
+    selected_tables = ask_multi_select("Select tables to create indexes on", tables)
+
+    created = {}  # {table: [fields]}
+
+    for table in selected_tables:
+        print(f"\n  --- {table} ---")
+
+        # Get columns
+        try:
+            rows = _psql_query(port, db_name,
+                f"SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = '{schema}' AND table_name = '{table}' "
+                f"ORDER BY ordinal_position", password)
+            columns = [r[0] for r in rows]
+            if columns:
+                print(f"  Columns: {', '.join(columns)}")
+        except Exception:
+            pass
+
+        # Get existing indexes
+        try:
+            rows = _psql_query(port, db_name,
+                f"SELECT indexname FROM pg_indexes "
+                f"WHERE schemaname = '{schema}' AND tablename = '{table}' "
+                f"ORDER BY indexname", password)
+            existing = [r[0] for r in rows]
+            if existing:
+                print(f"  Existing indexes: {', '.join(existing)}")
+            else:
+                print("  Existing indexes: (none)")
+        except Exception:
+            print("  Existing indexes: (could not query)")
+
+        fields = ask_list("New indexes (comma-separated field names, empty to skip)", default=[])
+        if not fields:
+            continue
+
+        table_created = []
+        for field in fields:
+            index_name = f"idx_{table}_{field}"
+            print(f"  Creating index: {index_name} ...", end=" ", flush=True)
+            t_start = time.time()
+
+            # Set session params for parallel index builds, then create index
+            statement = (
+                f"SET maintenance_work_mem = '2GB'; "
+                f"SET max_parallel_maintenance_workers = {parallel_workers}; "
+                f"CREATE INDEX IF NOT EXISTS {index_name} ON {schema}.{table} ({field});"
+            )
+            success, stderr = _psql_exec(port, db_name, statement, password)
+            duration = time.time() - t_start
+
+            if success:
+                print(f"done ({_format_duration(duration)})")
+                table_created.append(field)
+            else:
+                print(f"failed: {stderr}")
+
+        if table_created:
+            created[table] = table_created
+
+    return created
+
+
+def _interactive_mongo_indexes(source, platform_config, password):
+    """Interactive MongoDB index creation. Returns {data_type: [new_fields]} for config persistence."""
+    from social_data_pipeline.setup.utils import ask_multi_select, ask_list, section_header
+    import json
+    import time
+
+    section_header("MongoDB Index Creation")
+
+    data_types = platform_config.get("data_types", [])
+    if not data_types:
+        print("\n  No data types configured.\n")
+        return {}
+
+    # Determine platform string for db name resolution
+    if source == "reddit":
+        platform = "reddit"
+    else:
+        platform = f"custom/{source}"
+
+    # Resolve db names per data_type using the same logic as the orchestrator
+    def get_db_name(dt):
+        if 'mongo_db_name' in platform_config:
+            return platform_config['mongo_db_name']
+        template = platform_config.get('mongo_db_name_template', '{platform}_{data_type}')
+        safe_platform = platform.replace('/', '_')
+        return template.format(platform=safe_platform, data_type=dt)
+
+    # Discover collections per data_type via mongosh
+    all_dt_collections = {}  # {data_type: {db_name, collections}}
+
+    for dt in data_types:
+        db_name = get_db_name(dt)
+        try:
+            # Query _sdp_metadata for collections belonging to this data_type
+            script = (
+                f"use('{db_name}'); "
+                f"let meta = db.getCollection('_sdp_metadata'); "
+                f"let count = meta.estimatedDocumentCount(); "
+                f"if (count > 0) {{ "
+                f"  let docs = meta.distinct('collection', {{data_type: '{dt}'}}); "
+                f"  print(JSON.stringify(docs)); "
+                f"}} else {{ "
+                f"  let colls = db.getCollectionNames().filter(n => !n.startsWith('_')); "
+                f"  print(JSON.stringify(colls)); "
+                f"}}"
+            )
+            output = _mongosh_eval(0, script, password)  # port unused, goes through docker exec
+            collections = json.loads(output) if output else []
+            collections.sort()
+        except Exception as e:
+            print(f"\n  Could not connect to MongoDB: {e}")
+            print("  Is it running? (sdp db start)\n")
+            return {}
+
+        if collections:
+            all_dt_collections[dt] = {"db_name": db_name, "collections": collections}
+
+    if not all_dt_collections:
+        print("\n  No collections found in MongoDB.\n")
+        return {}
+
+    # Display available collections
+    print()
+    for dt, info in all_dt_collections.items():
+        print(f"  {info['db_name']}:")
+        for coll in info['collections'][:5]:
+            print(f"    - {coll}")
+        remaining = len(info['collections']) - 5
+        if remaining > 0:
+            print(f"    ... and {remaining} more")
+
+    # Ask which data types to index
+    dt_options = [f"{dt} ({len(info['collections'])} collections)" for dt, info in all_dt_collections.items()]
+    dt_keys = list(all_dt_collections.keys())
+    selected_labels = ask_multi_select("Which data types to index?", dt_options)
+    selected_dts = [dt_keys[dt_options.index(label)] for label in selected_labels]
+
+    created = {}  # {data_type: [fields]}
+
+    for dt in selected_dts:
+        info = all_dt_collections[dt]
+        db_name = info['db_name']
+        collections = info['collections']
+        n_colls = len(collections)
+
+        print(f"\n  --- {dt} ({n_colls} collections) ---")
+
+        # Show existing indexes from first collection
+        if collections:
+            try:
+                script = (
+                    f"use('{db_name}'); "
+                    f"let idxs = db.getCollection('{collections[0]}').getIndexes(); "
+                    f"let names = idxs.map(i => i.name).filter(n => n !== '_id_'); "
+                    f"print(JSON.stringify(names));"
+                )
+                output = _mongosh_eval(0, script, password)
+                existing = json.loads(output) if output else []
+                if existing:
+                    print(f"  Existing indexes (on {collections[0]}): {', '.join(existing)}")
+                else:
+                    print("  Existing indexes: (none)")
+            except Exception:
+                print("  Existing indexes: (could not query)")
+
+        fields = ask_list("New indexes (comma-separated field names, empty to skip)", default=[])
+        if not fields:
+            continue
+
+        dt_created = []
+        for field in fields:
+            print(f"  Creating index {field}_1 on {n_colls} collections...")
+            t_start = time.time()
+            success = 0
+            for coll in collections:
+                try:
+                    script = (
+                        f"use('{db_name}'); "
+                        f"db.getCollection('{coll}').createIndex("
+                        f"{{{field}: 1}}, {{name: '{field}_1'}});"
+                    )
+                    _mongosh_eval(0, script, password)
+                    success += 1
+                except Exception as e:
+                    print(f"    Warning: Failed on {coll}: {e}")
+            duration = time.time() - t_start
+            print(f"  Done: {field}_1 ({success}/{n_colls} collections, {_format_duration(duration)})")
+            dt_created.append(field)
+
+        if dt_created:
+            created[dt] = dt_created
+
+    return created
+
+
+def _persist_indexes_to_config(source, pg_created, mongo_created):
+    """Merge newly created indexes into platform.yaml."""
+    import yaml
+
+    platform_path = CONFIG_DIR / "sources" / source / "platform.yaml"
+    config = yaml.safe_load(platform_path.read_text()) or {}
+
+    if pg_created:
+        indexes = config.setdefault("indexes", {})
+        for table, fields in pg_created.items():
+            existing = indexes.setdefault(table, [])
+            for f in fields:
+                if f not in existing:
+                    existing.append(f)
+
+    if mongo_created:
+        mongo_indexes = config.setdefault("mongo_indexes", {})
+        for dt, fields in mongo_created.items():
+            existing = mongo_indexes.setdefault(dt, [])
+            for f in fields:
+                if f not in existing:
+                    existing.append(f)
+
+    platform_path.write_text(yaml.safe_dump(config, default_flow_style=False, sort_keys=False))
+    print(f"  Updated: {platform_path}")
+
+
+def cmd_db_create_indexes(args):
+    """Interactively create database indexes for a source."""
+    from social_data_pipeline.setup.utils import resolve_source, load_source_config, ask_choice, ask_bool
+
+    source = resolve_source(args.source)
+    platform_config = load_source_config(source)
+    if not platform_config:
+        print(f"\n  Error: Could not load platform config for '{source}'.\n")
+        return 1
+
+    configured = _get_configured_db_services()
+    if not configured:
+        print("\n  No databases configured. Run 'sdp db setup' first.\n")
+        return 1
+
+    # Filter to DBs that the source actually uses (has profile config for)
+    from social_data_pipeline.setup.utils import get_source_profiles
+    source_profiles = get_source_profiles(source)
+    source_dbs = []
+    if any(p in source_profiles for p in ("postgres_ingest", "postgres_ml")):
+        source_dbs.append("postgres")
+    if "mongo_ingest" in source_profiles:
+        source_dbs.append("mongo")
+    available = [db for db in configured if db in source_dbs]
+
+    if not available:
+        print(f"\n  Source '{source}' has no database profiles configured.\n")
+        return 1
+
+    # Determine which DB(s) to target
+    if len(available) == 1:
+        targets = available
+        db_label = "PostgreSQL" if "postgres" in available else "MongoDB"
+        print(f"\n  Database: {db_label}")
+    else:
+        choice = ask_choice("Which database?", ["PostgreSQL", "MongoDB", "Both"], default="Both")
+        if choice == "PostgreSQL":
+            targets = ["postgres"]
+        elif choice == "MongoDB":
+            targets = ["mongo"]
+        else:
+            targets = available
+
+    # Prompt for password if needed
+    env = load_env()
+    password = None
+    needs_pg_auth = "postgres" in targets and env.get("POSTGRES_AUTH_ENABLED") == "true"
+    needs_mongo_auth = "mongo" in targets and env.get("MONGO_AUTH_ENABLED") == "true"
+    if needs_pg_auth or needs_mongo_auth:
+        password = _prompt_db_password()
+
+    pg_created = {}
+    mongo_created = {}
+
+    if "postgres" in targets:
+        pg_created = _interactive_pg_indexes(source, platform_config, password)
+
+    if "mongo" in targets:
+        mongo_created = _interactive_mongo_indexes(source, platform_config, password)
+
+    # Summary
+    total = sum(len(v) for v in pg_created.values()) + sum(len(v) for v in mongo_created.values())
+    if total == 0:
+        print("\n  No new indexes created.\n")
+        return 0
+
+    print(f"\n  Created {total} new index(es).")
+
+    if ask_bool("Save new indexes to platform.yaml?", default=False):
+        _persist_indexes_to_config(source, pg_created, mongo_created)
+
+    print()
+    return 0
+
+
+# ============================================================================
 # sdp source add
 # ============================================================================
 
@@ -1633,6 +2032,11 @@ def build_parser():
 
     db_recover_p = db_sub.add_parser("recover-password", help="Reset database admin password")
     db_recover_p.set_defaults(func=cmd_db_recover_password)
+
+    db_indexes_p = db_sub.add_parser("create-indexes", help="Interactively create database indexes")
+    db_indexes_p.add_argument("--source", "-s", dest="source",
+                               help="Source name (auto-selects if only one configured)")
+    db_indexes_p.set_defaults(func=cmd_db_create_indexes)
 
     # ---- sdp source ----
     source_parser = subparsers.add_parser("source", help="Source management")

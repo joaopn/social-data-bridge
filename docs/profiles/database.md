@@ -102,6 +102,8 @@ After ingestion, indexes are created on configured fields:
 - `parallel_index_workers` controls `max_parallel_maintenance_workers` per index build
 - Indexes are B-tree by default
 
+To add indexes after ingestion, use `sdp db create-indexes`. This interactive command connects to running databases, shows existing tables/columns/indexes, and lets you choose which fields to index. Optionally persists new indexes to `platform.yaml`.
+
 ### Configuration
 
 **Base config:** `config/postgres/pipeline.yaml`
@@ -434,3 +436,5 @@ mongo_indexes:
 ```
 
 Each field gets a single ascending index per collection.
+
+To add indexes after ingestion, use `sdp db create-indexes`. This interactive command discovers collections via metadata, shows existing indexes, and creates new ones across all collections for a data type. Optionally persists new indexes to `platform.yaml`.

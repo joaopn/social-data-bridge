@@ -205,6 +205,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py db stop [postgres\|mongo]` | Stop database services + MCP servers (all configured if unspecified) |
 | `sdp.py db status` | Show database config, health, and MCP status |
 | `sdp.py db recover-password` | Reset database admin password (requires auth enabled) |
+| `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes (PostgreSQL and/or MongoDB) |
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
 
 `db setup` generates `.env`, `config/db/*.yaml`, and `config/postgres/postgresql.local.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and MCP credential files. Database deletion in `db unsetup` requires two separate confirmations.

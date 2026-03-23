@@ -11,7 +11,7 @@ import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 
 def get_mongo_uri(host: str, port: int, user: str = None, password: str = None) -> str:
@@ -165,6 +165,55 @@ def get_collection_names(db_name: str, host: str, port: int, user: str = None, p
     try:
         names = client[db_name].list_collection_names()
         return [n for n in sorted(names) if not n.startswith('_')]
+    finally:
+        client.close()
+
+
+def get_collections_by_data_type(
+    db_name: str,
+    host: str,
+    port: int,
+    user: str = None,
+    password: str = None,
+) -> Dict[str, List[str]]:
+    """Get mapping of data_type -> collection names from _sdp_metadata.
+
+    Falls back to listing all non-system collections under 'unknown' if no metadata exists.
+    """
+    client = _get_client(host, port, user, password)
+    try:
+        metadata = client[db_name]['_sdp_metadata']
+        if metadata.estimated_document_count() == 0:
+            # No metadata — fall back to listing collections
+            names = [n for n in client[db_name].list_collection_names() if not n.startswith('_')]
+            return {'unknown': sorted(names)} if names else {}
+
+        pipeline = [
+            {'$group': {'_id': '$data_type', 'collections': {'$addToSet': '$collection'}}},
+            {'$sort': {'_id': 1}},
+        ]
+        result = {}
+        for doc in metadata.aggregate(pipeline):
+            dt = doc['_id']
+            result[dt] = sorted(doc['collections'])
+        return result
+    finally:
+        client.close()
+
+
+def get_existing_indexes(
+    db_name: str,
+    collection_name: str,
+    host: str,
+    port: int,
+    user: str = None,
+    password: str = None,
+) -> List[str]:
+    """Get list of index names on a collection (excluding _id_)."""
+    client = _get_client(host, port, user, password)
+    try:
+        indexes = client[db_name][collection_name].list_indexes()
+        return [idx['name'] for idx in indexes if idx['name'] != '_id_']
     finally:
         client.close()
 
