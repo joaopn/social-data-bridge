@@ -36,6 +36,7 @@ python sdp.py run postgres_ml               # Ingest classifier outputs
 # Check status
 python sdp.py db status                     # Database status
 python sdp.py source status                 # Ingestion source status
+python sdp.py source error-logs             # Show error details for failed datasets
 ```
 
 ---
@@ -218,6 +219,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py source remove <name>` | Remove source configuration |
 | `sdp.py source list` | List configured sources |
 | `sdp.py source status [name]` | Show source processing/ingestion status |
+| `sdp.py source error-logs [name]` | Show database ingestion error logs |
 
 `source add` walks you through platform selection, file patterns, fields, indexes, and optional classifier configuration. All per-source config is written to `config/sources/<name>/`.
 
@@ -231,7 +233,7 @@ python sdp.py <db|source|run> [options]
 
 Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`.
 
-`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database.
+`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database. `source error-logs` shows the full error details and relevant mongoimport log output for failed datasets. Use `--profile` to filter by ingestion profile (`postgres_ingest`, `postgres_ml`, `mongo_ingest`).
 
 </details>
 

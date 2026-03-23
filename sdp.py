@@ -18,6 +18,7 @@ Usage:
     sdp.py source remove <name>              Remove source config
     sdp.py source list                       List configured sources
     sdp.py source status [name]              Show source processing/ingestion status
+    sdp.py source error-logs [name]          Show database ingestion error logs
 
     sdp.py run <profile> [--source <name>]   Run pipeline for a source (--build to rebuild)
 
@@ -1302,6 +1303,233 @@ def _print_source_ingestion_state(state_dir, source, db_type):
 
 
 # ============================================================================
+# sdp source error-logs
+# ============================================================================
+
+INGESTION_PROFILES = ["postgres_ingest", "postgres_ml", "mongo_ingest"]
+
+
+def cmd_source_error_logs(args):
+    """Show database ingestion error logs for sources."""
+    from social_data_pipeline.setup.utils import list_sources, load_source_config, get_source_profiles
+
+    source_name = args.name
+    profile_filter = args.profile
+
+    if source_name:
+        sources = [source_name]
+    else:
+        sources = list_sources()
+
+    if not sources:
+        print("\n  No sources configured. Run: python sdp.py source add <name>\n")
+        return 0
+
+    env = load_env()
+    print()
+    print("  Social Data Pipeline - Error Logs")
+    print("  ==================================")
+
+    any_errors = False
+
+    for source in sources:
+        config = load_source_config(source)
+        if config is None:
+            print(f"\n  Source '{source}': not found")
+            continue
+
+        profiles = get_source_profiles(source)
+        source_has_errors = False
+
+        # Determine which ingestion profiles to check
+        check_profiles = [profile_filter] if profile_filter else INGESTION_PROFILES
+
+        for profile in check_profiles:
+            if profile not in profiles:
+                continue
+
+            # Resolve state directory
+            if profile.startswith("postgres"):
+                pgdata_path = env.get("PGDATA_PATH", "./data/database/postgres")
+                pgdata = Path(pgdata_path)
+                if not pgdata.is_absolute():
+                    pgdata = ROOT / pgdata
+                state_dir = pgdata / "state_tracking"
+            else:
+                mongo_data_path = env.get("MONGO_DATA_PATH", "./data/database/mongo")
+                mongo_data = Path(mongo_data_path)
+                if not mongo_data.is_absolute():
+                    mongo_data = ROOT / mongo_data
+                state_dir = mongo_data / "state_tracking"
+
+            # Print failed entries from state files
+            failed_files, found = _print_failed_entries(state_dir, source, profile, source_has_errors)
+            if found:
+                if not source_has_errors:
+                    source_has_errors = True
+                any_errors = True
+
+                # For mongo_ingest, also show relevant mongoimport log sections
+                if profile == "mongo_ingest" and failed_files:
+                    log_dir = state_dir.parent / "logs"
+                    if log_dir.exists():
+                        _print_mongoimport_log_sections(log_dir, failed_files)
+
+        if not source_has_errors and source_name:
+            print(f"\n  Source: {source}")
+            print("    No errors found.")
+
+    if not any_errors and not source_name:
+        print("\n  No errors found for any source.")
+
+    print()
+    return 0
+
+
+def _print_failed_entries(state_dir, source, profile, header_printed):
+    """Print failed entries from state files. Returns (failed_filenames, found_any)."""
+    if not state_dir.exists():
+        return [], False
+
+    prefix = f"{source}_{profile}_"
+    state_files = sorted(f for f in state_dir.glob("*.json") if f.stem.startswith(prefix))
+
+    # Legacy fallback: match by profile substring
+    if not state_files:
+        state_files = sorted(state_dir.glob(f"*_{profile}_*.json"))
+
+    if not state_files:
+        return [], False
+
+    all_failed = []
+    found_any = False
+
+    for sf in state_files:
+        try:
+            sdata = json.loads(sf.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        failed = sdata.get("failed", [])
+        if not failed:
+            continue
+
+        if not found_any and not header_printed:
+            print(f"\n  Source: {source}")
+        found_any = True
+
+        # Extract data type from filename: {source}_{profile}_{data_type}
+        parts = sf.stem.split(f"_{profile}_")
+        label = parts[1] if len(parts) == 2 else sf.stem
+
+        print(f"\n    {profile} errors ({label}): {len(failed)} failed")
+        for entry in failed:
+            filename = entry.get("filename", "unknown")
+            error = entry.get("error", "no error message")
+            timestamp = entry.get("timestamp", "")
+            ts_display = f" [{timestamp}]" if timestamp else ""
+            print(f"\n      {filename}{ts_display}")
+            # Strip container log path from error message (we show logs inline)
+            display_error = error.split(". See log:")[0] if ". See log:" in error else error
+            for line in display_error.split('\n'):
+                print(f"        {line}")
+            all_failed.append(filename)
+
+    return all_failed, found_any
+
+
+def _print_mongoimport_log_sections(log_dir, failed_filenames):
+    """Print mongoimport log sections matching failed filenames."""
+    import re
+    separator = re.compile(r'^={10,}$')
+    failed_set = set(failed_filenames)
+    log_files = sorted(log_dir.glob("mongoimport_*.log"))
+    if not log_files:
+        return
+
+    printed_header = False
+
+    for lf in log_files:
+        try:
+            lines = lf.read_text().splitlines()
+        except OSError:
+            continue
+
+        if not lines:
+            continue
+
+        # Find all separator line indices
+        sep_indices = [i for i, line in enumerate(lines) if separator.match(line)]
+
+        # Find File: lines and their enclosing header blocks
+        for idx, line in enumerate(lines):
+            if not line.startswith("File:"):
+                continue
+
+            filepath = line.split(":", 1)[1].strip()
+            file_id = Path(filepath).name
+            if file_id not in failed_set:
+                continue
+
+            # Find the header block boundaries (opening and closing ==== lines)
+            # The File: line is inside a header block between two ==== lines
+            opening_sep = None
+            closing_sep = None
+            for si in sep_indices:
+                if si < idx:
+                    opening_sep = si
+                elif si > idx and closing_sep is None:
+                    closing_sep = si
+
+            if opening_sep is None:
+                continue
+
+            # The output block is between the previous ==== and this header's opening ====
+            # Find the ==== line before opening_sep (end of previous header)
+            prev_sep = None
+            for si in sep_indices:
+                if si < opening_sep:
+                    prev_sep = si
+            output_start = (prev_sep + 1) if prev_sep is not None else 0
+            output_end = opening_sep
+
+            # Also grab any output after the closing ==== (in case flush order is normal)
+            post_start = (closing_sep + 1) if closing_sep is not None else len(lines)
+            next_sep = None
+            for si in sep_indices:
+                if si > (closing_sep if closing_sep is not None else len(lines)):
+                    next_sep = si
+                    break
+            post_end = next_sep if next_sep is not None else len(lines)
+
+            # Collect output lines (before header + after header)
+            output_before = lines[output_start:output_end]
+            output_after = lines[post_start:post_end]
+
+            # Filter out blank-only blocks
+            output_lines = [l for l in output_before if l.strip()]
+            if output_after:
+                output_lines += [l for l in output_after if l.strip()]
+
+            if not printed_header:
+                print(f"\n    Mongoimport logs for failed files ({lf}):")
+                printed_header = True
+
+            # Print header block
+            header_block = lines[opening_sep:((closing_sep + 1) if closing_sep is not None else len(lines))]
+            print()
+            for hl in header_block:
+                print(f"      {hl}")
+
+            # Print output
+            if output_lines:
+                for ol in output_lines:
+                    print(f"      {ol}")
+            else:
+                print(f"      (no mongoimport output found)")
+
+
+# ============================================================================
 # sdp run
 # ============================================================================
 
@@ -1432,6 +1660,13 @@ def build_parser():
     src_status_p = source_sub.add_parser("status", help="Show source status")
     src_status_p.add_argument("name", nargs="?", help="Source name (default: all sources)")
     src_status_p.set_defaults(func=cmd_source_status)
+
+    src_errors_p = source_sub.add_parser("error-logs", help="Show database ingestion error logs")
+    src_errors_p.add_argument("name", nargs="?", help="Source name (default: all sources)")
+    src_errors_p.add_argument("--profile", "-p",
+        choices=["postgres_ingest", "postgres_ml", "mongo_ingest"],
+        help="Filter by ingestion profile")
+    src_errors_p.set_defaults(func=cmd_source_error_logs)
 
     # ---- sdp run ----
     run_parser = subparsers.add_parser("run", help="Run a pipeline profile")

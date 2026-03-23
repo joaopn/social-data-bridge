@@ -14,6 +14,7 @@ python sdp.py run postgres_ingest       # Ingest parsed files into PostgreSQL
 python sdp.py run postgres_ml           # Ingest ML classifier outputs into PostgreSQL
 python sdp.py run mongo_ingest          # Ingest raw JSON into MongoDB
 python sdp.py db stop                   # Stop configured database(s) + MCP servers
+python sdp.py source error-logs         # Show error details for failed datasets
 ```
 
 > [!IMPORTANT]
