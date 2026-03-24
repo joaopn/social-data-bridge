@@ -683,15 +683,12 @@ def main(source_name=None, hf_dataset_id=None):
     # Fetch HF metadata if dataset ID provided
     hf_defaults = None
     if hf_dataset_id:
-        from social_data_pipeline.setup.hf import (
-            fetch_dataset_metadata, extract_hf_defaults, HFAPIError,
-        )
+        from social_data_pipeline.setup.hf import extract_hf_defaults, HFAPIError
         print(f"  Fetching metadata for HF dataset: {hf_dataset_id}")
         try:
             import os
             token = os.environ.get("HF_TOKEN")
-            metadata = fetch_dataset_metadata(hf_dataset_id, token=token)
-            hf_defaults = extract_hf_defaults(metadata)
+            hf_defaults = extract_hf_defaults(hf_dataset_id, token=token)
             n_configs = len(hf_defaults["all_configs"])
             n_groups = len(hf_defaults["schema_groups"])
             print(f"  Found {n_configs} configs in {n_groups} schema group(s).\n")

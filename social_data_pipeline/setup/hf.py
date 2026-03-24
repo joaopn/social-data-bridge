@@ -16,6 +16,7 @@ from pathlib import Path
 
 
 HF_API_BASE = "https://huggingface.co/api/datasets"
+HF_DATASETS_SERVER = "https://datasets-server.huggingface.co"
 
 
 # ============================================================================
@@ -72,16 +73,6 @@ def _hf_api_request(url, token=None):
 # API fetchers
 # ============================================================================
 
-def fetch_dataset_metadata(dataset_id, token=None):
-    """Fetch dataset metadata including configs and features.
-
-    Returns:
-        dict with full API response (cardData, configs, etc.)
-    """
-    url = f"{HF_API_BASE}/{dataset_id}"
-    return _hf_api_request(url, token)
-
-
 def fetch_parquet_urls(dataset_id, token=None):
     """Fetch parquet file download URLs.
 
@@ -90,6 +81,21 @@ def fetch_parquet_urls(dataset_id, token=None):
     """
     url = f"{HF_API_BASE}/{dataset_id}/parquet"
     return _hf_api_request(url, token)
+
+
+def fetch_dataset_server_info(dataset_id, token=None):
+    """Fetch dataset info from the HF datasets server (has schema even when metadata API doesn't).
+
+    Returns:
+        dict: {config_name: {features: {field_name: {dtype, _type}}, splits: {...}}}
+        or None if the endpoint fails.
+    """
+    url = f"{HF_DATASETS_SERVER}/info?dataset={dataset_id}"
+    try:
+        data = _hf_api_request(url, token)
+        return data.get("dataset_info", {})
+    except HFAPIError:
+        return None
 
 
 # ============================================================================
@@ -154,50 +160,6 @@ def map_hf_type_to_sql(hf_type):
 # Schema extraction and grouping
 # ============================================================================
 
-def _extract_config_features(metadata):
-    """Extract per-config feature lists from API metadata.
-
-    The HF API nests data in two places within cardData:
-      - cardData.configs: [{config_name, data_files}] — has names but no features
-      - cardData.dataset_info: [{config_name, features, splits}] — has features
-
-    We merge these by config_name, or fall back to top-level dataset_info.
-
-    Returns:
-        list of dicts: [{name, features: [{name, dtype, ...}], num_rows}]
-    """
-    configs = []
-    card_data = metadata.get("cardData") or {}
-
-    # Primary source: cardData.dataset_info (contains features + splits)
-    ds_info = card_data.get("dataset_info", [])
-    if not ds_info:
-        # Fall back to top-level dataset_info
-        ds_info = metadata.get("dataset_info", metadata.get("config", []))
-
-    if isinstance(ds_info, dict):
-        ds_info = [ds_info]
-    if isinstance(ds_info, list):
-        for info in ds_info:
-            config_name = info.get("config_name", "default")
-            features_info = info.get("features", [])
-            num_rows = None
-            splits = info.get("splits", [])
-            if isinstance(splits, list):
-                num_rows = sum(s.get("num_examples", 0) for s in splits)
-            elif isinstance(splits, dict):
-                num_rows = sum(
-                    s.get("num_examples", 0) for s in splits.values()
-                )
-            configs.append({
-                "name": config_name,
-                "features": features_info,
-                "num_rows": num_rows,
-                })
-
-    return configs
-
-
 def _feature_key(features):
     """Create a hashable key from a feature list for schema grouping.
 
@@ -212,7 +174,7 @@ def group_configs_by_schema(configs):
     """Group configs that share the same set of field names.
 
     Args:
-        configs: list from _extract_config_features()
+        configs: list of dicts [{name, features, num_rows}]
 
     Returns:
         list of schema groups: [{
@@ -235,8 +197,35 @@ def group_configs_by_schema(configs):
     return list(groups.values())
 
 
-def extract_hf_defaults(metadata):
-    """Extract SDP-relevant defaults from HF dataset metadata.
+def _configs_from_server_info(server_info):
+    """Build config list from datasets server info response.
+
+    The server returns features as {field_name: {dtype, _type}} dicts.
+    Converts to the [{name, dtype}] list format used by the rest of the code.
+    """
+    configs = []
+    for config_name, info in server_info.items():
+        features_dict = info.get("features", {})
+        features = []
+        if isinstance(features_dict, dict):
+            for field_name, type_desc in features_dict.items():
+                features.append({"name": field_name, "dtype": type_desc})
+        num_rows = None
+        splits = info.get("splits", {})
+        if isinstance(splits, dict):
+            num_rows = sum(
+                s.get("num_examples", s.get("num_bytes", 0))
+                for s in splits.values()
+                if isinstance(s, dict) and "num_examples" in s
+            )
+        configs.append({"name": config_name, "features": features, "num_rows": num_rows})
+    return configs
+
+
+def extract_hf_defaults(dataset_id, token=None):
+    """Extract SDP-relevant defaults from HF datasets server API.
+
+    Uses the datasets server which always has schema info for converted datasets.
 
     Returns:
         dict with:
@@ -245,7 +234,8 @@ def extract_hf_defaults(metadata):
             fields_by_group: list of [{name, sql_type, mappable}] per group
             field_types_by_group: list of {field_name: sql_type} per group
     """
-    configs = _extract_config_features(metadata)
+    server_info = fetch_dataset_server_info(dataset_id, token=token)
+    configs = _configs_from_server_info(server_info) if server_info else []
     if not configs:
         raise HFAPIError("Dataset has no configs. Cannot determine data types.")
 
