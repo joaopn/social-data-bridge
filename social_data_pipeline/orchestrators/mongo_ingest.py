@@ -133,6 +133,44 @@ def detect_json_files(
     return [(f[0], f[1], f[2]) for f in files]
 
 
+def detect_parquet_files(
+    extracted_dir: str, data_types: List[str], file_patterns: Dict
+) -> List[Tuple[str, str, str]]:
+    """Detect parquet files in the extracted directory.
+
+    For input_format: parquet sources (e.g., HF downloads), raw parquet files
+    land in data/extracted/<data_type>/ and are ingested directly into MongoDB.
+    """
+    extracted_path = Path(extracted_dir)
+    files = []
+
+    patterns = {}
+    for data_type in data_types:
+        if data_type in file_patterns:
+            dt_patterns = file_patterns[data_type]
+            if 'parquet' in dt_patterns:
+                patterns[data_type] = re.compile(dt_patterns['parquet'])
+
+    for data_type in data_types:
+        if data_type not in patterns:
+            continue
+
+        type_dir = extracted_path / data_type
+        if not type_dir.is_dir():
+            continue
+
+        for filepath in type_dir.iterdir():
+            if filepath.is_file() and filepath.suffix == '.parquet':
+                filename = filepath.name
+                match = patterns[data_type].match(filename)
+                if match:
+                    file_id = filepath.stem
+                    files.append((str(filepath), file_id, data_type, filename))
+
+    files.sort(key=lambda x: (x[2], x[3]))
+    return [(f[0], f[1], f[2]) for f in files]
+
+
 def get_file_identifier(filepath: str) -> str:
     """Extract identifier from filepath, stripping compression extensions.
 
@@ -225,6 +263,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     file_patterns = platform_config.get('file_patterns', {})
     collection_strategy = platform_config.get('mongo_collection_strategy', 'per_file')
     collection_map = platform_config.get('mongo_collections', {})
+    mongo_exclude_fields = platform_config.get('mongo_exclude_fields', {})
     num_workers = get_required(config, 'processing', 'num_insertion_workers')
 
     host = db_config['host']
@@ -288,12 +327,16 @@ def run_pipeline(config_dir: str = "/app/config"):
     log_dir = f"{mongo_data_path}/logs"
 
     # Detect files
+    input_format = platform_config.get('input_format', 'ndjson')
     dump_files = detect_dump_files(dumps_dir, data_types, file_patterns)
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)
+    parquet_files = detect_parquet_files(extracted_dir, data_types, file_patterns) if input_format == 'parquet' else []
     existing_json_ids = {fid for _, fid, _ in json_files}
 
     print(f"\n[sdp] Found {len(dump_files)} compressed files in {dumps_dir}")
     print(f"[sdp] Found {len(json_files)} JSON files in extracted directory")
+    if parquet_files:
+        print(f"[sdp] Found {len(parquet_files)} parquet files in extracted directory")
 
     # Filter out dumps that already have extracted JSON or are already ingested
     pending_zst_files = []
@@ -314,9 +357,17 @@ def run_pipeline(config_dir: str = "/app/config"):
         if not states[dt].is_processed(fid)
     ]
 
-    print(f"[sdp] {len(pending_json_files)} unprocessed JSON files to ingest")
+    # Filter out parquet files already ingested
+    pending_parquet_files = [
+        (p, fid, dt) for p, fid, dt in parquet_files
+        if not states[dt].is_processed(fid)
+    ]
 
-    has_work = pending_zst_files or pending_json_files
+    print(f"[sdp] {len(pending_json_files)} unprocessed JSON files to ingest")
+    if pending_parquet_files:
+        print(f"[sdp] {len(pending_parquet_files)} unprocessed parquet files to ingest")
+
+    has_work = pending_zst_files or pending_json_files or pending_parquet_files
     if not has_work:
         print("\n[sdp] No files to process. Exiting.")
         return
@@ -353,12 +404,20 @@ def run_pipeline(config_dir: str = "/app/config"):
     # =====================================================================
     # PHASE 2: INGESTION
     # =====================================================================
-    # Re-detect JSON files (may have been created during extraction)
+    # Re-detect files (JSON may have been created during extraction)
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)
     files_to_ingest = [
         (p, fid, dt) for p, fid, dt in json_files
         if not states[dt].is_processed(fid)
     ]
+
+    # Include parquet files from extracted/
+    if input_format == 'parquet':
+        parquet_files = detect_parquet_files(extracted_dir, data_types, file_patterns)
+        files_to_ingest.extend(
+            (p, fid, dt) for p, fid, dt in parquet_files
+            if not states[dt].is_processed(fid)
+        )
 
     if files_to_ingest:
         print("\n" + "=" * 60)
@@ -383,6 +442,9 @@ def run_pipeline(config_dir: str = "/app/config"):
                 ensure_collection(db_name, collection_name, host, port, user=user, password=password)
 
                 # Ingest via mongoimport
+                # For parquet files, exclude fields not in platform config
+                dt_exclude = mongo_exclude_fields.get(data_type, [])
+
                 print(f"[sdp] Ingesting {file_id} -> {db_name}.{collection_name}")
                 mongoimport_file(
                     filepath=json_path,
@@ -394,6 +456,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     log_dir=log_dir,
                     user=user,
                     password=password,
+                    exclude_columns=dt_exclude if dt_exclude else None,
                 )
 
                 # Record in metadata collection

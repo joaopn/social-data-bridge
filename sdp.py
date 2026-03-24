@@ -13,7 +13,8 @@ Usage:
     sdp.py db recover-password               Reset database admin password
     sdp.py db create-indexes [--source <name>] Interactively create database indexes
 
-    sdp.py source add <name>                 Add a new source (interactive setup)
+    sdp.py source add <name> [--hf ID]        Add a new source (--hf for HF datasets)
+    sdp.py source download <name>            Download HF dataset files
     sdp.py source configure <name>           Reconfigure existing source (platform-specific)
     sdp.py source add-classifiers <name>     Add ML classifiers for a source
     sdp.py source remove <name>              Remove source config
@@ -1488,7 +1489,76 @@ def cmd_db_create_indexes(args):
 def cmd_source_add(args):
     """Add a new source (interactive setup)."""
     from social_data_pipeline.setup.source import main as source_main
-    source_main(source_name=args.name)
+    source_main(source_name=args.name, hf_dataset_id=getattr(args, 'hf_dataset', None))
+    return 0
+
+
+# ============================================================================
+# sdp source download
+# ============================================================================
+
+def cmd_source_download(args):
+    """Download HF dataset files for a source."""
+    import os
+    from social_data_pipeline.setup.utils import load_source_config
+    from social_data_pipeline.setup.hf import (
+        fetch_parquet_urls, download_hf_files, organize_hf_downloads, HFAPIError,
+    )
+
+    source_name = args.name
+    source_config = load_source_config(source_name)
+    if source_config is None:
+        print(f"\n  Error: Source '{source_name}' not found in config/sources/\n")
+        return 1
+
+    hf_dataset = source_config.get('hf_dataset')
+    if not hf_dataset:
+        print(f"\n  Error: Source '{source_name}' has no hf_dataset configured.")
+        print(f"  Use 'sdp source add {source_name} --hf <dataset_id>' to set up an HF source.\n")
+        return 1
+
+    token = getattr(args, 'token', None) or os.environ.get('HF_TOKEN')
+    dumps_dir = source_config.get('paths', {}).get('dumps')
+    extracted_dir = source_config.get('paths', {}).get('extracted')
+    if not dumps_dir or not extracted_dir:
+        print(f"\n  Error: No dumps/extracted path configured for source '{source_name}'.\n")
+        return 1
+
+    config_map = source_config.get('hf_config_map', {})
+    if not config_map:
+        # Fallback: each data_type maps to a config with the same name
+        data_types = source_config.get('data_types', [])
+        config_map = {dt: [dt] for dt in data_types}
+
+    # Filter by --data-type if specified
+    if args.data_type:
+        if args.data_type not in config_map:
+            print(f"\n  Error: data type '{args.data_type}' not found. "
+                  f"Available: {', '.join(config_map.keys())}\n")
+            return 1
+        config_map = {args.data_type: config_map[args.data_type]}
+
+    print(f"\n  Source:  {source_name}")
+    print(f"  Dataset: {hf_dataset}")
+    print(f"  Dumps:   {dumps_dir}")
+    print(f"  Extract: {extracted_dir}")
+    print(f"  Data types: {', '.join(config_map.keys())}")
+
+    try:
+        # Phase 1: Download 1-to-1 mirror to dumps/
+        print(f"\n  --- Downloading from HF Hub ---\n")
+        parquet_urls = fetch_parquet_urls(hf_dataset, token=token)
+        download_hf_files(parquet_urls, dumps_dir, dataset_id=hf_dataset, token=token)
+
+        # Phase 2: Organize into extracted/<data_type>/ using config_map
+        print(f"\n  --- Organizing into data types ---\n")
+        organize_hf_downloads(dumps_dir, extracted_dir, config_map)
+
+    except HFAPIError as e:
+        print(f"\n  Error: {e}\n")
+        return 1
+
+    print(f"\n  Next step: python sdp.py run parse --source {source_name}\n")
     return 0
 
 
@@ -2044,7 +2114,15 @@ def build_parser():
 
     src_add_p = source_sub.add_parser("add", help="Add a new source")
     src_add_p.add_argument("name", help="Source name (e.g. reddit, twitter_academic)")
+    src_add_p.add_argument("--hf", dest="hf_dataset", default=None,
+                           help="Hugging Face dataset ID (e.g. user/dataset-name)")
     src_add_p.set_defaults(func=cmd_source_add)
+
+    src_download_p = source_sub.add_parser("download", help="Download HF dataset files")
+    src_download_p.add_argument("name", help="Source name")
+    src_download_p.add_argument("--token", help="HF token for private datasets (fallback: HF_TOKEN env var)")
+    src_download_p.add_argument("--data-type", help="Download only this data type")
+    src_download_p.set_defaults(func=cmd_source_download)
 
     src_configure_p = source_sub.add_parser("configure", help="Reconfigure existing source")
     src_configure_p.add_argument("name", help="Source name")

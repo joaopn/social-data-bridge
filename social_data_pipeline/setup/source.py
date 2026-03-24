@@ -49,7 +49,144 @@ def compute_defaults(hw, profiles):
 # Interactive questionnaire
 # ============================================================================
 
-def run_questionnaire(hw, source_name, db_setup):
+def _run_hf_config_grouping(hf_defaults):
+    """Interactive HF config grouping: assign configs to SDP data_types.
+
+    Shows schema groups with their configs, lets user name each data_type
+    and select which configs to include.
+
+    Returns:
+        (data_types, hf_config_map, selected_fields, selected_field_types, excluded_fields)
+    """
+    schema_groups = hf_defaults["schema_groups"]
+    fields_by_group = hf_defaults["fields_by_group"]
+    field_types_by_group = hf_defaults["field_types_by_group"]
+
+    section_header("HF Dataset Config Grouping")
+    print("  HF datasets organize data into 'configs' (splits by year, topic, etc.)")
+    print("  Group configs that should become the same SDP data type.\n")
+
+    data_types = []
+    hf_config_map = {}
+    all_selected_fields = {}
+    all_field_types = {}
+    all_excluded_fields = {}
+
+    for gi, group in enumerate(schema_groups):
+        configs = group["configs"]
+        field_names = group["field_names"]
+        fields_info = fields_by_group[gi]
+        group_field_types = field_types_by_group[gi]
+
+        # Show schema summary
+        preview = ", ".join(field_names[:6])
+        if len(field_names) > 6:
+            preview += ", ..."
+        print(f"  Schema {chr(65 + gi)} ({len(configs)} config(s)): {preview}")
+
+        # Show configs with row counts
+        config_names = []
+        for cfg in configs:
+            rows = cfg.get("num_rows")
+            row_str = f"  ({rows:,} rows)" if rows else ""
+            print(f"    - {cfg['name']}{row_str}")
+            config_names.append(cfg["name"])
+
+        # Let user select configs
+        selected_configs = ask_multi_select(
+            "Include configs:", config_names, config_names
+        )
+        if not selected_configs:
+            print("    Skipping this schema group (no configs selected).")
+            print()
+            continue
+
+        # Suggest data_type name from common prefix or first config
+        suggested_name = _suggest_data_type_name(selected_configs)
+        dt_name = ask(f"  Data type name for this group", suggested_name)
+        if not dt_name:
+            dt_name = suggested_name
+
+        data_types.append(dt_name)
+        hf_config_map[dt_name] = selected_configs
+
+        # Field selection for this data_type
+        print(f"\n  Fields for '{dt_name}':")
+        mappable_fields = [f for f in fields_info if f["mappable"]]
+        unmappable_fields = [f for f in fields_info if not f["mappable"]]
+
+        # Select from mappable fields
+        mappable_names = [f["name"] for f in mappable_fields]
+        selected = ask_multi_select(
+            "Select fields:", mappable_names, mappable_names
+        )
+        selected_set = set(selected)
+
+        # Handle unmappable fields (ask per field)
+        for f in unmappable_fields:
+            print(f"\n    Field '{f['name']}' has type '{f['hf_type']}' (no direct SQL mapping)")
+            choice = ask_choice(
+                f"    Action for '{f['name']}':",
+                ["skip", "cast to text", "enter custom type"],
+                default="skip",
+            )
+            if choice == "cast to text":
+                selected.append(f["name"])
+                selected_set.add(f["name"])
+                group_field_types[f["name"]] = "text"
+            elif choice == "enter custom type":
+                custom_type = ask(f"    SQL type for '{f['name']}'")
+                if custom_type:
+                    selected.append(f["name"])
+                    selected_set.add(f["name"])
+                    group_field_types[f["name"]] = custom_type
+
+        all_selected_fields[dt_name] = selected
+
+        # Track excluded fields (all group fields minus selected)
+        all_group_names = [f["name"] for f in fields_info]
+        excluded = [n for n in all_group_names if n not in selected_set]
+        if excluded:
+            all_excluded_fields[dt_name] = excluded
+
+        # Merge field types (only for selected fields)
+        for fname, ftype in group_field_types.items():
+            if fname in selected_set:
+                if fname in all_field_types and all_field_types[fname] != ftype:
+                    print(f"    Warning: type conflict for '{fname}': "
+                          f"{all_field_types[fname]} vs {ftype} (keeping first)")
+                else:
+                    all_field_types[fname] = ftype
+
+        print()
+
+    if not data_types:
+        print("    Error: At least one data type is required.")
+        sys.exit(1)
+
+    return data_types, hf_config_map, all_selected_fields, all_field_types, all_excluded_fields
+
+
+def _suggest_data_type_name(config_names):
+    """Suggest a data_type name from a list of HF config names.
+
+    Tries to find a common prefix (e.g., "comments-2020", "comments-2021" → "comments").
+    Falls back to first config name.
+    """
+    if len(config_names) == 1:
+        return config_names[0]
+
+    # Try common prefix up to a separator
+    first = config_names[0]
+    for sep in ("-", "_", "."):
+        prefix = first.split(sep)[0]
+        if prefix and all(c.startswith(prefix) for c in config_names):
+            return prefix
+
+    return config_names[0]
+
+
+def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     """Run the source configuration questionnaire. Returns settings dict."""
     settings = {}
     settings["source_name"] = source_name
@@ -61,16 +198,32 @@ def run_questionnaire(hw, source_name, db_setup):
         platform = f"custom/{source_name}"
     settings["platform"] = platform
 
-    # ---- Data types ----
-    section_header("Data Types")
-    if platform == "reddit":
+    is_hf = hf_defaults is not None
+
+    # ---- HF config grouping (replaces data types question) ----
+    if is_hf:
+        data_types, hf_config_map, hf_fields, hf_field_types, hf_excluded = (
+            _run_hf_config_grouping(hf_defaults)
+        )
+        settings["data_types"] = data_types
+        settings["hf_config_map"] = hf_config_map
+        settings["custom_fields"] = hf_fields
+        settings["custom_field_types"] = hf_field_types
+        if hf_excluded:
+            settings["mongo_exclude_fields"] = hf_excluded
+
+    # ---- Data types (non-HF) ----
+    elif platform == "reddit":
+        section_header("Data Types")
         data_types = ask_list("Data types", ["submissions", "comments"])
+        settings["data_types"] = data_types
     else:
+        section_header("Data Types")
         data_types = ask_list("Data types (comma-separated)")
         if not data_types:
             print("    Error: At least one data type is required.")
             sys.exit(1)
-    settings["data_types"] = data_types
+        settings["data_types"] = data_types
 
     # ---- Data paths ----
     section_header("Data Paths")
@@ -157,49 +310,60 @@ def run_questionnaire(hw, source_name, db_setup):
         if has_postgres:
             settings["db_schema"] = ask("PostgreSQL schema name", source_name)
 
-        # ---- Input format ----
-        section_header("Input Format")
-        print("  NDJSON: one JSON object per line (default for most data dumps)")
-        print("  CSV: comma/tab/pipe-separated values with headers")
-        settings["input_format"] = ask_choice(
-            "Raw input file format", ["ndjson", "csv"], default="ndjson",
-        )
-        if settings["input_format"] == "csv":
-            delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", ",")
-            if delimiter == "\\t":
-                delimiter = "\t"
-            settings["input_csv_delimiter"] = delimiter
+        if is_hf:
+            # HF sources: input_format is parquet, file patterns auto-generated
+            settings["input_format"] = "parquet"
+            settings["custom_file_patterns"] = {}
+            for dt in data_types:
+                settings["custom_file_patterns"][dt] = {
+                    "parquet": r"^.+\.parquet$",
+                    "csv": r"^.+\.csv$",
+                }
+            # Fields and field_types already set from HF config grouping step
+        else:
+            # ---- Input format ----
+            section_header("Input Format")
+            print("  NDJSON: one JSON object per line (default for most data dumps)")
+            print("  CSV: comma/tab/pipe-separated values with headers")
+            settings["input_format"] = ask_choice(
+                "Raw input file format", ["ndjson", "csv"], default="ndjson",
+            )
+            if settings["input_format"] == "csv":
+                delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", ",")
+                if delimiter == "\\t":
+                    delimiter = "\t"
+                settings["input_csv_delimiter"] = delimiter
 
-        settings["custom_file_patterns"] = {}
-        for dt in data_types:
-            print(f"\n  File patterns for '{dt}':")
-            print("    Enter a glob pattern for your compressed dump files.")
-            print("    Examples: tweets_*.json.gz, RC_*.zst, data_*.csv.xz")
+            settings["custom_file_patterns"] = {}
+            for dt in data_types:
+                print(f"\n  File patterns for '{dt}':")
+                print("    Enter a glob pattern for your compressed dump files.")
+                print("    Examples: tweets_*.json.gz, RC_*.zst, data_*.csv.xz")
+                print()
+                dump_glob = ask(f"    Dump file glob pattern for {dt}")
+                if not dump_glob:
+                    print("    Error: A glob pattern is required.")
+                    sys.exit(1)
+
+                # Auto-detect compression from glob extension
+                compression = detect_compression_from_glob(dump_glob)
+                if compression is None:
+                    print(f"\n    Could not auto-detect compression from '{dump_glob}'.")
+                    compression = ask_choice(
+                        "    Select compression format:",
+                        ["zst", "gz", "xz", "tar.gz"],
+                        default="zst",
+                    )
+
+                input_format = settings.get("input_format", "ndjson")
+                patterns = derive_file_patterns(dump_glob, compression, input_format=input_format)
+                settings["custom_file_patterns"][dt] = patterns
+                print(f"    Detected: compression={compression}, prefix={patterns['prefix']}")
+
             print()
-            dump_glob = ask(f"    Dump file glob pattern for {dt}")
-            if not dump_glob:
-                print("    Error: A glob pattern is required.")
-                sys.exit(1)
-
-            # Auto-detect compression from glob extension
-            compression = detect_compression_from_glob(dump_glob)
-            if compression is None:
-                print(f"\n    Could not auto-detect compression from '{dump_glob}'.")
-                compression = ask_choice(
-                    "    Select compression format:",
-                    ["zst", "gz", "xz", "tar.gz"],
-                    default="zst",
-                )
-
-            input_format = settings.get("input_format", "ndjson")
-            patterns = derive_file_patterns(dump_glob, compression, input_format=input_format)
-            settings["custom_file_patterns"][dt] = patterns
-            print(f"    Detected: compression={compression}, prefix={patterns['prefix']}")
-
-        print()
-        print("    Note: For uncompressed data, place files directly in")
-        print("    data/extracted/<source>/<data_type>/ — the pipeline will")
-        print("    pick them up automatically with no dump files needed.")
+            print("    Note: For uncompressed data, place files directly in")
+            print("    data/extracted/<source>/<data_type>/ — the pipeline will")
+            print("    pick them up automatically with no dump files needed.")
 
         if has_mongo:
             print()
@@ -280,9 +444,29 @@ def generate_platform_yaml(settings):
     if settings.get("custom_mongo_indexes"):
         config["mongo_indexes"] = settings["custom_mongo_indexes"]
 
-    config.update({
-        "indexes": settings.get("custom_indexes", {}),
-        "field_types": {
+    # HF-specific keys
+    if "hf_dataset" in settings:
+        config["hf_dataset"] = settings["hf_dataset"]
+    if "hf_config_map" in settings:
+        config["hf_config_map"] = settings["hf_config_map"]
+    if "mongo_exclude_fields" in settings:
+        config["mongo_exclude_fields"] = settings["mongo_exclude_fields"]
+
+    config["indexes"] = settings.get("custom_indexes", {})
+
+    # Field types: use HF-derived types if available, otherwise generic defaults
+    if settings.get("custom_field_types"):
+        field_types = dict(settings["custom_field_types"])
+        # Always include lingua fields for compatibility
+        field_types.update({
+            "lang": ["varchar", 2],
+            "lang_prob": "float",
+            "lang2": ["varchar", 2],
+            "lang2_prob": "float",
+            "lang_chars": "integer",
+        })
+    else:
+        field_types = {
             # Common field types — add or modify as needed
             "id": "text",
             "created_at": "integer",
@@ -300,9 +484,15 @@ def generate_platform_yaml(settings):
             "lang2": ["varchar", 2],
             "lang2_prob": "float",
             "lang_chars": "integer",
-        },
-        "fields": {dt: [] for dt in settings["data_types"]},
-    })
+        }
+    config["field_types"] = field_types
+
+    # Fields: use HF-derived fields if available, otherwise empty
+    if settings.get("custom_fields"):
+        config["fields"] = settings["custom_fields"]
+    else:
+        config["fields"] = {dt: [] for dt in settings["data_types"]}
+
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
 
@@ -402,6 +592,8 @@ def print_summary(settings, files_to_write):
 
     print(f"  Source:      {source_name}")
     print(f"  Platform:    {settings['platform']}")
+    if settings.get("hf_dataset"):
+        print(f"  HF dataset:  {settings['hf_dataset']}")
     input_fmt = settings.get('input_format', 'ndjson')
     if input_fmt != 'ndjson':
         print(f"  Input fmt:   {input_fmt}")
@@ -456,11 +648,13 @@ def print_summary(settings, files_to_write):
 # Main
 # ============================================================================
 
-def main(source_name=None):
+def main(source_name=None, hf_dataset_id=None):
     """Add or configure a source.
 
     Args:
         source_name: Source name. If None, prompts user.
+        hf_dataset_id: Optional HF dataset ID (e.g. "user/dataset-name").
+            When provided, fetches metadata to pre-populate setup defaults.
     """
     print()
     print("  Social Data Pipeline - Source Configuration")
@@ -486,12 +680,33 @@ def main(source_name=None):
             print("\n  Aborted.\n")
             sys.exit(0)
 
+    # Fetch HF metadata if dataset ID provided
+    hf_defaults = None
+    if hf_dataset_id:
+        from social_data_pipeline.setup.hf import (
+            fetch_dataset_metadata, extract_hf_defaults, HFAPIError,
+        )
+        print(f"  Fetching metadata for HF dataset: {hf_dataset_id}")
+        try:
+            import os
+            token = os.environ.get("HF_TOKEN")
+            metadata = fetch_dataset_metadata(hf_dataset_id, token=token)
+            hf_defaults = extract_hf_defaults(metadata)
+            n_configs = len(hf_defaults["all_configs"])
+            n_groups = len(hf_defaults["schema_groups"])
+            print(f"  Found {n_configs} configs in {n_groups} schema group(s).\n")
+        except HFAPIError as e:
+            print(f"  Error: {e}\n")
+            sys.exit(1)
+
     print(f"\n  Configuring source: {source_name}")
     print(f"  Press Enter to accept defaults shown in [brackets].")
     print()
 
     hw = detect_hardware()
-    settings = run_questionnaire(hw, source_name, db_setup)
+    settings = run_questionnaire(hw, source_name, db_setup, hf_defaults=hf_defaults)
+    if hf_dataset_id:
+        settings["hf_dataset"] = hf_dataset_id
     profiles = settings["profiles"]
 
     # Run classifier configuration inline if ml profiles are selected
@@ -578,7 +793,15 @@ def main(source_name=None):
     print(f"\n  Done! Source '{source_name}' has been configured.")
 
     # Print next steps
-    if settings["platform"] == "reddit":
+    if settings.get("hf_dataset"):
+        print("\n  Next steps:")
+        print(f"    python sdp.py source download {source_name}   # Download HF parquet files")
+        print(f"    python sdp.py run parse --source {source_name}  # Select/clean columns")
+        print()
+        print_pipeline_commands(
+            [p for p in profiles if p != "parse"], source_name,
+        )
+    elif settings["platform"] == "reddit":
         print("\n  Next step:")
         print(f"    python sdp.py source configure {source_name}  # Customize Reddit fields/indexes")
         print()

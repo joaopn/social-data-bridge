@@ -488,7 +488,7 @@ mongo_indexes: {}           # Per-data-type index fields (set via platform confi
 | **processing.data_types** | Data types to process. Set via source config. | `[]` |
 | **processing.num_insertion_workers** | Workers for `mongoimport --numInsertionWorkers`. | `4` |
 | **processing.create_indexes** | Create indexes after ingestion completes. | `true` |
-| **processing.cleanup_temp** | Delete extracted JSON files after ingestion. | `false` |
+| **processing.cleanup_temp** | Delete extracted files (JSON/Parquet) after ingestion. | `false` |
 | **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
 | **mongo_indexes** | Index fields per data type (e.g., `{submissions: [id, author]}`). Set via source `platform.yaml`. | `{}` |
 
@@ -516,8 +516,10 @@ Each source has a `platform.yaml` in `config/sources/<name>/` that defines the p
 | `db_schema` | Database schema name for this source. |
 | `data_types` | List of data types this source supports. |
 | `file_format` | Output format: `parquet` (default) or `csv` (alternate, for external tool compatibility). |
-| `input_format` | Input file format: `ndjson` (default) or `csv`. CSV input uses Polars for robust parsing. Custom platforms only. |
+| `input_format` | Input file format: `ndjson` (default), `csv`, or `parquet`. CSV input uses Polars for robust parsing. Parquet is auto-set when using `--hf`. Custom platforms only. |
 | `input_csv_delimiter` | Delimiter for CSV input files (default: `,`). Supports tab (`\t`), pipe (`|`), etc. Only used when `input_format: csv`. |
+| `hf_dataset` | Hugging Face dataset ID (e.g., `user/dataset-name`). Set by `--hf` during `source add`. Used by `source download`. |
+| `hf_config_map` | Mapping of data_type → list of HF config names. Set by `--hf` during `source add`. Used by `source download` to organize files into data type directories. |
 | `file_patterns` | File detection patterns per data type (keys: `dump`, `json`, `csv`, `parquet`, `prefix`, and optionally `dump_glob`, `compression`). |
 | `indexes` | Default index fields per data type (used by the postgres profile). |
 | `mongo_collection_strategy` | `per_file` or `per_data_type` (used by mongo_ingest). |
@@ -586,7 +588,7 @@ fields:
 
 ### Custom Platforms: `config/sources/<name>/platform.yaml`
 
-Custom platform configs are generated interactively during `sdp source add <name>`. Users choose an input format (NDJSON or CSV) and enter glob patterns for file matching (e.g., `tweets_*.json.gz`, `data_*.csv.zst`) which are converted to regex patterns with auto-detected compression.
+Custom platform configs are generated interactively during `sdp source add <name>`. Users choose an input format (NDJSON, CSV, or Parquet) and enter glob patterns for file matching (e.g., `tweets_*.json.gz`, `data_*.csv.zst`) which are converted to regex patterns with auto-detected compression. For Hugging Face datasets (`--hf` flag), input format is set to `parquet` automatically and file patterns are auto-generated.
 
 <details>
 <summary><strong>Example config</strong></summary>
@@ -594,8 +596,11 @@ Custom platform configs are generated interactively during `sdp source add <name
 ```yaml
 db_schema: my_data
 file_format: parquet                       # Output: 'parquet' (default) or 'csv'
-# input_format: csv                        # Input: 'ndjson' (default) or 'csv'
+# input_format: csv                        # Input: 'ndjson' (default), 'csv', or 'parquet'
 # input_csv_delimiter: ","                 # CSV delimiter (default: comma)
+# hf_dataset: user/dataset-name           # HF dataset ID (set by --hf, used by source download)
+# hf_config_map:                           # HF config → data_type mapping (set by --hf)
+#   posts: [config1, config2]
 
 data_types:
   - posts

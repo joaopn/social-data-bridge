@@ -149,6 +149,44 @@ def detect_json_files(extracted_dir: str, data_types: List[str], file_patterns: 
     return [(f[0], f[1], f[2]) for f in files]
 
 
+def detect_parquet_input_files(extracted_dir: str, data_types: List[str], file_patterns: Dict) -> List[Tuple[str, str, str]]:
+    """Detect parquet input files in the extracted directory.
+
+    For input_format: parquet sources (e.g., HF downloads), raw parquet files
+    land in data/extracted/<data_type>/ and need parsing (column selection, etc.).
+    """
+    extracted_path = Path(extracted_dir)
+    files = []
+
+    # Build patterns from platform config (use parquet pattern if available)
+    patterns = {}
+    for data_type in data_types:
+        if data_type in file_patterns:
+            dt_patterns = file_patterns[data_type]
+            if 'parquet' in dt_patterns:
+                patterns[data_type] = re.compile(dt_patterns['parquet'])
+
+    for data_type in data_types:
+        if data_type not in patterns:
+            continue
+
+        type_dir = extracted_path / data_type
+        if not type_dir.is_dir():
+            continue
+
+        for filepath in type_dir.iterdir():
+            if filepath.is_file() and filepath.suffix == '.parquet':
+                filename = filepath.name
+                match = patterns[data_type].match(filename)
+                if match:
+                    file_id = filepath.stem
+                    files.append((str(filepath), file_id, data_type, filename))
+
+    type_order = {dt: i for i, dt in enumerate(data_types)}
+    files.sort(key=lambda x: (type_order.get(x[2], 99), x[3]))
+    return [(f[0], f[1], f[2]) for f in files]
+
+
 def detect_parsed_files(parsed_dir: str, data_types: List[str], file_patterns: Dict, file_format: str = 'csv') -> List[Tuple[str, str, str]]:
     """Detect parsed files (Parquet or CSV) in the parsed directory."""
     parsed_base = Path(parsed_dir)
@@ -248,6 +286,8 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("PHASE 1: INPUT DETECTION")
     print("="*60)
 
+    input_format = platform_config.get('input_format', 'ndjson')
+
     dump_files = detect_dump_files(dumps_dir, data_types, file_patterns)
     print(f"[sdp] Found {len(dump_files)} compressed files in {dumps_dir}")
 
@@ -255,9 +295,12 @@ def run_pipeline(config_dir: str = "/app/config"):
     ext = 'parquet' if file_format == 'parquet' else 'csv'
 
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)
+    parquet_input_files = detect_parquet_input_files(extracted_dir, data_types, file_patterns) if input_format == 'parquet' else []
     parsed_files = detect_parsed_files(parsed_dir, data_types, file_patterns, file_format=file_format)
 
     print(f"[sdp] Found {len(json_files)} JSON files in extracted directory")
+    if parquet_input_files:
+        print(f"[sdp] Found {len(parquet_input_files)} parquet input files in extracted directory")
     print(f"[sdp] Found {len(parsed_files)} {ext.upper()} files in parsed directory")
 
     # Filter out compressed files that already have extracted JSON or parsed CSV
@@ -275,9 +318,16 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Filter out JSON files that already have parsed CSV
     pending_json = [(p, fid, dt) for p, fid, dt in json_files if fid not in existing_parsed_ids]
 
-    print(f"[sdp] Pending: {len(pending_dumps)} compressed, {len(pending_json)} JSON")
+    # Filter out parquet input files that already have parsed output
+    pending_parquet = [(p, fid, dt) for p, fid, dt in parquet_input_files if fid not in existing_parsed_ids]
 
-    if not (pending_dumps or pending_json):
+    print(f"[sdp] Pending: {len(pending_dumps)} compressed, {len(pending_json)} JSON", end="")
+    if pending_parquet:
+        print(f", {len(pending_parquet)} parquet input")
+    else:
+        print()
+
+    if not (pending_dumps or pending_json or pending_parquet):
         print("\n[sdp] No files to process. Exiting.")
         return
 
@@ -306,13 +356,21 @@ def run_pipeline(config_dir: str = "/app/config"):
 
         total_timings['extraction'] = time.time() - t_start
 
-    # Phase 3: Parse JSON files to CSV
+    # Phase 3: Parse input files to CSV/Parquet
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)  # Re-detect
     files_to_parse = []
     for json_path, file_id, data_type in json_files:
         expected_output = Path(parsed_dir) / data_type / f"{file_id}.{ext}"
         if not expected_output.exists():
             files_to_parse.append((json_path, file_id, data_type))
+
+    # Include parquet input files (from HF downloads or similar)
+    if input_format == 'parquet':
+        parquet_input_files = detect_parquet_input_files(extracted_dir, data_types, file_patterns)
+        for pq_path, file_id, data_type in parquet_input_files:
+            expected_output = Path(parsed_dir) / data_type / f"{file_id}.{ext}"
+            if not expected_output.exists():
+                files_to_parse.append((pq_path, file_id, data_type))
 
     if files_to_parse:
         print("\n" + "="*60)

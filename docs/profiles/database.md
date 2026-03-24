@@ -2,7 +2,7 @@
 
 Social Data Pipeline supports two database destinations:
 - **PostgreSQL** — ingests parsed files (Parquet or CSV) via three profiles: `postgres` (server), `postgres_ingest` (main tables), `postgres_ml` (classifier outputs)
-- **MongoDB** — ingests raw JSON/NDJSON/CSV directly after extraction via two profiles: `mongo` (server), `mongo_ingest` (bulk import)
+- **MongoDB** — ingests raw JSON/NDJSON/CSV/Parquet directly after extraction via two profiles: `mongo` (server), `mongo_ingest` (bulk import)
 
 Both databases support optional authentication and MCP servers for AI tool access.
 
@@ -12,7 +12,7 @@ Both databases support optional authentication and MCP servers for AI tool acces
 python sdp.py db start                  # Start configured database(s) + MCP servers
 python sdp.py run postgres_ingest       # Ingest parsed files into PostgreSQL
 python sdp.py run postgres_ml           # Ingest ML classifier outputs into PostgreSQL
-python sdp.py run mongo_ingest          # Ingest raw JSON into MongoDB
+python sdp.py run mongo_ingest          # Ingest raw data into MongoDB
 python sdp.py db stop                   # Stop configured database(s) + MCP servers
 python sdp.py source error-logs         # Show error details for failed datasets
 ```
@@ -382,17 +382,31 @@ WiredTiger cache size is controlled via the `MONGO_CACHE_SIZE_GB` environment va
 
 ## mongo_ingest Profile
 
-Ingests raw extracted files directly into MongoDB using `mongoimport`. Supports both JSON/NDJSON and CSV input — the file format is auto-detected from the file extension. Operates on raw data right after decompression — no intermediate parsing needed.
+Ingests raw extracted files directly into MongoDB using `mongoimport`. Supports JSON/NDJSON, CSV, and Parquet input — the file format is auto-detected from the file extension. Operates on raw data right after decompression or download — no intermediate parsing needed.
 
 ### How It Works
 
-1. **Extract**: Detects compressed dump files, decompresses using format-appropriate tools (`.zst`, `.gz`, `.xz`, `.tar.gz`)
+1. **Extract**: Detects compressed dump files, decompresses using format-appropriate tools (`.zst`, `.gz`, `.xz`, `.tar.gz`). For `input_format: parquet` sources (e.g., HF datasets), also detects parquet files in `data/extracted/`.
 2. **Ingest**: For each extracted file:
    - Creates a collection with zstd WiredTiger compression
    - Runs `mongoimport` for bulk insertion (blind insert, no upsert)
    - Auto-detects CSV files (by `.csv` extension) and passes `--type csv --headerline` to mongoimport
+   - Auto-detects Parquet files (by `.parquet` extension) and transparently converts to temp NDJSON via PyArrow before running mongoimport. Temp file is deleted on success; location is printed on error for manual cleanup.
    - Records the file in the `_sdp_metadata` collection for state tracking
 3. **Index**: Creates configured indexes on each collection
+
+### Parquet Ingestion
+
+For sources with `input_format: parquet` (e.g., Hugging Face datasets), `mongo_ingest` detects parquet files in `data/extracted/<data_type>/` and ingests them directly — preserving all original columns without needing the parse profile first. This is useful for raw data inspection in MongoDB while PostgreSQL gets a parsed field subset.
+
+The parquet → MongoDB flow:
+1. PyArrow reads parquet row groups iteratively (memory-bounded)
+2. Each row is serialized to JSON and written to a temp NDJSON file (`{filepath}.ndjson.tmp`)
+3. `mongoimport` ingests the temp NDJSON (standard path — same logging and error handling)
+4. Temp file is deleted on success
+
+> [!NOTE]
+> The MongoDB container image (`Dockerfile.mongo`) includes `pyarrow` for parquet conversion. This is separate from the CPU/GPU processing containers.
 
 ### Collection Strategies
 

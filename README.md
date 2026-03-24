@@ -9,7 +9,7 @@
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![ONNX](https://img.shields.io/badge/ONNX-Runtime-005CED.svg?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
-A researcher-focused pipeline for processing, classifying, and ingesting large-scale JSON and CSV data dumps into analysis-ready databases. Interactive CLI setup, step-by-step execution with extensive configuration options. Built for the [Reddit Arctic Shift dumps](https://github.com/ArthurHeitmann/arctic_shift) and configurable to any high-volume record-based dataset.
+A researcher-focused pipeline for processing, classifying, and ingesting large-scale JSON and CSV data dumps into analysis-ready databases. Interactive CLI setup, step-by-step execution with extensive configuration options. Built for the [Reddit Arctic Shift dumps](https://github.com/ArthurHeitmann/arctic_shift) and configurable to any high-volume record-based dataset — including [Hugging Face datasets](https://huggingface.co/datasets).
 
 
 </div>
@@ -23,6 +23,8 @@ python sdp.py db start                      # Start database(s)
 
 # Process and ingest data
 python sdp.py source add reddit             # Add a data source (interactive setup)
+python sdp.py source add mydata --hf user/dataset  # Or add from Hugging Face
+python sdp.py source download mydata        # Download HF dataset files
 python sdp.py run parse                     # Decompress dumps → parse to cleaned, structured files
 python sdp.py run postgres_ingest           # Ingest parsed files into PostgreSQL
 python sdp.py run mongo_ingest              # Ingest raw data into MongoDB
@@ -58,12 +60,12 @@ python sdp.py source error-logs             # Show error details for failed data
 
 **Social Data Pipeline** provides a complete pipeline for working with large-scale social media data dumps:
 
-- **Multi-platform support** — Reddit (with specialized features) or custom JSON/CSV platforms
+- **Multi-platform support** — Reddit (with specialized features), custom JSON/CSV platforms, or [Hugging Face datasets](https://huggingface.co/datasets)
 - **Automatic detection and decompression** of `.zst`, `.gz`, `.xz`, and `.tar.gz` dump files
-- **Parsing** JSON and CSV input to structured files (Parquet or CSV) with configurable field extraction
+- **Parsing** JSON, CSV, and Parquet input to structured files (Parquet or CSV) with configurable field extraction
 - **Modular classification** — CPU-based (Lingua) and GPU-based (transformers) with multi-GPU parallelization and language filtering
 - **PostgreSQL ingestion** of parsed files with finetuned settings and duplicate handling
-- **MongoDB ingestion** of raw JSON or CSV directly after extraction, for raw data inspection
+- **MongoDB ingestion** of raw JSON, CSV, or Parquet directly after extraction, for raw data inspection
 - **Optional authentication** with admin, read-only, and MCP-specific database users
 - **MCP servers** for PostgreSQL and MongoDB, exposing databases to AI tools (Claude Desktop, VS Code, Cursor)
 - **Config-based** addition of new platforms and classifiers
@@ -74,10 +76,12 @@ python sdp.py source error-logs             # Show error details for failed data
 flowchart TB
     subgraph Input
         DUMPS[Compressed dumps]
+        HF[HF datasets]
     end
 
     subgraph Files
         direction LR
+        EXTRACTED[Extracted files]
         PARSED[Parsed files]
         LINGUA[+ language]
         ML_OUT[+ ML classifiers]
@@ -95,6 +99,9 @@ flowchart TB
     end
 
     DUMPS -->|parse| PARSED
+    HF -->|"source download"| EXTRACTED
+    EXTRACTED -->|parse| PARSED
+    EXTRACTED -->|mongo_ingest| MONGO
     DUMPS -->|mongo_ingest| MONGO
     PARSED & LINGUA -->|postgres_ingest| PG
     ML_OUT -->|postgres_ml| PG
@@ -183,6 +190,29 @@ python sdp.py db setup               # Select "Enable database authentication"
 > [!NOTE]
 > By default, databases accept local, unauthenticated connections. Authentication is optional and can be enabled at any time. See the [Database Profiles](docs/profiles/database.md#authentication) docs for details.
 
+### Hugging Face Data
+
+#### 1. Configure
+
+```bash
+python sdp.py db setup                              # Configure databases (one-time)
+python sdp.py source add mydata --hf user/dataset   # Add HF source (interactive setup with HF defaults)
+```
+
+The `--hf` flag fetches dataset metadata from the HF API — schema, field names, and types are used as defaults during setup. You still go through the full interactive configuration: grouping HF configs into data types, selecting fields, choosing indexes, etc.
+
+#### 2. Download and Process
+
+```bash
+python sdp.py source download mydata                # Download parquet files to data/extracted/
+python sdp.py run parse --source mydata             # Parse: column selection, type enforcement
+python sdp.py db start                              # Start database(s)
+python sdp.py run postgres_ingest --source mydata   # Ingest parsed subset into PostgreSQL
+python sdp.py run mongo_ingest --source mydata      # Ingest raw parquet into MongoDB
+```
+
+`source download` first fetches a 1-to-1 mirror of the HF repo into `data/dumps/<source>/` (preserving the original config/split structure), then organizes files into `data/extracted/<source>/<data_type>/` using the config-to-data-type mapping from setup. The `parse` profile selects configured fields and enforces types. For MongoDB, `mongo_ingest` can ingest raw parquet files directly (transparently converted to NDJSON for `mongoimport`), preserving all original HF columns.
+
 ---
 
 <details>
@@ -215,6 +245,8 @@ python sdp.py <db|source|run> [options]
 | Command | Description |
 |---------|-------------|
 | `sdp.py source add <name>` | Add a new data source (interactive setup) |
+| `sdp.py source add <name> --hf <dataset_id>` | Add from a Hugging Face dataset (fetches metadata as defaults) |
+| `sdp.py source download <name>` | Download HF dataset files (mirrors to `data/dumps/`, organizes to `data/extracted/`) |
 | `sdp.py source configure <name>` | Reconfigure existing source (platform-specific) |
 | `sdp.py source add-classifiers <name>` | Add ML classifiers for a source |
 | `sdp.py source remove <name>` | Remove source configuration |
@@ -222,7 +254,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py source status [name]` | Show source processing/ingestion status |
 | `sdp.py source error-logs [name]` | Show database ingestion error logs |
 
-`source add` walks you through platform selection, file patterns, fields, indexes, and optional classifier configuration. All per-source config is written to `config/sources/<name>/`.
+`source add` walks you through platform selection, file patterns, fields, indexes, and optional classifier configuration. With `--hf`, it fetches HF dataset metadata (configs, fields, types) to pre-populate defaults — you still go through the full interactive setup. `source download` accepts `--token` for private datasets and `--data-type` to download selectively. All per-source config is written to `config/sources/<name>/`.
 
 ### Pipeline (`sdp.py run`)
 
@@ -242,14 +274,14 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 
 | Profile | Description | Input | Output |
 |---------|-------------|-------|--------|
-| `parse` | Decompress dumps, parse JSON/CSV to Parquet/CSV | Compressed dump files (`.zst`, `.gz`, `.xz`, `.tar.gz`) | `PARSED_PATH/` |
+| `parse` | Decompress dumps, parse JSON/CSV/Parquet to Parquet/CSV | Compressed dump files, raw Parquet (HF) | `PARSED_PATH/` |
 | `lingua` | Lingua language detection (CPU) | Parsed files | `OUTPUT_PATH/lingua/` |
 | `ml` | Transformer classifiers (GPU) | Parsed files + Lingua output | `OUTPUT_PATH/{classifier}/` |
 | `postgres` | PostgreSQL database server | — | — |
 | `postgres_ingest` | Ingest into PostgreSQL | Parsed files (or Lingua-enriched) | PostgreSQL tables |
 | `postgres_ml` | Ingest ML outputs into PostgreSQL | Classifier output files | PostgreSQL tables |
 | `mongo` | MongoDB database server | — | — |
-| `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV | MongoDB collections |
+| `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV/Parquet | MongoDB collections |
 
 > [!NOTE]
 > GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). All profiles track progress and resume automatically — rerun any profile safely without reprocessing completed files.
@@ -264,9 +296,21 @@ For detailed configuration and algorithm documentation, see the per-profile docs
 | Platform | Description | Default |
 |----------|-------------|---------|
 | `reddit` | Specialized Reddit features: waterfall deletion detection, base-36 ID conversion, format compatibility | Yes |
-| `custom/<name>` | JSON and CSV parsing for arbitrary data: dot-notation, array indexing, type enforcement | No |
+| `custom/<name>` | JSON, CSV, and Parquet parsing for arbitrary data: dot-notation, array indexing, type enforcement | No |
 
 The default platform is Reddit. To process arbitrary JSON/NDJSON or CSV data, select `custom` during `sdp.py source add` and configure your platform interactively.
+
+### Hugging Face Datasets
+
+Datasets hosted on [Hugging Face](https://huggingface.co/datasets) can be added directly:
+
+```bash
+python sdp.py source add mydata --hf user/dataset-name   # Fetches HF metadata as setup defaults
+python sdp.py source download mydata                      # Downloads parquet files to data/extracted/
+python sdp.py run parse --source mydata                   # Parse (column selection, type enforcement)
+```
+
+The `--hf` flag fetches dataset metadata (configs, fields, types) from the HF API and uses it to pre-populate the interactive setup. HF configs are grouped interactively into data types (e.g., grouping yearly configs into `comments` and `submissions`). `source download` mirrors the HF repo to `data/dumps/` and then organizes files into `data/extracted/` by data type. Files flow through the standard pipeline — `parse` handles column selection and type enforcement, `mongo_ingest` can ingest raw parquet directly. No additional local dependencies beyond `pyyaml`.
 
 - [Reddit Platform Reference](docs/platforms/reddit.md)
 - [Custom Platform Setup](docs/platforms/custom.md)
@@ -303,7 +347,7 @@ Yes! Use `python sdp.py run lingua` or `python sdp.py run ml` independently. The
 <details>
 <summary><strong>Can I use this for non-Reddit data?</strong></summary>
 
-Yes! Select `custom` during `python sdp.py source add <name>` to process arbitrary JSON/NDJSON or CSV data. See the [Custom Platform](docs/platforms/custom.md) setup guide.
+Yes! Select `custom` during `python sdp.py source add <name>` to process arbitrary JSON/NDJSON or CSV data. For Hugging Face datasets, use `python sdp.py source add <name> --hf <dataset_id>` to fetch metadata and pre-populate setup defaults. See the [Custom Platform](docs/platforms/custom.md) setup guide.
 
 </details>
 

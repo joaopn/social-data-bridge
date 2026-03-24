@@ -155,6 +155,101 @@ def _process_csv_input(
     return input_size, output_file
 
 
+def _process_parquet_input(
+    input_file: str,
+    output_file: str,
+    data_type_config: Dict,
+    fields_to_extract: List[str],
+    file_format: str = 'parquet',
+    parquet_row_group_size: int = 0,
+) -> tuple:
+    """Process a Parquet input file: select/rename columns, strip null bytes, write output.
+
+    Reads raw parquet from data/extracted/ (e.g., from HF download), selects columns
+    matching fields_to_extract, enforces types, and writes clean output to data/parsed/.
+    Analogous to _process_csv_input() for the parquet input format.
+    """
+    import polars as pl
+    import pyarrow.parquet as pq
+
+    dataset = Path(input_file).stem
+    output_path = Path(output_file)
+    temp_path = output_path.with_suffix(output_path.suffix + '.temp')
+
+    if temp_path.exists():
+        print(f"[sdp] Removing incomplete temp file: {temp_path.name}")
+        temp_path.unlink()
+
+    columns = ['dataset'] + fields_to_extract
+    batch_size = parquet_row_group_size or PARQUET_ROW_GROUP_SIZE
+    line_count = 0
+
+    try:
+        # Read input parquet lazily for memory-bounded processing
+        lf = pl.scan_parquet(input_file)
+        available_cols = lf.collect_schema().names()
+
+        # Select only fields that exist in the input file
+        select_cols = [f for f in fields_to_extract if f in available_cols]
+        missing = set(fields_to_extract) - set(available_cols)
+        if missing:
+            print(f"[sdp] Warning: fields not in input: {', '.join(sorted(missing))}")
+
+        # Build Polars schema for type casting
+        schema = build_parquet_schema(columns, data_type_config)
+
+        # Collect and process
+        df = lf.select(select_cols).collect()
+        line_count = len(df)
+
+        # Add dataset column
+        df = df.with_columns(pl.lit(dataset).alias('dataset'))
+
+        # Add missing fields as null columns
+        for f in fields_to_extract:
+            if f not in df.columns:
+                df = df.with_columns(pl.lit(None).alias(f))
+
+        # Reorder to match expected column order
+        df = df.select(columns)
+
+        # Strip null bytes from string columns
+        for col in df.columns:
+            if df[col].dtype == pl.Utf8 or df[col].dtype == pl.String:
+                df = df.with_columns(
+                    pl.col(col).str.replace_all('\x00', '').alias(col)
+                )
+
+        # Cast types per field_types config
+        for col, dtype in schema.items():
+            if col in df.columns:
+                df = df.with_columns(pl.col(col).cast(dtype, strict=False))
+
+        if file_format == 'parquet':
+            # Write as parquet with row groups
+            table = df.to_arrow()
+            with pq.ParquetWriter(str(temp_path), table.schema) as writer:
+                writer.write_table(table, row_group_size=batch_size)
+            temp_path.rename(output_path)
+        else:
+            # Write as CSV
+            df.write_csv(temp_path, include_header=True)
+            temp_path.rename(output_path)
+
+    except Exception:
+        if temp_path.exists():
+            temp_path.unlink()
+        raise
+
+    input_size = os.path.getsize(input_file)
+    output_size = os.path.getsize(output_file)
+
+    print(f"[sdp] {Path(input_file).name} -> {Path(output_file).name}")
+    print(f"[sdp] Rows: {line_count:,}, Output: {output_size / (1024**3):.2f} GB")
+
+    return input_size, output_file
+
+
 def process_single_file(
     input_file: str,
     output_file: str,
@@ -169,9 +264,14 @@ def process_single_file(
     """
     Process a single input file and write to CSV or Parquet.
 
-    Supports NDJSON (default) and CSV input formats.
+    Supports NDJSON (default), CSV, and Parquet input formats.
     Uses a .temp file during writing and renames to final name on success.
     """
+    if input_format == 'parquet':
+        return _process_parquet_input(
+            input_file, output_file, data_type_config, fields_to_extract,
+            file_format, parquet_row_group_size,
+        )
     if input_format == 'csv':
         return _process_csv_input(
             input_file, output_file, data_type_config, fields_to_extract,
@@ -300,11 +400,11 @@ def parse_to_csv(
         format='%(asctime)s:%(levelname)s:%(message)s'
     )
 
-    # Determine output filename — strip .csv/.json from input name to avoid
-    # double extensions (e.g., data_2024.csv.parquet)
+    # Determine output filename — strip known extensions from input name to avoid
+    # double extensions (e.g., data_2024.csv.parquet, data_2024.parquet.parquet)
     input_path = Path(input_file)
     stem = input_path.name
-    if stem.endswith('.csv') or stem.endswith('.json'):
+    if stem.endswith(('.csv', '.json', '.parquet')):
         stem = Path(stem).stem
     ext = '.parquet' if file_format == 'parquet' else '.csv'
     output_file = output_dir / f"{stem}{ext}"

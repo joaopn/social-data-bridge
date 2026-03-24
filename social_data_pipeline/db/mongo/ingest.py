@@ -7,6 +7,7 @@ index creation, and metadata tracking for the mongo_ingest profile.
 Adapted from db_tools/db_tools/mongodb.py with project-consistent conventions.
 """
 
+import json
 import os
 import subprocess
 from datetime import datetime
@@ -69,6 +70,50 @@ def _redact_uri(uri: str) -> str:
     return re.sub(r'://([^:]+):([^@]+)@', r'://\1:***@', uri)
 
 
+def _parquet_to_ndjson(filepath: str, exclude_columns: List[str] = None) -> str:
+    """Convert a Parquet file to temp NDJSON for mongoimport.
+
+    Reads in small batches (1024 rows) for strict memory control.
+    Temp file placed alongside input: {filepath}.ndjson.tmp
+
+    Args:
+        filepath: Path to the parquet file.
+        exclude_columns: Column names to skip (from platform config).
+
+    Returns:
+        Path to the temp NDJSON file.
+    """
+    import pyarrow.parquet as pq
+
+    temp_path = filepath + '.ndjson.tmp'
+    pf = pq.ParquetFile(filepath)
+
+    # Determine columns to read
+    exclude_set = set(exclude_columns or [])
+    if exclude_set:
+        schema = pf.schema_arrow
+        columns = [schema.field(i).name for i in range(len(schema))
+                   if schema.field(i).name not in exclude_set]
+        print(f"[sdp] Excluding {len(exclude_set)} columns: {', '.join(sorted(exclude_set))}")
+    else:
+        columns = None
+
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        for batch in pf.iter_batches(batch_size=1024, columns=columns):
+            rows = batch.to_pydict()
+            n_rows = len(next(iter(rows.values()))) if rows else 0
+            col_names = list(rows.keys())
+            for i in range(n_rows):
+                row = {}
+                for col in col_names:
+                    val = rows[col][i]
+                    if val is not None:
+                        row[col] = val
+                f.write(json.dumps(row, default=str) + '\n')
+
+    return temp_path
+
+
 def mongoimport_file(
     filepath: str,
     db_name: str,
@@ -79,26 +124,40 @@ def mongoimport_file(
     password: str = None,
     num_workers: int = 4,
     log_dir: str = "/data/mongo/logs",
+    exclude_columns: List[str] = None,
 ) -> None:
     """
     Ingest a file using mongoimport subprocess.
 
-    Supports JSON/NDJSON (default) and CSV (auto-detected from file extension).
+    Supports JSON/NDJSON (default), CSV (auto-detected from .csv extension),
+    and Parquet (auto-detected from .parquet extension, converted to temp NDJSON).
     Logs are appended to {log_dir}/mongoimport_{db}_{collection}.log.
     Raises RuntimeError on failure (never exposes credentials in exceptions).
+
+    Args:
+        exclude_columns: For parquet files, column names to skip during conversion
+            (e.g., embedding arrays). List-type columns are auto-excluded.
     """
+    # Transparent parquet → temp NDJSON conversion
+    ndjson_temp = None
+    import_path = filepath
+    if filepath.lower().endswith('.parquet'):
+        print(f"[sdp] Converting parquet to NDJSON: {Path(filepath).name}")
+        ndjson_temp = _parquet_to_ndjson(filepath, exclude_columns=exclude_columns)
+        import_path = ndjson_temp
+
     uri = get_mongo_uri(host, port, user, password)
     command = [
         "mongoimport",
         f"--uri={uri}",
         "--db", db_name,
         "--collection", collection_name,
-        "--file", filepath,
+        "--file", import_path,
         "--numInsertionWorkers", str(num_workers),
     ]
 
     # Auto-detect CSV input from file extension
-    if filepath.lower().endswith('.csv'):
+    if import_path.lower().endswith('.csv'):
         command.extend(["--type", "csv", "--headerline"])
 
     # Ensure log directory exists
@@ -108,24 +167,36 @@ def mongoimport_file(
     # Build redacted command for logging (never write credentials to logs)
     redacted_command = [_redact_uri(arg) if '://' in arg else arg for arg in command]
 
-    with open(log_file, 'a') as log:
-        log.write(f"\n{'='*60}\n")
-        log.write(f"Timestamp: {datetime.now().isoformat()}\n")
-        log.write(f"Command: {' '.join(redacted_command)}\n")
-        log.write(f"File: {filepath}\n")
-        log.write(f"{'='*60}\n")
-        result = subprocess.run(
-            command,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
+    try:
+        with open(log_file, 'a') as log:
+            log.write(f"\n{'='*60}\n")
+            log.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            log.write(f"Command: {' '.join(redacted_command)}\n")
+            log.write(f"File: {filepath}\n")
+            if ndjson_temp:
+                log.write(f"Converted from: {filepath} (parquet)\n")
+            log.write(f"{'='*60}\n")
+            result = subprocess.run(
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"mongoimport failed for {filepath} -> {db_name}.{collection_name}. "
-            f"See log: {log_file}"
-        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"mongoimport failed for {filepath} -> {db_name}.{collection_name}. "
+                f"See log: {log_file}"
+            )
+
+        # Success: clean up temp NDJSON
+        if ndjson_temp and os.path.exists(ndjson_temp):
+            os.remove(ndjson_temp)
+
+    except Exception:
+        if ndjson_temp and os.path.exists(ndjson_temp):
+            print(f"[sdp] Temp NDJSON kept for inspection: {ndjson_temp}")
+        raise
 
 
 def create_index(

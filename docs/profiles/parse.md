@@ -1,6 +1,6 @@
 # Parse Profile
 
-The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.tar.gz`) and parses JSON or CSV input to structured files (Parquet or CSV). It's the entry point of the pipeline — all other profiles depend on its output.
+The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.tar.gz`) and parses JSON, CSV, or Parquet input to structured files (Parquet or CSV). It's the entry point of the pipeline — all other profiles depend on its output.
 
 ## Running
 
@@ -20,6 +20,7 @@ Three-phase pipeline:
 ### Phase 1: Input Detection
 - Scans `DUMPS_PATH/<source>` for compressed files matching platform file patterns
 - Scans `EXTRACTED_PATH/<source>` for already-decompressed JSON files
+- Scans `EXTRACTED_PATH/<source>` for parquet input files (when `input_format: parquet`, e.g., HF datasets)
 - Scans `PARSED_PATH/<source>` for already-parsed files (Parquet or CSV, based on `file_format` in platform config)
 - File detection is scoped to per-data-type subdirectories
 - Reddit: detects `RS_YYYY-MM.*` (submissions) and `RC_YYYY-MM.*` (comments), including torrent directory structure (`submissions/RS_*.zst`, `comments/RC_*.zst`)
@@ -39,8 +40,9 @@ Three-phase pipeline:
 - Reddit: applies waterfall deletion detection, base-36 ID conversion, format compatibility (see [Reddit Platform](../platforms/reddit.md))
 - Custom NDJSON: field extraction with dot-notation and type enforcement (see [Custom Platforms](../platforms/custom.md))
 - Custom CSV: column selection, type casting, and robust handling of messy files via Polars (see [Custom Platforms](../platforms/custom.md))
-- **Parquet** (default for new sources): typed columns via Polars/PyArrow, null-byte stripping only (no CSV escaping)
-- **CSV** (alternate, for external tool compatibility): writes CSV with headers, full escape handling
+- Custom Parquet input (`input_format: parquet`): column selection, null-byte stripping, and type enforcement via Polars. Used for HF dataset parquet files downloaded to `data/extracted/`.
+- **Parquet output** (default for new sources): typed columns via Polars/PyArrow, null-byte stripping only (no CSV escaping)
+- **CSV output** (alternate, for external tool compatibility): writes CSV with headers, full escape handling
 - Uses temp files for atomic writes
 
 ---
@@ -74,7 +76,7 @@ See [Configuration Reference](../configuration.md) for full details and the sour
 The parse profile delegates to a platform-specific parser based on the `PLATFORM` environment variable:
 
 - **Reddit** (default): Specialized parsing with deletion detection, base-36 ID conversion, and format compatibility. See [Reddit Platform](../platforms/reddit.md).
-- **Custom** (`custom/<name>`): JSON and CSV parsing with configurable field extraction and type enforcement. See [Custom Platforms](../platforms/custom.md).
+- **Custom** (`custom/<name>`): JSON, CSV, and Parquet parsing with configurable field extraction and type enforcement. Parquet input is used for Hugging Face datasets. See [Custom Platforms](../platforms/custom.md).
 
 ---
 
