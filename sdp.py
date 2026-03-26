@@ -1579,9 +1579,30 @@ def cmd_source_configure(args):
     platform = source_config.get("platform", "")
     if platform == "reddit" or source_name == "reddit":
         from social_data_pipeline.setup.reddit import main as reddit_main
+        from social_data_pipeline.setup.source import main as source_main
+        from social_data_pipeline.setup.utils import (
+            get_source_profiles, load_db_setup, ask_bool,
+        )
         reddit_main(source_name=source_name)
+        # After reddit platform config, offer to add any missing profile configs.
+        # Use source add (with new-profiles-only defaults) so postgres/mongo/ml
+        # can be added without touching existing working configurations.
+        db_setup = load_db_setup()
+        if db_setup:
+            existing = get_source_profiles(source_name)
+            databases = db_setup.get("databases", [])
+            available = ["parse", "lingua", "ml"]
+            if "postgres" in databases:
+                available += ["postgres_ingest", "postgres_ml"]
+            if "mongo" in databases:
+                available += ["mongo_ingest"]
+            missing = [p for p in available if p not in existing]
+            if missing:
+                print(f"\n  Profiles not yet configured: {', '.join(missing)}")
+                if ask_bool("Add missing profile configurations now?", True):
+                    source_main(source_name=source_name)
     else:
-        # For custom platforms, re-run source setup
+        # For custom platforms, re-run source setup (also updates .env paths)
         from social_data_pipeline.setup.source import main as source_main
         source_main(source_name=source_name)
 

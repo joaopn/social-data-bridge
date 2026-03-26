@@ -413,7 +413,10 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdp] Found {len(json_files)} JSON files in extracted directory")
     print(f"[sdp] Found {len(pending_parsed_files)} unprocessed parsed files to ingest")
 
-    has_work = pending_zst_files or json_files or pending_parsed_files
+    if prefer_lingua and lingua_config:
+        has_work = bool(pending_parsed_files)
+    else:
+        has_work = pending_zst_files or json_files or pending_parsed_files
     
     if not has_work:
         print("\n[sdp] No files to process. Exiting.")
@@ -443,8 +446,8 @@ def run_pipeline(config_dir: str = "/app/config"):
     success_count = 0
     fail_count = 0
     
-    # Phase 1: Extract .zst files
-    if pending_zst_files:
+    # Phase 1: Extract .zst files (skipped when prefer_lingua is enabled)
+    if pending_zst_files and not (prefer_lingua and lingua_config):
         print("\n" + "="*60)
         print("PHASE 1: EXTRACTION")
         print("="*60)
@@ -465,14 +468,15 @@ def run_pipeline(config_dir: str = "/app/config"):
         
         total_timings['extraction'] = time.time() - t_start
     
-    # Phase 2: Parse JSON files to CSV
+    # Phase 2: Parse JSON files to CSV (skipped when prefer_lingua is enabled)
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)
     files_to_parse = []
-    for json_path, file_id, data_type in json_files:
-        expected_output = Path(f"{parsed_dir}/{data_type}") / f"{file_id}.{ext}"
-        if not expected_output.exists():
-            files_to_parse.append((json_path, file_id, data_type))
-    
+    if not (prefer_lingua and lingua_config):
+        for json_path, file_id, data_type in json_files:
+            expected_output = Path(f"{parsed_dir}/{data_type}") / f"{file_id}.{ext}"
+            if not expected_output.exists():
+                files_to_parse.append((json_path, file_id, data_type))
+
     if files_to_parse:
         print("\n" + "="*60)
         print(f"PHASE 2: PARSING")

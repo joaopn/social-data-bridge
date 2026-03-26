@@ -23,6 +23,7 @@ from social_data_pipeline.setup.utils import (
     section_header, write_files, list_sources, load_db_setup, load_env,
     print_pipeline_commands, update_env_file,
     detect_compression_from_glob, derive_file_patterns,
+    get_source_profiles,
 )
 from social_data_pipeline.setup.classifiers import (
     run_questionnaire as run_classifier_questionnaire,
@@ -258,7 +259,20 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     if "mongo" in databases:
         all_profiles += ["mongo_ingest"]
 
-    default_profiles = all_profiles[:] if gpus else [p for p in all_profiles if p != "ml"]
+    # When reconfiguring an existing source, only pre-check profiles that don't
+    # already have a config file — avoids overwriting working configurations.
+    existing_profiles = get_source_profiles(source_name)
+    if existing_profiles:
+        new_profiles = [p for p in all_profiles if p not in existing_profiles]
+        # Remove ml if no GPU, but keep all existing regardless
+        default_profiles = new_profiles if gpus else [p for p in new_profiles if p != "ml"]
+        if new_profiles:
+            print(f"  Already configured: {', '.join(existing_profiles)}")
+            print(f"  New profiles available: {', '.join(new_profiles)}")
+        else:
+            print(f"  All profiles already configured: {', '.join(existing_profiles)}")
+    else:
+        default_profiles = all_profiles[:] if gpus else [p for p in all_profiles if p != "ml"]
     profiles = ask_multi_select("Profiles to configure:", all_profiles, default_profiles)
     settings["profiles"] = profiles
 

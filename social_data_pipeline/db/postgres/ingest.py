@@ -14,11 +14,12 @@ from ...core.config import ConfigurationError
 def _pg_server_path(container_path: str) -> str:
     """Translate ingestion container path to PostgreSQL server-visible path.
 
-    The ingestion container mounts source-specific dirs (e.g. ./data/parsed/reddit)
-    at /data/parsed and /data/output.  The PostgreSQL container mounts the *parent*
-    dirs (./data/parsed, ./data/output) at the same mount points.  Server-side COPY
-    reads from the PostgreSQL container's filesystem, so paths must include the
-    source subdirectory.
+    The ingestion container is started by `sdp run` with source-specific mounts
+    (e.g. /mnt/datasets/sdp/parsed/reddit → /data/parsed).  The PostgreSQL
+    container is started independently by `sdp db start` with parent-level mounts
+    (e.g. /mnt/datasets/sdp/parsed → /data/parsed, set via PARSED_PATH/OUTPUT_PATH
+    in .env).  Server-side COPY reads from the PostgreSQL container's filesystem,
+    so paths must include the source subdirectory.
     """
     source = os.environ.get('SOURCE', '')
     if not source:

@@ -63,7 +63,6 @@ mongo_indexes:
 mandatory_fields:
   - dataset
   - id
-  - retrieved_utc
 
 # Primary key column (used for deduplication, ON CONFLICT, and table constraints)
 primary_key: id
@@ -142,6 +141,7 @@ field_types:
 fields:
   submissions:
   # core
+    - retrieved_utc
     - created_utc
     - id10
     - score
@@ -174,6 +174,7 @@ fields:
 
   comments:
   # core
+    - retrieved_utc
     - created_utc
     - link_id
     - parent_id
