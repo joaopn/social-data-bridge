@@ -275,7 +275,7 @@ Optional MCP (Model Context Protocol) servers expose databases to AI tools like 
 ### Setup
 
 ```bash
-python sdp.py db mcp                 # Configure MCP servers (interactive)
+python sdp.py db setup-mcp           # Configure MCP servers (interactive)
 python sdp.py db start               # Starts databases + MCP servers together
 ```
 
@@ -286,7 +286,7 @@ python sdp.py db start               # Starts databases + MCP servers together
 | PostgreSQL | `crystaldba/postgres-mcp`        | SSE              | 8000         | `/sse`   |
 | MongoDB    | `Dockerfile.mcp-mongo`           | Streamable HTTP  | 3000         | `/mcp`   |
 
-MCP servers connect using the `readonly_mcp` database user when auth is enabled, or with default credentials otherwise. Read-only mode is the default but can be changed during `sdp db mcp` setup. Use `sdp db mcp --delete` to remove MCP configuration.
+MCP servers connect using the `readonly_mcp` database user when auth is enabled, or with default credentials otherwise. Read-only mode is the default but can be changed during `sdp db setup-mcp`. Use `sdp db unsetup-mcp` to remove MCP configuration.
 
 ---
 

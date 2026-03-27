@@ -53,7 +53,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 > - `PROFILE` is set internally by docker-compose service definitions (`lingua` or `ml`). Do not set this manually.
 > - `HF_TOKEN` is optional but recommended to avoid rate limits and to access private models. Obtain one at https://huggingface.co/settings/tokens.
 > - Auth env vars (`POSTGRES_PASSWORD`, `MONGO_ADMIN_PASSWORD`) are set at runtime via `getpass` prompting — they are never stored in `.env` or on disk.
-> - MCP env vars are written to `.env` by `sdp db mcp`. MCP credentials are stored in the database data volume as `.mcp_credentials` (chmod 600).
+> - MCP env vars are written to `.env` by `sdp db setup-mcp`. MCP credentials are stored in the database data volume as `.mcp_credentials` (chmod 600).
 
 ---
 
@@ -64,7 +64,7 @@ config/
 ├── db/                            # Global database config (written by sdp db setup)
 │   ├── postgres.yaml             # Port, name, tablespaces, auth flag
 │   ├── mongo.yaml                # Port, cache size, auth flag
-│   └── mcp.yaml                  # MCP server config (written by sdp db mcp)
+│   └── mcp.yaml                  # MCP server config (written by sdp db setup-mcp)
 ├── sources/                       # Per-source config (written by sdp source add)
 │   └── <name>/                   # One directory per source
 │       ├── platform.yaml         # Platform config (fields, types, indexes, schema, file patterns)

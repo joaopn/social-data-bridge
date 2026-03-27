@@ -5,11 +5,12 @@ Unified entrypoint for database management, source configuration, and pipeline e
 
 Usage:
     sdp.py db setup                          Configure databases (PostgreSQL, MongoDB)
-    sdp.py db mcp                            Configure MCP servers for databases
-    sdp.py db start [postgres|mongo]         Start database services + MCPs (all if unspecified)
-    sdp.py db stop [postgres|mongo]          Stop database services + MCPs (all if unspecified)
+    sdp.py db setup-mcp                      Configure MCP servers for databases
+    sdp.py db start [service]                Start services (postgres|mongo|postgres-mcp|mongo-mcp|all)
+    sdp.py db stop [service]                 Stop services (postgres|mongo|postgres-mcp|mongo-mcp|all)
     sdp.py db status                         Show database config and health
     sdp.py db unsetup                        Remove database config (and optionally data)
+    sdp.py db unsetup-mcp                    Remove MCP configuration
     sdp.py db recover-password               Reset database admin password
     sdp.py db create-indexes [--source <name>] Interactively create database indexes
 
@@ -292,19 +293,17 @@ def cmd_db_setup(args):
 
 
 # ============================================================================
-# sdp db mcp
+# sdp db setup-mcp / unsetup-mcp
 # ============================================================================
 
-def cmd_db_mcp(args):
-    """Configure or delete MCP servers for databases."""
-    if args.delete:
-        return _cmd_db_mcp_delete()
+def cmd_db_setup_mcp(args):
+    """Configure MCP servers for databases."""
     from social_data_pipeline.setup.mcp import main as mcp_main
     mcp_main()
     return 0
 
 
-def _cmd_db_mcp_delete():
+def cmd_db_unsetup_mcp(args):
     """Remove MCP configuration and stop MCP containers."""
     mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
     if not mcp_path.exists():
@@ -360,10 +359,33 @@ def cmd_db_start(args):
         return 1
 
     service = args.service
-    if service:
-        if service not in ("postgres", "mongo"):
-            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
+    mcp_services = _get_configured_mcp_services()
+
+    # MCP-only target (e.g. "postgres-mcp" → profile "postgres_mcp")
+    if service and service.endswith("-mcp"):
+        mcp_profile = service.replace("-", "_")
+        parent_db = service.rsplit("-", 1)[0]
+        if mcp_profile not in mcp_services:
+            print(f"  Error: '{service}' is not configured. Run: python sdp.py db setup-mcp")
             return 1
+        # Verify parent DB is running
+        ps_result = docker_compose("ps", "--format", "{{.Names}}", "--filter",
+                                   f"status=running")
+        if ps_result.returncode != 0:
+            return ps_result.returncode
+        # Prompt for admin password if auth is enabled (needed for MCP user setup)
+        password = None
+        if _is_auth_enabled():
+            password = _prompt_db_password()
+            _set_auth_env(password)
+            _ensure_mcp_users([parent_db], password)
+        # Start only the MCP profile (parent DB profile needed for compose context)
+        mcp_args = ["--profile", parent_db, "--profile", mcp_profile, "up", "-d"]
+        result = docker_compose(*mcp_args)
+        return result.returncode
+
+    # Database target (with auto-bundled MCP)
+    if service:
         if service not in configured:
             print(f"  Warning: '{service}' is not configured, starting anyway.")
         targets = [service]
@@ -377,7 +399,6 @@ def cmd_db_start(args):
         _set_auth_env(password)
 
     # Determine which MCP profiles to start
-    mcp_services = _get_configured_mcp_services()
     mcp_targets = []
     for svc in targets:
         mcp_profile = f"{svc}_mcp"
@@ -418,16 +439,26 @@ def cmd_db_stop(args):
         return 1
 
     service = args.service
-    if service:
-        if service not in ("postgres", "mongo"):
-            print(f"  Error: Unknown service '{service}'. Use 'postgres' or 'mongo'.")
+    mcp_services = _get_configured_mcp_services()
+
+    # MCP-only target (e.g. "postgres-mcp" → profile "postgres_mcp")
+    if service and service.endswith("-mcp"):
+        mcp_profile = service.replace("-", "_")
+        parent_db = service.rsplit("-", 1)[0]
+        if mcp_profile not in mcp_services:
+            print(f"  Error: '{service}' is not configured.")
             return 1
+        compose_args = ["--profile", parent_db, "--profile", mcp_profile, "down"]
+        result = docker_compose(*compose_args)
+        return result.returncode
+
+    # Database target (stops DB + its MCP)
+    if service:
         targets = [service]
     else:
         targets = configured
 
     compose_args = []
-    mcp_services = _get_configured_mcp_services()
     for svc in targets:
         compose_args += ["--profile", svc]
         mcp_profile = f"{svc}_mcp"
@@ -2100,18 +2131,18 @@ def build_parser():
     db_setup_p = db_sub.add_parser("setup", help="Configure databases (PostgreSQL, MongoDB)")
     db_setup_p.set_defaults(func=cmd_db_setup)
 
-    db_mcp_p = db_sub.add_parser("mcp", help="Configure MCP servers for databases")
-    db_mcp_p.add_argument("--delete", action="store_true",
-                           help="Remove MCP configuration and stop MCP containers")
-    db_mcp_p.set_defaults(func=cmd_db_mcp)
+    db_setup_mcp_p = db_sub.add_parser("setup-mcp", help="Configure MCP servers for databases")
+    db_setup_mcp_p.set_defaults(func=cmd_db_setup_mcp)
 
     db_start_p = db_sub.add_parser("start", help="Start database services")
-    db_start_p.add_argument("service", nargs="?", choices=["postgres", "mongo"],
+    db_start_p.add_argument("service", nargs="?",
+                            choices=["postgres", "mongo", "postgres-mcp", "mongo-mcp"],
                             help="Specific service (default: all configured)")
     db_start_p.set_defaults(func=cmd_db_start)
 
     db_stop_p = db_sub.add_parser("stop", help="Stop database services")
-    db_stop_p.add_argument("service", nargs="?", choices=["postgres", "mongo"],
+    db_stop_p.add_argument("service", nargs="?",
+                           choices=["postgres", "mongo", "postgres-mcp", "mongo-mcp"],
                            help="Specific service (default: all configured)")
     db_stop_p.set_defaults(func=cmd_db_stop)
 
@@ -2120,6 +2151,9 @@ def build_parser():
 
     db_unsetup_p = db_sub.add_parser("unsetup", help="Remove database configuration")
     db_unsetup_p.set_defaults(func=cmd_db_unsetup)
+
+    db_unsetup_mcp_p = db_sub.add_parser("unsetup-mcp", help="Remove MCP configuration")
+    db_unsetup_mcp_p.set_defaults(func=cmd_db_unsetup_mcp)
 
     db_recover_p = db_sub.add_parser("recover-password", help="Reset database admin password")
     db_recover_p.set_defaults(func=cmd_db_recover_password)

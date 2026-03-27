@@ -31,7 +31,7 @@ python sdp.py run mongo_ingest              # Ingest raw data into MongoDB
 
 # Optional data-enrichment
 python sdp.py run lingua                    # Adds language detection to parsed files
-python sdp.py db mcp                        # MCP servers for AI tool access
+python sdp.py db setup-mcp                  # MCP servers for AI tool access
 python sdp.py run ml                        # GPU classifiers (toxicity, emotions)
 python sdp.py run postgres_ml               # Ingest classifier outputs
 
@@ -176,7 +176,7 @@ With an optimized PostgreSQL database running, you can send large-scale analytic
 **MCP servers** (optional) expose your databases to AI tools like Claude Desktop, VS Code, and Cursor:
 
 ```bash
-python sdp.py db mcp                 # Configure MCP servers (ports, read-only mode)
+python sdp.py db setup-mcp           # Configure MCP servers (ports, read-only mode)
 python sdp.py db start               # Starts databases + MCP servers together
 ```
 
@@ -229,14 +229,14 @@ python sdp.py <db|source|run> [options]
 | Command | Description |
 |---------|-------------|
 | `sdp.py db setup` | Configure databases (PostgreSQL, MongoDB, optional auth) — global, one-time |
-| `sdp.py db mcp` | Configure MCP servers for AI tool access (ports, read-only mode) |
-| `sdp.py db mcp --delete` | Remove MCP configuration |
-| `sdp.py db start [postgres\|mongo]` | Start database services + MCP servers (all configured if unspecified) |
-| `sdp.py db stop [postgres\|mongo]` | Stop database services + MCP servers (all configured if unspecified) |
+| `sdp.py db setup-mcp` | Configure MCP servers for AI tool access (ports, read-only mode) |
+| `sdp.py db start [service]` | Start services: `postgres\|mongo\|postgres-mcp\|mongo-mcp` (all if unspecified) |
+| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|postgres-mcp\|mongo-mcp` (all if unspecified) |
 | `sdp.py db status` | Show database config, health, and MCP status |
 | `sdp.py db recover-password` | Reset database admin password (requires auth enabled) |
 | `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes (PostgreSQL and/or MongoDB) |
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
+| `sdp.py db unsetup-mcp` | Remove MCP configuration and stop MCP containers |
 
 `db setup` generates `.env`, `config/db/*.yaml`, and `config/postgres/postgresql.local.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and MCP credential files. Database deletion in `db unsetup` requires two separate confirmations.
 
