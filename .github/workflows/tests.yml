@@ -1,0 +1,36 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/*.py'
+      - 'requirements*.txt'
+      - 'tests/**'
+      - 'config/**/*.yaml'
+  pull_request:
+    paths:
+      - '**/*.py'
+      - 'requirements*.txt'
+      - 'tests/**'
+      - 'config/**/*.yaml'
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.5.0
+        with:
+          python-version: '3.13'
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r requirements-test.txt
+      - name: Run tests
+        run: pytest --override-ini="pythonpath=." -v 2>&1 | tee test-results.log
+      - name: Upload test log on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-results
+          path: test-results.log

@@ -36,4 +36,5 @@ if [ "${READONLY}" = "true" ]; then
     ARGS="${ARGS} --read-only"
 fi
 
+# shellcheck disable=SC2086  # Intentional word splitting: ARGS contains multiple arguments
 exec node ${ARGS}

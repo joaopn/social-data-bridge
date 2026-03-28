@@ -37,7 +37,7 @@ if [ "${MONGO_AUTH_ENABLED:-}" = "true" ]; then
         || { echo '[ERROR] mongod fork failed — log:'; cat /tmp/mongod_auth_init.log; exit 1; }
 
         # Wait for mongod
-        for i in $(seq 1 30); do
+        for _ in $(seq 1 30); do
             if mongosh --host 127.0.0.1 --port $AUTH_INIT_PORT --quiet --eval 'quit(0)' >/dev/null 2>&1; then
                 break
             fi
@@ -78,7 +78,7 @@ EOJS
             --auth \
             --wiredTigerCacheSizeGB "${MONGO_CACHE_SIZE_GB:-2}" \
         || { echo '[ERROR] mongod fork failed — log:'; cat /tmp/mongod_ro_init.log; exit 1; }
-        for i in $(seq 1 30); do
+        for _ in $(seq 1 30); do
             if mongosh --host 127.0.0.1 --port $RO_INIT_PORT --quiet --eval 'quit(0)' >/dev/null 2>&1; then
                 break
             fi

@@ -65,4 +65,4 @@ chown -R postgres:postgres /var/lib/postgresql
 exec docker-entrypoint.sh postgres \
     -c config_file=$PG_CONF \
     -c hba_file=$HBA_CONF \
-    -c port=${POSTGRES_PORT:-5432}
+    -c port="${POSTGRES_PORT:-5432}"
