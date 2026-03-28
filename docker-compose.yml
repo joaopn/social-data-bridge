@@ -113,6 +113,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${DB_NAME:-datasets}
       POSTGRES_AUTH_ENABLED: ${POSTGRES_AUTH_ENABLED:-}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
     ports:
       - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
