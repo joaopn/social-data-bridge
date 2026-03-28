@@ -15,7 +15,7 @@ READONLY="${MCP_MONGODB_READONLY:-true}"
 # Build URI: use credentials if MCP user is set, otherwise fall back to MCP_MONGODB_URI
 if [ -n "${MCP_MONGODB_USER:-}" ]; then
     # Read password from credentials file in mounted data volume
-    CRED_FILE="/data/mongo/.mcp_credentials"
+    CRED_FILE="/data/mongo/.ro_credentials"
     if [ -f "$CRED_FILE" ]; then
         MCP_MONGODB_PASSWORD=$(cut -d: -f2- "$CRED_FILE")
     fi

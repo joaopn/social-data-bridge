@@ -152,135 +152,6 @@ def _set_auth_env(password):
     os.environ["MONGO_ADMIN_PASSWORD"] = password
 
 
-def _ensure_mcp_users(targets, password):
-    """Ensure MCP and RO database users exist before starting MCP servers.
-
-    Runs one-off containers against already-running databases to check/create
-    readonly users. Called from cmd_db_start after DBs are healthy but before
-    MCP containers start.
-    """
-    env = load_env()
-    mcp_config = _load_mcp_config()
-
-    if "postgres" in targets and mcp_config.get("postgres", {}).get("enabled"):
-        mcp_user = mcp_config["postgres"].get("mcp_user")
-        if mcp_user:
-            _ensure_postgres_mcp_user(env, password, mcp_user)
-
-    if "mongo" in targets and mcp_config.get("mongo", {}).get("enabled"):
-        mcp_user = mcp_config["mongo"].get("mcp_user")
-        if mcp_user:
-            _ensure_mongo_mcp_user(env, password, mcp_user)
-
-
-def _ensure_postgres_mcp_user(env, password, mcp_user):
-    """Create MCP and RO users in PostgreSQL if they don't exist."""
-    pgdata_path = env.get("PGDATA_PATH", "./data/database/postgres")
-    cred_file = Path(pgdata_path) / ".mcp_credentials"
-    if not cred_file.exists():
-        return
-    creds = cred_file.read_text().strip()
-    mcp_pwd = creds.split(":", 1)[1] if ":" in creds else ""
-
-    port = env.get("POSTGRES_PORT", "5432")
-    db = env.get("DB_NAME", "datasets")
-    ro_user = env.get("POSTGRES_RO_USER", "")
-
-    sql = f"""
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{mcp_user}') THEN
-    CREATE ROLE {mcp_user} LOGIN PASSWORD '{mcp_pwd}';
-    GRANT pg_read_all_data TO {mcp_user};
-    RAISE NOTICE 'Created MCP user: %', '{mcp_user}';
-  ELSE
-    RAISE NOTICE 'MCP user already exists: %', '{mcp_user}';
-  END IF;
-END $$;
-"""
-    if ro_user:
-        sql += f"""
-DO $$ BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{ro_user}') THEN
-    CREATE ROLE {ro_user} LOGIN;
-    GRANT pg_read_all_data TO {ro_user};
-    RAISE NOTICE 'Created RO user: %', '{ro_user}';
-  ELSE
-    RAISE NOTICE 'RO user already exists: %', '{ro_user}';
-  END IF;
-END $$;
-"""
-    # Exec into the already-running postgres container
-    result = subprocess.run(
-        ["docker", "compose", "exec",
-         "-e", f"PGPASSWORD={password}",
-         "postgres", "psql",
-         "-p", port, "-U", "postgres", "-d", db, "-c", sql],
-        capture_output=True, text=True, cwd=ROOT,
-    )
-    if result.returncode == 0:
-        print("  [MCP-INIT] PostgreSQL MCP users ready")
-    else:
-        print(f"  [MCP-INIT] PostgreSQL user setup failed: {result.stderr.strip()}")
-
-
-def _ensure_mongo_mcp_user(env, password, mcp_user):
-    """Create MCP and RO users in MongoDB if they don't exist."""
-    mongo_data_path = env.get("MONGO_DATA_PATH", "./data/database/mongo")
-    cred_file = Path(mongo_data_path) / ".mcp_credentials"
-    if not cred_file.exists():
-        return
-    creds = cred_file.read_text().strip()
-    mcp_pwd = creds.split(":", 1)[1] if ":" in creds else ""
-
-    admin_user = env.get("MONGO_ADMIN_USER", "admin")
-    conn = f"mongodb://{admin_user}:{password}@127.0.0.1:27017/admin"
-    ro_user = env.get("MONGO_RO_USER", "")
-
-    js = f"""
-try {{
-  db.createUser({{
-    user: '{mcp_user}',
-    pwd: '{mcp_pwd}',
-    roles: [{{role: 'readAnyDatabase', db: 'admin'}}]
-  }});
-  print('[MCP-INIT] Created MCP user: {mcp_user}');
-}} catch (e) {{
-  if (e.codeName === 'DuplicateKey' || e.code === 51003) {{
-    print('[MCP-INIT] MCP user already exists');
-  }} else {{
-    throw e;
-  }}
-}}
-"""
-    if ro_user:
-        js += f"""
-try {{
-  db.createUser({{
-    user: '{ro_user}',
-    pwd: '',
-    roles: [{{role: 'readAnyDatabase', db: 'admin'}}]
-  }});
-  print('[MCP-INIT] Created RO user: {ro_user}');
-}} catch (e) {{
-  if (e.codeName === 'DuplicateKey' || e.code === 51003) {{
-    print('[MCP-INIT] RO user already exists');
-  }} else {{
-    print('[MCP-INIT] Warning: Could not create RO user: ' + e.message);
-  }}
-}}
-"""
-    # Exec into the already-running mongo container
-    result = subprocess.run(
-        ["docker", "compose", "exec",
-         "mongo", "mongosh", conn, "--quiet", "--eval", js],
-        capture_output=True, text=True, cwd=ROOT,
-    )
-    if result.returncode == 0:
-        print("  [MCP-INIT] MongoDB MCP users ready")
-    else:
-        print(f"  [MCP-INIT] MongoDB user setup failed: {result.stderr.strip()}")
-
-
 # ============================================================================
 # sdp db setup
 # ============================================================================
@@ -373,13 +244,11 @@ def cmd_db_start(args):
                                    f"status=running")
         if ps_result.returncode != 0:
             return ps_result.returncode
-        # Prompt for admin password if auth is enabled (needed for MCP user setup)
-        password = None
+        # Prompt for admin password if auth is enabled (needed for init container)
         if _is_auth_enabled():
             password = _prompt_db_password()
             _set_auth_env(password)
-            _ensure_mcp_users([parent_db], password)
-        # Start only the MCP profile (parent DB profile needed for compose context)
+        # Start only the MCP profile (init container runs first via depends_on)
         mcp_args = ["--profile", parent_db, "--profile", mcp_profile, "up", "-d"]
         result = docker_compose(*mcp_args)
         return result.returncode
@@ -414,11 +283,7 @@ def cmd_db_start(args):
     if result.returncode != 0:
         return result.returncode
 
-    # Ensure MCP/RO users exist before starting MCP servers
-    if mcp_targets and password:
-        _ensure_mcp_users(targets, password)
-
-    # Start MCP servers
+    # Start MCP servers (init containers handle user creation via depends_on)
     if mcp_targets:
         mcp_args = []
         for svc in targets:
@@ -887,14 +752,14 @@ def cmd_db_unsetup(args):
                 print("  MongoDB data removal skipped.")
             print()
 
-    # --- Remove MCP credentials from data directories ---
+    # --- Remove RO credentials from data directories ---
     for data_path_str in (pgdata_path, mongo_data_path):
         if not data_path_str:
             continue
         dp = Path(data_path_str)
         if not dp.is_absolute():
             dp = ROOT / dp
-        cred_file = dp / ".mcp_credentials"
+        cred_file = dp / ".ro_credentials"
         if cred_file.exists():
             try:
                 cred_file.unlink()
@@ -904,7 +769,7 @@ def cmd_db_unsetup(args):
                 subprocess.run(
                     ["docker", "run", "--rm",
                      "-v", f"{cred_file.resolve().parent}:/data",
-                     "alpine", "rm", "-f", "/data/.mcp_credentials"],
+                     "alpine", "rm", "-f", "/data/.ro_credentials"],
                     cwd=ROOT, capture_output=True,
                 )
                 if not cred_file.exists():

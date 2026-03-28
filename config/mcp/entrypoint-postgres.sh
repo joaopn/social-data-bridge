@@ -13,7 +13,7 @@ set -e
 
 if [ -n "${POSTGRES_MCP_USER:-}" ]; then
     # Read password from credentials file in mounted data volume
-    CRED_FILE="/data/database/.mcp_credentials"
+    CRED_FILE="/data/database/.ro_credentials"
     if [ -f "$CRED_FILE" ]; then
         MCP_PASSWORD=$(cut -d: -f2- "$CRED_FILE")
     fi

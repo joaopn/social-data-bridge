@@ -204,7 +204,7 @@ services:
 
   # ==========================================================================
   # Profile: postgres_mcp - PostgreSQL MCP server (SSE)
-  # Requires: postgres profile to be running
+  # RO user is created/synced by the postgres entrypoint, not here.
   # ==========================================================================
   postgres-mcp:
     profiles: [postgres_mcp]
@@ -230,8 +230,7 @@ services:
 
   # ==========================================================================
   # Profile: mongo_mcp - MongoDB MCP server (Streamable HTTP)
-  # Uses: kiliczsh/mcp-mongo-server (built from source)
-  # Requires: mongo profile to be running
+  # RO user is created/synced by the mongo entrypoint, not here.
   # ==========================================================================
   mongo-mcp:
     profiles: [mongo_mcp]

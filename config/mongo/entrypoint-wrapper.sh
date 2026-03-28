@@ -56,42 +56,72 @@ db.createUser({
 EOJS
         echo '[CONFIG] Admin user created (migration)'
 
-        # Create RO user — now authenticate as admin
-        if [ -n "${MONGO_RO_USER:-}" ]; then
-            mongosh --host 127.0.0.1 --port $AUTH_INIT_PORT --quiet \
-                -u "$ADMIN_USER" -p "$ADMIN_PWD" --authenticationDatabase admin admin <<EOJS
-try {
-    db.createUser({
-        user: $(_js_escape "$MONGO_RO_USER"),
-        pwd: '',
-        roles: [{role: 'readAnyDatabase', db: 'admin'}]
-    });
-    print('[CONFIG] Read-only user created (migration)');
-} catch (e) {
-    print('[CONFIG] Warning: RO user: ' + e.message);
-}
-EOJS
-        fi
-
         mongod --shutdown --dbpath /data/db 2>/dev/null || true
         sleep 2
         touch /data/db/.sdb_auth_initialized
         echo '[CONFIG] Migration complete'
     fi
 
+    # --- Read-only user sync (every start of existing DB) ---
+    RO_CRED_FILE="/data/mongo/.ro_credentials"
+    if [ -e "/data/db/WiredTiger" ] && [ -f "$RO_CRED_FILE" ]; then
+        RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
+        RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
+        ADMIN_USER="${MONGO_ADMIN_USER:-admin}"
+        ADMIN_PWD="${MONGO_ADMIN_PASSWORD}"
+        echo "[CONFIG] Syncing read-only user: $RO_USER"
+        RO_INIT_PORT=27018
+        mongod --fork --logpath /tmp/mongod_ro_init.log \
+            --config /etc/mongo/config/mongod.conf \
+            --bind_ip 127.0.0.1 \
+            --port $RO_INIT_PORT \
+            --auth \
+            --wiredTigerCacheSizeGB "${MONGO_CACHE_SIZE_GB:-2}" \
+        || { echo '[ERROR] mongod fork failed — log:'; cat /tmp/mongod_ro_init.log; exit 1; }
+        for i in $(seq 1 30); do
+            if mongosh --host 127.0.0.1 --port $RO_INIT_PORT --quiet --eval 'quit(0)' >/dev/null 2>&1; then
+                break
+            fi
+            sleep 1
+        done
+        mongosh --host 127.0.0.1 --port $RO_INIT_PORT --quiet \
+            -u "$ADMIN_USER" -p "$ADMIN_PWD" --authenticationDatabase admin admin <<EOJS
+try {
+    db.createUser({
+        user: $(_js_escape "$RO_USER"),
+        pwd: $(_js_escape "$RO_PWD"),
+        roles: [{role: 'readAnyDatabase', db: 'admin'}]
+    });
+    print('[CONFIG] Created read-only user: $RO_USER');
+} catch (e) {
+    if (e.codeName === 'DuplicateKey' || e.code === 51003) {
+        db.updateUser($(_js_escape "$RO_USER"), { pwd: $(_js_escape "$RO_PWD") });
+        print('[CONFIG] Read-only user password synced: $RO_USER');
+    } else {
+        throw e;
+    }
+}
+EOJS
+        mongod --shutdown --dbpath /data/db 2>/dev/null || true
+        sleep 2
+        echo '[CONFIG] Read-only user ready'
+    fi
+
     # For fresh DBs, the official docker-entrypoint.sh handles everything:
     # it detects MONGO_INITDB_ROOT_USERNAME/PASSWORD, creates the user,
     # and adds --auth automatically. We just need to mark it done afterward.
     if [ ! -e "/data/db/WiredTiger" ] && [ ! -f "/data/db/.sdb_auth_initialized" ]; then
-        # Write a post-init script to create RO user and set our marker
+        # Write post-init scripts for RO user and marker
         mkdir -p /docker-entrypoint-initdb.d
-        if [ -n "${MONGO_RO_USER:-}" ]; then
+        if [ -f "$RO_CRED_FILE" ]; then
+            RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
+            RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
             cat > /docker-entrypoint-initdb.d/01-sdp-ro-user.js <<EOJS
 db = db.getSiblingDB('admin');
 try {
     db.createUser({
-        user: $(_js_escape "$MONGO_RO_USER"),
-        pwd: '',
+        user: $(_js_escape "$RO_USER"),
+        pwd: $(_js_escape "$RO_PWD"),
         roles: [{role: 'readAnyDatabase', db: 'admin'}]
     });
     print('[CONFIG] Read-only user created');

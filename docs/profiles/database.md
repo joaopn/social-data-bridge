@@ -251,15 +251,14 @@ Database authentication is optional and can be enabled during `sdp db setup`. Wh
 
 ### Users
 
-When auth is enabled, three database users are created:
+When auth is enabled, two database users are created:
 
 | User | Password | Role | Purpose |
 |------|----------|------|---------|
 | `admin` (postgres/admin) | Prompted at runtime via `getpass` | Full access | Database administration, ingestion |
-| `readonly_mcp` | Auto-generated, stored in data volume | Read-only | MCP server connections |
-| Optional RO user | None (trust from Docker networks) | Read-only | Convenience access for local tools |
+| Read-only user (default `readonly`) | Auto-generated, stored in `.ro_credentials` | Read-only | MCP servers, read-only tools |
 
-The admin password is **never stored on disk** — it is prompted each time `sdp db start` is run with auth enabled. If forgotten, use `sdp db recover-password` to reset it.
+The admin password is **never stored on disk** — it is prompted each time `sdp db start` is run with auth enabled. If forgotten, use `sdp db recover-password` to reset it. The read-only user password is auto-generated during `sdp db setup` and stored in `.ro_credentials` (chmod 600) in the database data volume.
 
 ### How It Works
 
@@ -286,7 +285,7 @@ python sdp.py db start               # Starts databases + MCP servers together
 | PostgreSQL | `crystaldba/postgres-mcp`        | SSE              | 8000         | `/sse`   |
 | MongoDB    | `Dockerfile.mcp-mongo`           | Streamable HTTP  | 3000         | `/mcp`   |
 
-MCP servers connect using the `readonly_mcp` database user when auth is enabled, or with default credentials otherwise. Read-only mode is the default but can be changed during `sdp db setup-mcp`. Use `sdp db unsetup-mcp` to remove MCP configuration.
+MCP servers connect using the read-only database user (configured during `sdp db setup`) when auth is enabled, or with default credentials otherwise. The database entrypoint wrappers create/update the RO user on every start, reading credentials from `.ro_credentials` in the data volume. `sdp db setup-mcp` only configures MCP server settings (ports, access mode) — it requires an existing RO user. Read-only mode is the default but can be changed during `sdp db setup-mcp`. Use `sdp db unsetup-mcp` to remove MCP configuration.
 
 ---
 

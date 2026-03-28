@@ -35,6 +35,31 @@ if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ]; then
     fi
 fi
 
+# --- Read-only user sync (every start) ---
+RO_CRED_FILE="/data/database/.ro_credentials"
+if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -f "$RO_CRED_FILE" ] && [ -f "/var/lib/postgresql/data/PG_VERSION" ]; then
+    RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
+    RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
+    echo "[CONFIG] Syncing read-only user: $RO_USER"
+    RO_INIT_PORT=54321
+    su postgres -c "pg_ctl start -D /var/lib/postgresql/data \
+        -o \"-c hba_file=$CFG/pg_hba.conf -c port=$RO_INIT_PORT -c listen_addresses=127.0.0.1\" \
+        -w -l /tmp/pg_ro_init.log"
+    su postgres -c "psql -p $RO_INIT_PORT -c \
+        \"DO \\\$\\\$ BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$RO_USER') THEN
+            CREATE ROLE $RO_USER LOGIN PASSWORD '$RO_PWD';
+            GRANT pg_read_all_data TO $RO_USER;
+            RAISE NOTICE 'Created RO user: %', '$RO_USER';
+          ELSE
+            ALTER ROLE $RO_USER PASSWORD '$RO_PWD';
+            RAISE NOTICE 'RO user password synced: %', '$RO_USER';
+          END IF;
+        END \\\$\\\$;\""
+    su postgres -c "pg_ctl stop -D /var/lib/postgresql/data -w"
+    echo '[CONFIG] Read-only user ready'
+fi
+
 # --- Start PostgreSQL ---
 chown -R postgres:postgres /var/lib/postgresql
 exec docker-entrypoint.sh postgres \
