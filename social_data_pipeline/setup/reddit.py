@@ -59,7 +59,7 @@ def run_questionnaire():
 
     section_header("Reddit Platform Configuration")
 
-    settings["db_schema"] = ask("Database schema name", platform_config["db_schema"])
+    settings["db_schema"] = ask("Database schema name", platform_config["db_schema"], tag="reddit_db_schema")
 
     # Field list selection
     all_sub_fields = platform_config["submission_fields"]
@@ -67,27 +67,31 @@ def run_questionnaire():
 
     print("  The default field list is defined in config/templates/reddit.yaml.")
     print("  You can remove fields here. Adding new fields also requires updating field_types.")
-    customize_fields = ask_bool("Remove fields from the default list?", False)
+    customize_fields = ask_bool("Remove fields from the default list?", False, tag="reddit_customize_fields")
     if customize_fields:
         print("\n  Submissions fields (deselect to exclude):")
         settings["reddit_sub_fields"] = ask_multi_select(
             "Submissions fields:", all_sub_fields, all_sub_fields,
+            tag="reddit_submissions_fields",
         )
         print("\n  Comments fields (deselect to exclude):")
         settings["reddit_com_fields"] = ask_multi_select(
             "Comments fields:", all_com_fields, all_com_fields,
+            tag="reddit_comments_fields",
         )
 
     # Index selection
     default_sub_indexes = platform_config["submission_indexes"]
     default_com_indexes = platform_config["comment_indexes"]
-    customize_indexes = ask_bool("Customize database indexes?", False)
+    customize_indexes = ask_bool("Customize database indexes?", False, tag="reddit_customize_indexes")
     if customize_indexes:
         settings["reddit_sub_indexes"] = ask_list(
             "Submissions index columns", default_sub_indexes,
+            tag="reddit_submissions_indexes",
         )
         settings["reddit_com_indexes"] = ask_list(
             "Comments index columns", default_com_indexes,
+            tag="reddit_comments_indexes",
         )
 
     return settings, platform_config
@@ -215,7 +219,7 @@ def main(source_name):
         sys.exit(1)
 
     print_summary(settings, [(source_platform_path, reddit_yaml)])
-    if not ask_bool("Apply these overrides?", True):
+    if not ask_bool("Apply these overrides?", True, tag="reddit_write_files"):
         print("\n  Aborted.\n")
         sys.exit(0)
 

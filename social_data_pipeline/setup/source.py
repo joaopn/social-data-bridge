@@ -95,7 +95,8 @@ def _run_hf_config_grouping(hf_defaults):
 
         # Let user select configs
         selected_configs = ask_multi_select(
-            "Include configs:", config_names, config_names
+            "Include configs:", config_names, config_names,
+            tag=f"hf_include_configs_{gi}",
         )
         if not selected_configs:
             print("    Skipping this schema group (no configs selected).")
@@ -104,7 +105,7 @@ def _run_hf_config_grouping(hf_defaults):
 
         # Suggest data_type name from common prefix or first config
         suggested_name = _suggest_data_type_name(selected_configs)
-        dt_name = ask(f"  Data type name for this group", suggested_name)
+        dt_name = ask(f"  Data type name for this group", suggested_name, tag=f"hf_data_type_name_{gi}")
         if not dt_name:
             dt_name = suggested_name
 
@@ -119,7 +120,8 @@ def _run_hf_config_grouping(hf_defaults):
         # Select from mappable fields
         mappable_names = [f["name"] for f in mappable_fields]
         selected = ask_multi_select(
-            "Select fields:", mappable_names, mappable_names
+            "Select fields:", mappable_names, mappable_names,
+            tag=f"hf_select_fields_{gi}",
         )
         selected_set = set(selected)
 
@@ -130,13 +132,14 @@ def _run_hf_config_grouping(hf_defaults):
                 f"    Action for '{f['name']}':",
                 ["skip", "cast to text", "enter custom type"],
                 default="skip",
+                tag=f"hf_unmappable_{f['name']}",
             )
             if choice == "cast to text":
                 selected.append(f["name"])
                 selected_set.add(f["name"])
                 group_field_types[f["name"]] = "text"
             elif choice == "enter custom type":
-                custom_type = ask(f"    SQL type for '{f['name']}'")
+                custom_type = ask(f"    SQL type for '{f['name']}'", tag=f"hf_custom_type_{f['name']}")
                 if custom_type:
                     selected.append(f["name"])
                     selected_set.add(f["name"])
@@ -216,11 +219,11 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- Data types (non-HF) ----
     elif platform == "reddit":
         section_header("Data Types")
-        data_types = ask_list("Data types", ["submissions", "comments"])
+        data_types = ask_list("Data types", ["submissions", "comments"], tag="src_data_types")
         settings["data_types"] = data_types
     else:
         section_header("Data Types")
-        data_types = ask_list("Data types (comma-separated)")
+        data_types = ask_list("Data types (comma-separated)", tag="src_data_types")
         if not data_types:
             print("    Error: At least one data type is required.")
             sys.exit(1)
@@ -229,10 +232,10 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- Data paths ----
     section_header("Data Paths")
     data_path = load_env().get("DATA_PATH", "./data")
-    settings["dumps_path"] = ask("Dumps directory", f"{data_path}/dumps/{source_name}")
-    settings["extracted_path"] = ask("Extracted directory", f"{data_path}/extracted/{source_name}")
-    settings["parsed_path"] = ask("Parsed directory", f"{data_path}/parsed/{source_name}")
-    settings["output_path"] = ask("Output directory", f"{data_path}/output/{source_name}")
+    settings["dumps_path"] = ask("Dumps directory", f"{data_path}/dumps/{source_name}", tag="src_dumps_path")
+    settings["extracted_path"] = ask("Extracted directory", f"{data_path}/extracted/{source_name}", tag="src_extracted_path")
+    settings["parsed_path"] = ask("Parsed directory", f"{data_path}/parsed/{source_name}", tag="src_parsed_path")
+    settings["output_path"] = ask("Output directory", f"{data_path}/output/{source_name}", tag="src_output_path")
 
     # ---- File format ----
     section_header("File Format")
@@ -240,10 +243,11 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     print("  without escaping. CSV is the legacy format.")
     settings["file_format"] = ask_choice(
         "Intermediate file format", ["parquet", "csv"], default="parquet",
+        tag="src_file_format",
     )
 
     if settings["file_format"] == "parquet":
-        rg_size = ask_int("Parquet row-group size (larger = better compression, more RAM)", 1_000_000)
+        rg_size = ask_int("Parquet row-group size (larger = better compression, more RAM)", 1_000_000, tag="src_parquet_rg_size")
         if rg_size != 1_000_000:
             settings["parquet_row_group_size"] = rg_size
 
@@ -273,7 +277,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             print(f"  All profiles already configured: {', '.join(existing_profiles)}")
     else:
         default_profiles = all_profiles[:] if gpus else [p for p in all_profiles if p != "ml"]
-    profiles = ask_multi_select("Profiles to configure:", all_profiles, default_profiles)
+    profiles = ask_multi_select("Profiles to configure:", all_profiles, default_profiles, tag="src_profiles")
     settings["profiles"] = profiles
 
     # ---- Compute defaults ----
@@ -282,7 +286,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- Parse settings ----
     if "parse" in profiles:
         section_header("Parse Settings")
-        settings["parse_workers"] = ask_int("Parse workers", defaults["parse_workers"])
+        settings["parse_workers"] = ask_int("Parse workers", defaults["parse_workers"], tag="src_parse_workers")
 
     # ---- PostgreSQL settings (per-source) ----
     has_postgres = any(p.startswith("postgres") for p in profiles)
@@ -294,9 +298,11 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             settings["pg_prefer_lingua"] = ask_bool(
                 "Use Lingua files (includes lang columns in base tables)?",
                 defaults["pg_prefer_lingua"],
+                tag="src_pg_prefer_lingua",
             )
             settings["pg_parallel_index_workers"] = ask_int(
                 "Parallel index workers", defaults["pg_parallel_index_workers"],
+                tag="src_pg_index_workers",
             )
 
         # Tablespace assignments (if tablespaces were configured in db setup)
@@ -312,6 +318,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                     f"  {dt} tablespace:",
                     ts_choices,
                     default="pgdata",
+                    tag=f"src_tablespace_{dt}",
                 )
                 ts_assignments[dt] = ts
             settings["table_tablespaces"] = ts_assignments
@@ -322,7 +329,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
         section_header("Custom Platform Configuration")
 
         if has_postgres:
-            settings["db_schema"] = ask("PostgreSQL schema name", source_name)
+            settings["db_schema"] = ask("PostgreSQL schema name", source_name, tag="src_db_schema")
 
         if is_hf:
             # HF sources: input_format is parquet, file patterns auto-generated
@@ -341,9 +348,10 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             print("  CSV: comma/tab/pipe-separated values with headers")
             settings["input_format"] = ask_choice(
                 "Raw input file format", ["ndjson", "csv"], default="ndjson",
+                tag="src_input_format",
             )
             if settings["input_format"] == "csv":
-                delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", ",")
+                delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", ",", tag="src_csv_delimiter")
                 if delimiter == "\\t":
                     delimiter = "\t"
                 settings["input_csv_delimiter"] = delimiter
@@ -354,7 +362,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                 print("    Enter a glob pattern for your compressed dump files.")
                 print("    Examples: tweets_*.json.gz, RC_*.zst, data_*.csv.xz")
                 print()
-                dump_glob = ask(f"    Dump file glob pattern for {dt}")
+                dump_glob = ask(f"    Dump file glob pattern for {dt}", tag=f"src_dump_glob_{dt}")
                 if not dump_glob:
                     print("    Error: A glob pattern is required.")
                     sys.exit(1)
@@ -367,6 +375,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                         "    Select compression format:",
                         ["zst", "gz", "xz", "tar.gz"],
                         default="zst",
+                        tag=f"src_compression_{dt}",
                     )
 
                 input_format = settings.get("input_format", "ndjson")
@@ -385,16 +394,17 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                 "MongoDB collection strategy:",
                 ["per_data_type", "per_file"],
                 default="per_data_type",
+                tag="src_mongo_strategy",
             )
             if settings["mongo_collection_strategy"] == "per_data_type":
                 settings["mongo_collections"] = {}
                 for dt in data_types:
-                    coll = ask(f"  MongoDB collection name for '{dt}'", dt)
+                    coll = ask(f"  MongoDB collection name for '{dt}'", dt, tag=f"src_mongo_collection_{dt}")
                     settings["mongo_collections"][dt] = coll
             else:
                 print("    (per_file: one collection per input file, named from filename)")
 
-            settings["mongo_db_name"] = ask("MongoDB database name", source_name)
+            settings["mongo_db_name"] = ask("MongoDB database name", source_name, tag="src_mongo_db_name")
 
         # ---- Index configuration ----
         if has_postgres or has_mongo:
@@ -407,7 +417,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                 print()
                 settings["custom_indexes"] = {}
                 for dt in data_types:
-                    idx = ask_list(f"  PostgreSQL indexes for '{dt}'")
+                    idx = ask_list(f"  PostgreSQL indexes for '{dt}'", tag=f"src_pg_indexes_{dt}")
                     if idx:
                         settings["custom_indexes"][dt] = idx
 
@@ -415,7 +425,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                 print()
                 settings["custom_mongo_indexes"] = {}
                 for dt in data_types:
-                    idx = ask_list(f"  MongoDB indexes for '{dt}'")
+                    idx = ask_list(f"  MongoDB indexes for '{dt}'", tag=f"src_mongo_indexes_{dt}")
                     if idx:
                         settings["custom_mongo_indexes"][dt] = idx
 
@@ -682,7 +692,7 @@ def main(source_name=None, hf_dataset_id=None):
         sys.exit(1)
 
     if source_name is None:
-        source_name = ask("Source name (e.g. reddit, twitter_academic)")
+        source_name = ask("Source name (e.g. reddit, twitter_academic)", tag="src_name")
         if not source_name:
             print("    Error: A source name is required.")
             sys.exit(1)
@@ -690,7 +700,7 @@ def main(source_name=None, hf_dataset_id=None):
     # Check if source already exists
     source_dir = CONFIG_DIR / "sources" / source_name
     if source_dir.exists():
-        if not ask_bool(f"Source '{source_name}' already exists. Reconfigure?", False):
+        if not ask_bool(f"Source '{source_name}' already exists. Reconfigure?", False, tag="src_reconfigure"):
             print("\n  Aborted.\n")
             sys.exit(0)
 
@@ -788,7 +798,7 @@ def main(source_name=None, hf_dataset_id=None):
     # Summary and confirm
     print_summary(settings, files_to_write)
 
-    if not ask_bool("Write these files?", True):
+    if not ask_bool("Write these files?", True, tag="src_write_files"):
         print("\n  Aborted. No files written.\n")
         sys.exit(0)
 

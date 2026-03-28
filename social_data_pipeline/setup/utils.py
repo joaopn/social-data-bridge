@@ -81,41 +81,51 @@ def detect_hardware():
 # Input helpers
 # ============================================================================
 
-def ask(prompt, default=None):
+def _tag_prefix(tag):
+    """Return '[tag] ' prefix when SDP_TAGGED_MODE is set, else ''."""
+    if tag and os.environ.get('SDP_TAGGED_MODE'):
+        return f"[{tag}] "
+    return ""
+
+
+def ask(prompt, default=None, tag=None):
     """Prompt with a default in brackets. Enter accepts default."""
+    prefix = _tag_prefix(tag)
     if default is not None:
-        text = f"  {prompt} [{default}]: "
+        text = f"  {prefix}{prompt} [{default}]: "
     else:
-        text = f"  {prompt}: "
+        text = f"  {prefix}{prompt}: "
     value = input(text).strip()
     if not value and default is not None:
         return str(default)
     return value
 
 
-def ask_int(prompt, default=None):
+def ask_int(prompt, default=None, tag=None):
     """Prompt for an integer with default."""
     while True:
-        value = ask(prompt, default)
+        value = ask(prompt, default, tag=tag)
         try:
             return int(value)
         except ValueError:
             print(f"    Please enter a valid integer.")
 
 
-def ask_bool(prompt, default=True):
+def ask_bool(prompt, default=True, tag=None):
     """Prompt for yes/no with default."""
+    prefix = _tag_prefix(tag)
     default_str = "Y/n" if default else "y/N"
-    text = f"  {prompt} [{default_str}]: "
+    text = f"  {prefix}{prompt} [{default_str}]: "
     value = input(text).strip().lower()
     if not value:
         return default
     return value in ("y", "yes", "true", "1")
 
 
-def ask_choice(prompt, options, default=None):
+def ask_choice(prompt, options, default=None, tag=None):
     """Numbered list selection. Returns selected value."""
-    print(f"  {prompt}")
+    prefix = _tag_prefix(tag)
+    print(f"  {prefix}{prompt}")
     for i, opt in enumerate(options, 1):
         marker = " (default)" if opt == default else ""
         print(f"    {i}) {opt}{marker}")
@@ -133,11 +143,12 @@ def ask_choice(prompt, options, default=None):
         print(f"    Please enter 1-{len(options)}.")
 
 
-def ask_multi_select(prompt, options, defaults=None):
+def ask_multi_select(prompt, options, defaults=None, tag=None):
     """Numbered list with multi-select. Returns list of selected values."""
     if defaults is None:
         defaults = options[:]
-    print(f"  {prompt}")
+    prefix = _tag_prefix(tag)
+    print(f"  {prefix}{prompt}")
     for i, opt in enumerate(options, 1):
         marker = " *" if opt in defaults else ""
         print(f"    {i}) {opt}{marker}")
@@ -159,14 +170,14 @@ def ask_multi_select(prompt, options, defaults=None):
     return selected if selected else defaults[:]
 
 
-def ask_list(prompt, default=None):
+def ask_list(prompt, default=None, tag=None):
     """Prompt for a comma-separated list. Returns list of strings."""
     default_str = ", ".join(default) if default else ""
-    value = ask(prompt, default_str)
+    value = ask(prompt, default_str, tag=tag)
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def ask_multi_line(prompt):
+def ask_multi_line(prompt, tag=None):
     """Multi-line input via stdin. Uses readline to handle pasted content.
 
     Terminals send pasted text line-by-line to stdin, so we use a brief
@@ -174,7 +185,8 @@ def ask_multi_line(prompt):
     Enter on an empty line.
     """
     import select
-    print(f"  {prompt}")
+    prefix = _tag_prefix(tag)
+    print(f"  {prefix}{prompt}")
     print(f"  (paste content, then press Enter on an empty line to finish)")
     lines = []
     while True:
@@ -199,9 +211,10 @@ def ask_multi_line(prompt):
     return "\n".join(lines)
 
 
-def ask_password(prompt):
+def ask_password(prompt, tag=None):
     """Prompt for a password (hidden input)."""
-    return getpass.getpass(f"  {prompt}").strip()
+    prefix = _tag_prefix(tag)
+    return getpass.getpass(f"  {prefix}{prompt}").strip()
 
 
 def section_header(title):

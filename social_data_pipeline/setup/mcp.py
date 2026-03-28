@@ -38,20 +38,20 @@ def run_questionnaire(db_setup):
 
     # ---- PostgreSQL MCP ----
     if "postgres" in databases:
-        if ask_bool("Enable PostgreSQL MCP server?", True):
+        if ask_bool("Enable PostgreSQL MCP server?", True, tag="mcp_pg_enable"):
             settings["postgres_mcp_enabled"] = True
-            settings["postgres_mcp_port"] = ask_int("PostgreSQL MCP SSE port", 8000)
-            write_access = ask_bool("Allow write access? (default: read-only)", False)
+            settings["postgres_mcp_port"] = ask_int("PostgreSQL MCP SSE port", 8000, tag="mcp_pg_port")
+            write_access = ask_bool("Allow write access? (default: read-only)", False, tag="mcp_pg_write_access")
             settings["postgres_mcp_access_mode"] = "unrestricted" if write_access else "restricted"
         else:
             settings["postgres_mcp_enabled"] = False
 
     # ---- MongoDB MCP ----
     if "mongo" in databases:
-        if ask_bool("Enable MongoDB MCP server?", True):
+        if ask_bool("Enable MongoDB MCP server?", True, tag="mcp_mongo_enable"):
             settings["mongo_mcp_enabled"] = True
-            settings["mongo_mcp_port"] = ask_int("MongoDB MCP SSE port", 3000)
-            write_access = ask_bool("Allow write access? (default: read-only)", False)
+            settings["mongo_mcp_port"] = ask_int("MongoDB MCP SSE port", 3000, tag="mcp_mongo_port")
+            write_access = ask_bool("Allow write access? (default: read-only)", False, tag="mcp_mongo_write_access")
             settings["mongo_mcp_read_only"] = not write_access
         else:
             settings["mongo_mcp_enabled"] = False
@@ -211,7 +211,7 @@ def main():
     # Summary and confirm
     print_summary(settings, files_to_write)
 
-    if not ask_bool("Write these files?", True):
+    if not ask_bool("Write these files?", True, tag="mcp_write_files"):
         print("\n  Aborted. No files written.\n")
         sys.exit(0)
 

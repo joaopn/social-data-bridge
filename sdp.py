@@ -137,9 +137,12 @@ def _load_db_yaml(name):
         return {}
 
 
-def _prompt_db_password(label="Database admin password"):
+def _prompt_db_password(label="Database admin password", tag=None):
     """Prompt for the database admin password. Returns the password string."""
-    pw = getpass(f"  {label}: ")
+    prefix = ""
+    if tag and os.environ.get('SDP_TAGGED_MODE'):
+        prefix = f"[{tag}] "
+    pw = getpass(f"  {prefix}{label}: ")
     if not pw:
         print("  Error: Password cannot be empty.")
         sys.exit(1)
@@ -246,7 +249,7 @@ def cmd_db_start(args):
             return ps_result.returncode
         # Prompt for admin password if auth is enabled (needed for init container)
         if _is_auth_enabled():
-            password = _prompt_db_password()
+            password = _prompt_db_password(tag="sdp_db_password")
             _set_auth_env(password)
         # Start only the MCP profile (init container runs first via depends_on)
         mcp_args = ["--profile", parent_db, "--profile", mcp_profile, "up", "-d"]
@@ -264,7 +267,7 @@ def cmd_db_start(args):
     # Prompt for admin password if auth is enabled
     password = None
     if _is_auth_enabled():
-        password = _prompt_db_password()
+        password = _prompt_db_password(tag="sdp_db_password")
         _set_auth_env(password)
 
     # Determine which MCP profiles to start
@@ -833,11 +836,12 @@ def cmd_db_recover_password(args):
     print("  set a new admin password, and restore scram-sha-256 auth.")
     print()
 
-    new_password = getpass("  New admin password: ")
+    _tag = lambda t: f"[{t}] " if os.environ.get('SDP_TAGGED_MODE') else ""
+    new_password = getpass(f"  {_tag('sdp_recover_password')}New admin password: ")
     if not new_password:
         print("  Error: Password cannot be empty.")
         return 1
-    confirm = getpass("  Confirm new password: ")
+    confirm = getpass(f"  {_tag('sdp_recover_password_confirm')}Confirm new password: ")
     if new_password != confirm:
         print("  Error: Passwords do not match.")
         return 1
@@ -1338,7 +1342,7 @@ def cmd_db_create_indexes(args):
         db_label = "PostgreSQL" if "postgres" in available else "MongoDB"
         print(f"\n  Database: {db_label}")
     else:
-        choice = ask_choice("Which database?", ["PostgreSQL", "MongoDB", "Both"], default="Both")
+        choice = ask_choice("Which database?", ["PostgreSQL", "MongoDB", "Both"], default="Both", tag="sdp_idx_database")
         if choice == "PostgreSQL":
             targets = ["postgres"]
         elif choice == "MongoDB":
@@ -1352,7 +1356,7 @@ def cmd_db_create_indexes(args):
     needs_pg_auth = "postgres" in targets and env.get("POSTGRES_AUTH_ENABLED") == "true"
     needs_mongo_auth = "mongo" in targets and env.get("MONGO_AUTH_ENABLED") == "true"
     if needs_pg_auth or needs_mongo_auth:
-        password = _prompt_db_password()
+        password = _prompt_db_password(tag="sdp_db_password")
 
     pg_created = {}
     mongo_created = {}
@@ -1371,7 +1375,7 @@ def cmd_db_create_indexes(args):
 
     print(f"\n  Created {total} new index(es).")
 
-    if ask_bool("Save new indexes to platform.yaml?", default=False):
+    if ask_bool("Save new indexes to platform.yaml?", default=False, tag="sdp_idx_save"):
         _persist_indexes_to_config(source, pg_created, mongo_created)
 
     print()
@@ -1495,7 +1499,7 @@ def cmd_source_configure(args):
             missing = [p for p in available if p not in existing]
             if missing:
                 print(f"\n  Profiles not yet configured: {', '.join(missing)}")
-                if ask_bool("Add missing profile configurations now?", True):
+                if ask_bool("Add missing profile configurations now?", True, tag="sdp_add_missing_profiles"):
                     source_main(source_name=source_name)
     else:
         # For custom platforms, re-run source setup (also updates .env paths)
@@ -1942,7 +1946,7 @@ def cmd_run(args):
     # Prompt for admin password if auth enabled and profile accesses a database
     db_profiles = {"postgres_ingest", "postgres_ml", "mongo_ingest"}
     if profile in db_profiles and _is_auth_enabled():
-        password = _prompt_db_password()
+        password = _prompt_db_password(tag="sdp_db_password")
         _set_auth_env(password)
 
     # Build per-source environment (read paths from source config, with defaults)
@@ -1987,6 +1991,8 @@ def build_parser():
         prog="sdp.py",
         description="Social Data Pipeline CLI",
     )
+    parser.add_argument("--tag", action="store_true",
+                        help="Prefix interactive prompts with [tag] identifiers for automation")
     subparsers = parser.add_subparsers(dest="command", help="Command group")
 
     # ---- sdp db ----
@@ -2088,6 +2094,9 @@ def build_parser():
 def main():
     parser = build_parser()
     args = parser.parse_args()
+
+    if args.tag:
+        os.environ['SDP_TAGGED_MODE'] = '1'
 
     if not args.command:
         parser.print_help()

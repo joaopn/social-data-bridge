@@ -116,7 +116,7 @@ def ask_text_columns(platform, data_types):
 
     text_columns = {}
     for dt in data_types:
-        cols = ask_list(f"Text columns for '{dt}' (comma-separated)")
+        cols = ask_list(f"Text columns for '{dt}' (comma-separated)", tag=f"cl_text_columns_{dt}")
         if cols:
             text_columns[dt] = cols
         else:
@@ -125,15 +125,18 @@ def ask_text_columns(platform, data_types):
     print()
     remove_strings = ask_list(
         "Exact strings to remove before classification (comma-separated, or Enter for none)",
+        tag="cl_remove_strings",
     )
     remove_patterns_str = ask(
         "Regex patterns to remove (comma-separated)",
         r"https?://\S+",
+        tag="cl_remove_patterns",
     )
     remove_patterns = [p.strip() for p in remove_patterns_str.split(",") if p.strip()]
 
     fields = ask_list(
         "Extra fields to keep in GPU classifier output (besides id, dataset, retrieved_utc)",
+        tag="cl_extra_fields",
     )
 
     return text_columns, remove_strings, remove_patterns, fields
@@ -179,10 +182,10 @@ def run_questionnaire(hw, state):
     # ---- Lingua ----
     if "lingua" in profiles:
         section_header("Language Detection (Lingua)")
-        settings["lingua_workers"] = ask_int("Lingua workers (total Rayon threads)", defaults["lingua_workers"])
-        settings["lingua_file_workers"] = ask_int("Lingua file workers (concurrent files)", defaults["lingua_file_workers"])
-        settings["lingua_batch_size"] = ask_int("Lingua batch size (rows per batch)", defaults["lingua_batch_size"])
-        settings["lingua_low_accuracy"] = ask_bool("Low accuracy mode (faster)?", defaults["lingua_low_accuracy"])
+        settings["lingua_workers"] = ask_int("Lingua workers (total Rayon threads)", defaults["lingua_workers"], tag="cl_lingua_workers")
+        settings["lingua_file_workers"] = ask_int("Lingua file workers (concurrent files)", defaults["lingua_file_workers"], tag="cl_lingua_file_workers")
+        settings["lingua_batch_size"] = ask_int("Lingua batch size (rows per batch)", defaults["lingua_batch_size"], tag="cl_lingua_batch_size")
+        settings["lingua_low_accuracy"] = ask_bool("Low accuracy mode (faster)?", defaults["lingua_low_accuracy"], tag="cl_lingua_low_accuracy")
 
     # ---- GPU Classifiers ----
     if "ml" in profiles:
@@ -195,27 +198,29 @@ def run_questionnaire(hw, state):
                 "GPUs to use:",
                 gpu_labels,
                 gpu_labels,  # default: all
+                tag="cl_gpu_select",
             )
             settings["gpu_ids"] = [gpu_indices[gpu_labels.index(g)] for g in selected_gpus]
         else:
-            gpu_ids_str = ask("GPU IDs (comma-separated)", "0")
+            gpu_ids_str = ask("GPU IDs (comma-separated)", "0", tag="cl_gpu_ids")
             settings["gpu_ids"] = [int(x.strip()) for x in gpu_ids_str.split(",")]
 
         # Recompute file_workers default based on selected GPUs
         defaults["ml_file_workers"] = max(1, len(settings["gpu_ids"]))
 
-        settings["ml_file_workers"] = ask_int("File workers", defaults["ml_file_workers"])
-        settings["ml_tokenize_workers"] = ask_int("Tokenize workers", defaults["ml_tokenize_workers"])
-        settings["ml_classifier_batch_size"] = ask_int("Classifier batch size", defaults["ml_classifier_batch_size"])
+        settings["ml_file_workers"] = ask_int("File workers", defaults["ml_file_workers"], tag="cl_gpu_file_workers")
+        settings["ml_tokenize_workers"] = ask_int("Tokenize workers", defaults["ml_tokenize_workers"], tag="cl_gpu_tokenize_workers")
+        settings["ml_classifier_batch_size"] = ask_int("Classifier batch size", defaults["ml_classifier_batch_size"], tag="cl_gpu_batch_size")
 
         available_classifiers = defaults["ml_classifiers"]
         settings["ml_classifiers"] = ask_multi_select(
             "Classifiers to run:",
             available_classifiers,
             defaults["ml_classifiers"],
+            tag="cl_gpu_classifiers",
         )
 
-        settings["hf_token"] = ask_password("HuggingFace token (optional, press Enter to skip): ")
+        settings["hf_token"] = ask_password("HuggingFace token (optional, press Enter to skip): ", tag="cl_hf_token")
 
     return settings
 
@@ -384,7 +389,7 @@ def main(source_name):
     # Summary and confirm
     print_summary(settings, files_to_write)
 
-    if not ask_bool("Write these files?", True):
+    if not ask_bool("Write these files?", True, tag="cl_write_files"):
         print("\n  Aborted. No files written.\n")
         sys.exit(0)
 

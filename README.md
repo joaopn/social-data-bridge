@@ -213,7 +213,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py run <profile> --source <name>` | Run for a specific source (auto-selects if only one configured) |
 | `sdp.py run <profile> --build` | Rebuild the Docker image before running |
 
-Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`.
+Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`. `--build` rebuilds the Docker image before running (needed after code or dependency changes). The global `--tag` flag (e.g. `python sdp.py --tag db setup`) prefixes each interactive prompt with a `[tag_id]` for automation tools like pexpect.
 
 `source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database. `source error-logs` shows the full error details and relevant mongoimport log output for failed datasets. Use `--profile` to filter by ingestion profile (`postgres_ingest`, `postgres_ml`, `mongo_ingest`).
 

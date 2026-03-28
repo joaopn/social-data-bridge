@@ -27,14 +27,18 @@ from social_data_pipeline.setup.utils import (
 )
 
 
-def ask_password(label: str) -> str:
+def ask_password(label: str, tag=None) -> str:
     """Prompt for a password with confirmation. Uses getpass for hidden input."""
+    from social_data_pipeline.setup.utils import _tag_prefix
+    prefix = _tag_prefix(tag)
     while True:
-        pw1 = getpass(f"  {label}: ")
+        pw1 = getpass(f"  {prefix}{label}: ")
         if not pw1:
             print("    Password cannot be empty.")
             continue
-        pw2 = getpass(f"  Confirm {label.lower()}: ")
+        confirm_tag = f"{tag}_confirm" if tag else None
+        confirm_prefix = _tag_prefix(confirm_tag)
+        pw2 = getpass(f"  {confirm_prefix}Confirm {label.lower()}: ")
         if pw1 != pw2:
             print("    Passwords do not match. Try again.")
             continue
@@ -66,14 +70,14 @@ def run_questionnaire(hw):
     section_header("Data Path")
     print("  Base directory for all data (dumps, parsed, output, databases).")
     print()
-    data_path = ask("Data base path", "./data")
+    data_path = ask("Data base path", "./data", tag="db_data_path")
     settings["data_path"] = data_path
 
     # ---- Database selection ----
     section_header("Database Selection")
 
     all_databases = ["postgres", "mongo"]
-    databases = ask_multi_select("Databases:", all_databases, ["postgres"])
+    databases = ask_multi_select("Databases:", all_databases, ["postgres"], tag="db_databases")
     settings["databases"] = databases
 
     has_postgres = "postgres" in databases
@@ -82,32 +86,32 @@ def run_questionnaire(hw):
     # ---- Paths (database data dirs) ----
     section_header("Database Paths")
     if has_postgres:
-        settings["pgdata_path"] = ask("PostgreSQL data path", f"{data_path}/database/postgres")
+        settings["pgdata_path"] = ask("PostgreSQL data path", f"{data_path}/database/postgres", tag="db_pgdata_path")
     if has_mongo:
-        settings["mongo_data_path"] = ask("MongoDB data path", f"{data_path}/database/mongo")
+        settings["mongo_data_path"] = ask("MongoDB data path", f"{data_path}/database/mongo", tag="db_mongo_data_path")
 
     # ---- PostgreSQL ----
     if has_postgres:
         section_header("PostgreSQL Configuration")
 
-        settings["db_name"] = ask("Database name", "datasets")
-        settings["pg_port"] = ask_int("PostgreSQL port", 5432)
+        settings["db_name"] = ask("Database name", "datasets", tag="db_name")
+        settings["pg_port"] = ask_int("PostgreSQL port", 5432, tag="db_pg_port")
 
         # Tablespace configuration
-        if ask_bool("Use tablespaces? (spread tables across multiple disks)", False):
+        if ask_bool("Use tablespaces? (spread tables across multiple disks)", False, tag="db_tablespaces"):
             print()
             print("  Note: Check documentation for expected disk usage per data type.")
             print()
             ts_tablespaces = {}
             while True:
-                ts_name = ask("Tablespace name (e.g. nvme1)")
+                ts_name = ask("Tablespace name (e.g. nvme1)", tag="db_ts_name")
                 if not ts_name or ts_name == "pgdata":
                     print("    'pgdata' is reserved for the default PostgreSQL data directory.")
                     continue
-                ts_path = ask(f"Host path for '{ts_name}' (directory on disk)")
+                ts_path = ask(f"Host path for '{ts_name}' (directory on disk)", tag="db_ts_path")
                 if ts_path:
                     ts_tablespaces[ts_name] = ts_path
-                if not ask_bool("Add another tablespace?", False):
+                if not ask_bool("Add another tablespace?", False, tag="db_ts_more"):
                     break
 
             if ts_tablespaces:
@@ -118,6 +122,7 @@ def run_questionnaire(hw):
             "Filesystem for PostgreSQL data:",
             ["standard", "zfs"],
             default="standard",
+            tag="db_filesystem",
         )
         settings["filesystem"] = fs
 
@@ -132,11 +137,12 @@ def run_questionnaire(hw):
             "PGTune output:",
             ["paste", "file", "skip"],
             default="paste",
+            tag="db_pgtune_method",
         )
         if pgtune_method == "paste":
-            settings["pgtune_output"] = ask_multi_line("Paste PGTune output below:")
+            settings["pgtune_output"] = ask_multi_line("Paste PGTune output below:", tag="db_pgtune_paste")
         elif pgtune_method == "file":
-            pgtune_path = ask("Path to file with PGTune output")
+            pgtune_path = ask("Path to file with PGTune output", tag="db_pgtune_file")
             try:
                 settings["pgtune_output"] = Path(pgtune_path).expanduser().read_text()
             except (OSError, ValueError) as e:
@@ -149,8 +155,8 @@ def run_questionnaire(hw):
     if has_mongo:
         section_header("MongoDB Configuration")
 
-        settings["mongo_port"] = ask_int("MongoDB port", 27017)
-        settings["mongo_cache_size_gb"] = ask_int("MongoDB WiredTiger cache size (GB)", 2)
+        settings["mongo_port"] = ask_int("MongoDB port", 27017, tag="db_mongo_port")
+        settings["mongo_cache_size_gb"] = ask_int("MongoDB WiredTiger cache size (GB)", 2, tag="db_mongo_cache")
 
     # ---- Authentication ----
     if has_postgres or has_mongo:
@@ -159,24 +165,24 @@ def run_questionnaire(hw):
         print("  Recommended for multi-user or remote servers.")
         print()
 
-        if ask_bool("Enable database authentication?", False):
+        if ask_bool("Enable database authentication?", False, tag="db_auth"):
             settings["auth_enabled"] = True
 
             print()
             print("  Choose an admin password for database access.")
             print("  This password is NOT stored anywhere — you will be prompted when needed.")
             print()
-            settings["db_password"] = ask_password("Admin password")
+            settings["db_password"] = ask_password("Admin password", tag="db_password")
 
             print()
-            if ask_bool("Create a read-only user? (required for MCP servers)", True):
-                ro_username = ask("Read-only username", "readonly")
+            if ask_bool("Create a read-only user? (required for MCP servers)", True, tag="db_ro_user"):
+                ro_username = ask("Read-only username", "readonly", tag="db_ro_username")
                 settings["ro_username"] = ro_username
                 print()
-                if ask_bool("Auto-generate read-only password?", True):
+                if ask_bool("Auto-generate read-only password?", True, tag="db_ro_auto_password"):
                     settings["ro_password"] = secrets.token_urlsafe(24)
                 else:
-                    settings["ro_password"] = ask_password("Read-only password")
+                    settings["ro_password"] = ask_password("Read-only password", tag="db_ro_password")
 
     return settings
 
@@ -515,7 +521,7 @@ def main():
     # Summary and confirm
     print_summary(settings, files_to_write)
 
-    if not ask_bool("Write these files?", True):
+    if not ask_bool("Write these files?", True, tag="db_write_files"):
         print("\n  Aborted. No files written.\n")
         sys.exit(0)
 
