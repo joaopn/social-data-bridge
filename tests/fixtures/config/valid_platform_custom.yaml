@@ -1,0 +1,28 @@
+data_types:
+  - events
+file_patterns:
+  events:
+    dump: '^events\..+$'
+    json: '^events$'
+    csv: '^events\.csv$'
+    parquet: '^events\.parquet$'
+    prefix: 'events_'
+input_format: ndjson
+file_format: parquet
+primary_key: id
+fields:
+  events:
+    - timestamp
+    - user.name
+    - user.profile.age
+    - score
+    - tags
+    - content
+field_types:
+  id: text
+  timestamp: integer
+  name: text
+  age: integer
+  score: float
+  tags: text
+  content: text

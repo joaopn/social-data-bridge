@@ -1,0 +1,6 @@
+{
+  "processed": ["RC_2024-01", "RS_2024-01"],
+  "failed": [{"filename": "RC_2024-02", "error": "decompression failed", "timestamp": "2024-01-15T10:30:00"}],
+  "in_progress": null,
+  "last_updated": "2024-01-15T10:30:00"
+}

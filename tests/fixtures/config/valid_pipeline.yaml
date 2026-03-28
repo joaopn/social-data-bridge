@@ -1,0 +1,7 @@
+pipeline:
+  processing:
+    data_types:
+      - comments
+    workers: 2
+    input_dir: /data/extracted
+    output_dir: /data/parsed

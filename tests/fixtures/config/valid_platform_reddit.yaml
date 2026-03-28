@@ -1,0 +1,72 @@
+data_types:
+  - comments
+  - submissions
+
+file_patterns:
+  comments:
+    dump: '^RC_\d{4}-\d{2}\..*$'
+    json: '^RC_\d{4}-\d{2}$'
+    csv: '^RC_\d{4}-\d{2}\.csv$'
+    parquet: '^RC_\d{4}-\d{2}\.parquet$'
+    prefix: 'RC_'
+  submissions:
+    dump: '^RS_\d{4}-\d{2}\..*$'
+    json: '^RS_\d{4}-\d{2}$'
+    csv: '^RS_\d{4}-\d{2}\.csv$'
+    parquet: '^RS_\d{4}-\d{2}\.parquet$'
+    prefix: 'RS_'
+
+mandatory_fields:
+  - dataset
+  - id
+  - retrieved_utc
+
+primary_key: id
+upsert_order_field: retrieved_utc
+state_field: dataset
+file_format: csv
+
+field_types:
+  dataset: char(7)
+  id: varchar
+  retrieved_utc: integer
+  created_utc: integer
+  score: integer
+  author: text
+  body: text
+  subreddit: text
+  is_deleted: smallint
+  removal_type: smallint
+  id10: bigint
+  link_id: varchar
+  parent_id: varchar
+  title: text
+  selftext: text
+  domain: text
+  num_comments: integer
+  upvote_ratio: real
+  over_18: boolean
+
+fields:
+  comments:
+    - created_utc
+    - author
+    - body
+    - subreddit
+    - score
+    - link_id
+    - parent_id
+    - is_deleted
+    - removal_type
+    - id10
+  submissions:
+    - created_utc
+    - author
+    - title
+    - selftext
+    - subreddit
+    - score
+    - domain
+    - num_comments
+    - upvote_ratio
+    - over_18
