@@ -38,6 +38,7 @@ data/
 config/sources/
 *.zst
 *.csv
+!tests/fixtures/**/*.csv
 
 # Local config overrides
 *.local.yaml
@@ -63,3 +64,4 @@ pgdata/
 .claude/
 .codex/
 .opencode/
+plans/

@@ -1,23 +1,34 @@
 # Testing
 
-## Setup
+## CI
 
-Install test dependencies (on top of the project's own deps: `polars`, `pyarrow`, `pyyaml`):
+Two GitHub Actions workflows run on every push and PR (path-filtered):
+
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| ShellCheck | `.github/workflows/shellcheck.yml` | `**/*.sh` changes | Lint entrypoint scripts in `config/` |
+| Tests | `.github/workflows/tests.yml` | `**/*.py`, `requirements*.txt`, `tests/**`, `config/**/*.yaml` | Run unit test suite (Python 3.13) |
+
+Both also support `workflow_dispatch` for manual runs. All actions are pinned to full commit SHAs for supply chain hardening.
+
+CI installs only `requirements-test.txt`, which is self-contained (includes project deps `pyyaml`, `polars`, `pyarrow` — excludes heavy runtime deps like `lingua` and `psycopg` that no test imports). Pytest output goes to the Actions step log directly (no artifact upload).
+
+## Running tests locally
+
+Install test dependencies:
 
 ```bash
 pip install -r requirements-test.txt
 ```
 
-## Running tests
-
 All commands require `--override-ini="pythonpath=."` so pytest can import the project package.
 
 ```bash
-# Run all tests
-pytest --override-ini="pythonpath=." 2>&1 | tee test-results.log
+# Run all tests (with local log file)
+pytest --override-ini="pythonpath=." -v 2>&1 | tee test-results.log
 
 # Skip slow decompression tests
-pytest --override-ini="pythonpath=." -m "not slow" 2>&1 | tee test-results.log
+pytest --override-ini="pythonpath=." -m "not slow" -v 2>&1 | tee test-results.log
 ```
 
 ## Test structure
@@ -41,11 +52,6 @@ tests/
 ## What's tested
 
 **Unit tests** (`tests/core/`, `tests/platforms/`, `tests/setup/`, `tests/orchestrators/`) test pure logic — config merging, type enforcement, deletion waterfall, base36 conversion, decompression, file detection, CLI input helpers. No Docker needed.
-
-## Planned work
-
-- **CI workflow**: Unit tests and static checks (ruff, shellcheck, hadolint) will move to a GitHub Actions workflow. See `tests/PLAN_CI.md`.
-- **DinD E2E tests**: Full pipeline testing in sandboxed containers. See `tests/PLAN_E2E.md`.
 
 ## Swapping test data
 

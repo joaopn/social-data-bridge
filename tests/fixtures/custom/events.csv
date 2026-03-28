@@ -1,0 +1,6 @@
+id,timestamp,user.name,user.profile.age,user.profile.verified,tags,score,metadata.0.key,content
+evt_001,1704067200,alice,28,true,tech|news,4.5,source,Sample event content about a new product launch
+evt_002,1704070800,bob,35,false,sports|live,3.2,source,Live coverage of the championship game results
+evt_003,1704074400,carol,,,1.0,source,Brief update with missing profile data
+evt_004,1704078000,dave,42,true,,5.0,source,Detailed analysis of market trends and quarterly earnings report
+evt_005,1704081600,eve,19,false,music|review|indie,2.8,source,Album review: incredible debut from an underground artist
