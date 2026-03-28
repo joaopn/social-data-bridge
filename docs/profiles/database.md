@@ -308,22 +308,6 @@ All tables use composite primary key: `(dataset, id)`
 
 ---
 
-## Storage Requirements
-
-Estimates for full Reddit data dumps:
-
-| Component | Sequential Mode | Parallel Mode |
-|-----------|-----------------|---------------|
-| Intermediate files | ~4TB | ~51TB |
-| With ZFS/BTRFS compression | ~4TB | ~9TB |
-| PostgreSQL database | ~10TB (uncompressed) | ~6TB (LZ4) |
-
-**Pipeline modes:**
-- **Sequential** (`parallel_mode: false`): Process one file at a time, lower disk usage
-- **Parallel** (`parallel_mode: true`): Extract all → Parse all → Ingest all, much faster but needs more intermediate storage
-
----
-
 ## Resume Behavior
 
 ### State Tracking
