@@ -106,6 +106,7 @@ services:
       context: .
       dockerfile: Dockerfile.postgres
     ipc: host  # Fixes 64MB shared memory limit from default Docker IPC
+    mem_limit: ${POSTGRES_MEM_LIMIT:-0}
     restart: unless-stopped
     stop_grace_period: 10m
     environment:
@@ -184,6 +185,7 @@ services:
   mongo:
     profiles: [mongo]
     image: mongo:8
+    mem_limit: ${MONGO_MEM_LIMIT:-0}
     restart: unless-stopped
     stop_grace_period: 5m
     ports:

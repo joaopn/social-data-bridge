@@ -151,12 +151,34 @@ def run_questionnaire(hw):
         else:
             settings["pgtune_output"] = ""
 
+        if fs == "zfs" and hw["ram_gb"]:
+            arc_max_gb = int(hw["ram_gb"] // 2)
+            arc_max_bytes = arc_max_gb * 1024 ** 3
+            print()
+            print(f"  NOTE: ZFS ARC cache competes with PostgreSQL for RAM.")
+            print(f"  To avoid memory pressure, limit ARC (suggested ~{arc_max_gb}GB for this system):")
+            print(f"    echo {arc_max_bytes} > /sys/module/zfs/parameters/zfs_arc_max")
+            print(f"  Persist in /etc/modprobe.d/zfs.conf:")
+            print(f"    options zfs zfs_arc_max={arc_max_bytes}")
+
+        print()
+        suggested_pg_mem = int(hw["ram_gb"] * 0.6) if hw["ram_gb"] else 0
+        pg_mem = ask_int("PostgreSQL container memory limit (GB, 0=unlimited)", suggested_pg_mem)
+        if pg_mem > 0:
+            settings["pg_mem_limit"] = pg_mem
+
     # ---- MongoDB ----
     if has_mongo:
         section_header("MongoDB Configuration")
 
         settings["mongo_port"] = ask_int("MongoDB port", 27017, tag="db_mongo_port")
         settings["mongo_cache_size_gb"] = ask_int("MongoDB WiredTiger cache size (GB)", 2, tag="db_mongo_cache")
+
+        mongo_cache = settings.get("mongo_cache_size_gb", 2)
+        suggested_mongo_mem = max(2, mongo_cache * 2)
+        mongo_mem = ask_int("MongoDB container memory limit (GB, 0=unlimited)", suggested_mongo_mem)
+        if mongo_mem > 0:
+            settings["mongo_mem_limit"] = mongo_mem
 
     # ---- Authentication ----
     if has_postgres or has_mongo:
@@ -212,6 +234,8 @@ def generate_env(settings):
             f"DB_NAME={settings.get('db_name', 'datasets')}",
             f"POSTGRES_PORT={settings.get('pg_port', 5432)}",
         ]
+        if settings.get("pg_mem_limit"):
+            lines.append(f"POSTGRES_MEM_LIMIT={settings['pg_mem_limit']}g")
 
     if "mongo_data_path" in settings:
         lines += [
@@ -221,6 +245,8 @@ def generate_env(settings):
             f"MONGO_PORT={settings.get('mongo_port', 27017)}",
             f"MONGO_CACHE_SIZE_GB={settings.get('mongo_cache_size_gb', 2)}",
         ]
+        if settings.get("mongo_mem_limit"):
+            lines.append(f"MONGO_MEM_LIMIT={settings['mongo_mem_limit']}g")
 
     if settings.get("auth_enabled"):
         lines += [
