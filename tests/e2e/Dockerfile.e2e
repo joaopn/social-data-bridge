@@ -1,0 +1,64 @@
+# E2E Testing Container — runs inside sysbox for Docker-in-Docker
+#
+# Ubuntu 24.04 with dockerd + systemd, Python 3.13, and all test deps.
+# Sysbox allows unprivileged Docker-in-Docker via systemd as PID 1.
+#
+# Usage (via run.sh):
+#   docker build -t sdp-e2e -f tests/e2e/Dockerfile.e2e .
+#   docker run --rm --runtime=sysbox-runc -v $PWD:/repo:ro sdp-e2e
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Base system packages
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl gnupg lsb-release \
+        systemd systemd-sysv dbus \
+        zstd rsync git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Docker CE (official repo)
+# Pin containerd.io to 1.7.x to get runc < 1.3.3 — runc >= 1.3.3 has a procfs
+# safety check (CVE-2025-52881) that conflicts with sysbox's /proc FUSE mounts.
+# Safe to pin: sysbox provides outer isolation. Remove pin when sysbox >= 0.7.0
+# gets an official release (nestybox/sysbox#973).
+RUN install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
+    && chmod a+r /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] \
+       https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
+       > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        containerd.io=1.7.28-1~ubuntu.24.04~noble \
+        docker-ce docker-ce-cli \
+        docker-buildx-plugin docker-compose-plugin \
+    && apt-mark hold containerd.io \
+    && rm -rf /var/lib/apt/lists/*
+
+# Enable dockerd as a systemd service (sysbox starts systemd as PID 1)
+RUN systemctl enable docker
+
+# Python 3.13 via deadsnakes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python3.13 python3.13-venv python3.13-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python virtualenv with all test + project dependencies
+RUN python3.13 -m venv /opt/e2e-venv
+COPY requirements.txt requirements-test.txt requirements-mongo.txt /tmp/
+RUN /opt/e2e-venv/bin/pip install --no-cache-dir \
+    -r /tmp/requirements.txt \
+    -r /tmp/requirements-test.txt \
+    -r /tmp/requirements-mongo.txt \
+    pexpect
+
+ENV PATH="/opt/e2e-venv/bin:$PATH"
+
+# systemd expects /sbin/init as entrypoint — sysbox handles the rest
+ENTRYPOINT ["/sbin/init"]

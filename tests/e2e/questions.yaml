@@ -1,0 +1,662 @@
+# E2E Question Dictionary — Form schema for sdp.py interactive prompts
+#
+# Each entry documents a tagged prompt: what it asks, why it matters,
+# and what the default means. Used alongside pexpect for E2E automation.
+# Tags match the tag= parameters in social_data_pipeline/setup/*.py.
+#
+# Structure:
+#   tag_id:
+#     prompt: The prompt text shown to the user
+#     explain: What this setting controls and when to change it
+#     default: The default value (what Enter accepts)
+
+# ===========================================================================
+# sdp db setup
+# ===========================================================================
+
+db_data_path:
+  prompt: "Data base path"
+  explain: >
+    Root directory for all pipeline data — dumps, parsed output, classifier
+    output, and database files all live under subdirectories here. Use a fast
+    filesystem (SSD/NVMe) for the database subdirectory.
+  default: "./data"
+
+db_databases:
+  prompt: "Databases"
+  explain: >
+    Which database engines to configure. PostgreSQL supports structured
+    ingestion with typed columns, indexes, and Parquet-native COPY via
+    pg_parquet. MongoDB supports raw JSON ingestion (preserves nested
+    structures, no schema definition needed). Select both to use each for
+    different workloads.
+  default: "1 (postgres)"
+  options:
+    1: postgres
+    2: mongo
+    "1,2": both
+
+db_pgdata_path:
+  prompt: "PostgreSQL data path"
+  explain: >
+    Directory for PostgreSQL data files (WAL, tables, indexes). Should be on
+    fast storage. Mounted into the postgres container as a Docker volume.
+  default: "{data_path}/database/postgres"
+
+db_mongo_data_path:
+  prompt: "MongoDB data path"
+  explain: >
+    Directory for MongoDB data files (WiredTiger storage). Mounted into the
+    mongo container as a Docker volume.
+  default: "{data_path}/database/mongo"
+
+db_name:
+  prompt: "Database name"
+  explain: >
+    PostgreSQL database name. All source schemas live inside this database.
+    Only change if you need multiple independent SDP installations on the
+    same PostgreSQL server.
+  default: "datasets"
+
+db_pg_port:
+  prompt: "PostgreSQL port"
+  explain: >
+    Host port mapped to the PostgreSQL container. Change if 5432 is already
+    in use by another PostgreSQL instance.
+  default: "5432"
+
+db_tablespaces:
+  prompt: "Use tablespaces?"
+  explain: >
+    PostgreSQL tablespaces spread tables across multiple physical disks,
+    enabling parallel I/O. Only useful with multiple NVMe drives and separate
+    filesystems. For single-disk setups, always decline.
+  default: "no"
+
+db_filesystem:
+  prompt: "Filesystem for PostgreSQL data"
+  explain: >
+    ZFS mode disables PostgreSQL's full_page_writes and adjusts WAL settings
+    since ZFS provides its own checksumming and copy-on-write guarantees.
+    Use "standard" for ext4/XFS/btrfs.
+  default: "1 (standard)"
+  options:
+    1: standard
+    2: zfs
+
+db_pgtune_method:
+  prompt: "PGTune output"
+  explain: >
+    PGTune (pgtune.leopard.in.ua) generates PostgreSQL memory tuning
+    parameters based on your hardware. Paste the output, provide a file
+    path, or skip. Skipping uses conservative defaults — for production
+    workloads, always provide PGTune output.
+  default: "1 (paste)"
+  options:
+    1: paste
+    2: file
+    3: skip
+
+db_mongo_port:
+  prompt: "MongoDB port"
+  explain: >
+    Host port mapped to the MongoDB container. Change if 27017 is already
+    in use.
+  default: "27017"
+
+db_mongo_cache:
+  prompt: "MongoDB WiredTiger cache size (GB)"
+  explain: >
+    WiredTiger internal cache. MongoDB recommends 50% of RAM minus 1GB for
+    dedicated servers. For shared machines, 2GB is a safe starting point.
+  default: "2"
+
+db_auth:
+  prompt: "Enable database authentication?"
+  explain: >
+    Enables password-based authentication for all database connections.
+    Recommended for multi-user or remote servers. When enabled, you set an
+    admin password (never stored on disk) and optionally a read-only user
+    for MCP servers.
+  default: "no"
+
+db_password:
+  prompt: "Admin password"
+  explain: >
+    The database admin password. Used for all write operations (ingestion,
+    schema creation). Prompted at runtime via getpass — never stored on disk.
+    If lost, recover with: sdp db recover-password.
+  default: null
+
+db_ro_user:
+  prompt: "Create a read-only user?"
+  explain: >
+    Required for MCP servers. Creates a separate database user with
+    read-only access (pg_read_all_data / readAnyDatabase). Password is
+    auto-generated and stored in .ro_credentials (chmod 600).
+  default: "yes"
+
+db_ro_username:
+  prompt: "Read-only username"
+  explain: >
+    Username for the read-only database user. Used by MCP servers and
+    any read-only tools.
+  default: "readonly"
+
+db_ro_auto_password:
+  prompt: "Auto-generate read-only password?"
+  explain: >
+    Auto-generates a cryptographically secure 32-character password for the
+    read-only user. Stored in .ro_credentials in the database data volume.
+  default: "yes"
+
+db_write_files:
+  prompt: "Write these files?"
+  explain: >
+    Confirmation before writing generated configuration files. Shows a
+    summary of all files that will be created or overwritten.
+  default: "yes"
+
+# ===========================================================================
+# sdp source add
+# ===========================================================================
+
+src_data_types:
+  prompt: "Data types"
+  explain: >
+    Logical groupings of your data (e.g., submissions and comments for
+    Reddit, or events for a custom platform). Each data type gets its own
+    database table/collection and can have different field lists.
+  default: "submissions, comments (reddit)"
+
+src_dumps_path:
+  prompt: "Dumps directory"
+  explain: >
+    Directory containing raw compressed dump files (.zst, .gz, .xz). The
+    parse profile reads from here. For HF datasets, sdp source download
+    mirrors files here first.
+  default: "{data_path}/dumps/{source_name}"
+
+src_extracted_path:
+  prompt: "Extracted directory"
+  explain: >
+    Directory for decompressed files. The parse profile writes decompressed
+    data here before parsing. For custom platforms with uncompressed input,
+    place files directly in data_type subdirectories here.
+  default: "{data_path}/extracted/{source_name}"
+
+src_parsed_path:
+  prompt: "Parsed directory"
+  explain: >
+    Directory for parsed output (CSV or Parquet). These files are what gets
+    ingested into PostgreSQL. Lingua reads from here too.
+  default: "{data_path}/parsed/{source_name}"
+
+src_output_path:
+  prompt: "Output directory"
+  explain: >
+    Directory for classifier outputs (lingua, transformers). Each classifier
+    creates a subdirectory with annotated copies of the parsed files.
+  default: "{data_path}/output/{source_name}"
+
+src_file_format:
+  prompt: "Intermediate file format"
+  explain: >
+    Format for parsed output files. Parquet is smaller, enforces schema, and
+    preserves text without CSV escaping issues. CSV is the legacy format,
+    useful for external tool compatibility.
+  default: "1 (parquet)"
+  options:
+    1: parquet
+    2: csv
+
+src_parquet_rg_size:
+  prompt: "Parquet row-group size"
+  explain: >
+    Number of rows per Parquet row group. Larger groups compress better but
+    use more RAM. Affects predicate pushdown granularity in external engines
+    (DuckDB, StarRocks). 1M is a good default.
+  default: "1000000"
+
+src_profiles:
+  prompt: "Profiles to configure"
+  explain: >
+    Which pipeline stages to enable for this source. Each profile gets its
+    own config file. Profiles not selected here can be added later with
+    sdp source configure.
+  default: "all available (minus ml if no GPU)"
+
+src_parse_workers:
+  prompt: "Parse workers"
+  explain: >
+    Number of parallel worker processes for file parsing. Higher values use
+    more CPU and memory. Limited by available CPU cores.
+  default: "min(cpu_cores, 8)"
+
+src_pg_prefer_lingua:
+  prompt: "Use Lingua files?"
+  explain: >
+    When enabled, postgres_ingest reads from lingua output (which includes
+    language columns) instead of plain parsed files. Falls back to parsed
+    files if lingua output doesn't exist.
+  default: "yes (if lingua profile selected)"
+
+src_pg_index_workers:
+  prompt: "Parallel index workers"
+  explain: >
+    max_parallel_maintenance_workers for PostgreSQL index creation. Higher
+    values build indexes faster but use more CPU during the index phase.
+  default: "min(max(1, cores//2), 8)"
+
+src_db_schema:
+  prompt: "PostgreSQL schema name"
+  explain: >
+    PostgreSQL schema for this source's tables. Each source gets its own
+    schema for namespace isolation. Defaults to the source name.
+  default: "{source_name}"
+
+src_input_format:
+  prompt: "Raw input file format"
+  explain: >
+    Format of the raw input files before parsing. NDJSON (one JSON object
+    per line) is the default for most data dumps. CSV input is supported
+    for pre-structured tabular data.
+  default: "1 (ndjson)"
+  options:
+    1: ndjson
+    2: csv
+
+src_mongo_strategy:
+  prompt: "MongoDB collection strategy"
+  explain: >
+    per_data_type creates one collection per data type (e.g., "comments").
+    per_file creates one collection per input file (e.g., "RC_2024-01").
+    per_data_type is simpler for most use cases.
+  default: "1 (per_data_type)"
+  options:
+    1: per_data_type
+    2: per_file
+
+src_mongo_db_name:
+  prompt: "MongoDB database name"
+  explain: >
+    MongoDB database for this source's collections. Defaults to the source
+    name. Each source gets its own database for isolation.
+  default: "{source_name}"
+
+src_write_files:
+  prompt: "Write these files?"
+  explain: >
+    Confirmation before writing source configuration files. Shows all files
+    that will be created under config/sources/{source_name}/.
+  default: "yes"
+
+# ===========================================================================
+# sdp source configure (reddit)
+# ===========================================================================
+
+reddit_db_schema:
+  prompt: "Database schema name"
+  explain: >
+    PostgreSQL schema for Reddit data. Default "reddit" creates tables under
+    the "reddit" schema.
+  default: "reddit"
+
+reddit_customize_fields:
+  prompt: "Remove fields from the default list?"
+  explain: >
+    The default field list (from config/templates/reddit.yaml) includes all
+    commonly used Reddit fields. Remove fields here to reduce storage and
+    parsing time. Adding fields requires editing field_types in the template.
+  default: "no"
+
+reddit_customize_indexes:
+  prompt: "Customize database indexes?"
+  explain: >
+    Default indexes cover author, subreddit, domain (submissions) and
+    link_id (comments). Customize if your queries use different access
+    patterns.
+  default: "no"
+
+# ===========================================================================
+# sdp classifiers
+# ===========================================================================
+
+cl_lingua_workers:
+  prompt: "Lingua workers (total Rayon threads)"
+  explain: >
+    Total Rayon thread pool size for Lingua's Rust backend. Higher values
+    use more CPU but process text faster. Set to CPU core count for
+    maximum throughput.
+  default: "cpu_cores"
+
+cl_lingua_file_workers:
+  prompt: "Lingua file workers (concurrent files)"
+  explain: >
+    Number of files processed concurrently. Each file worker gets
+    lingua_workers / file_workers Rayon threads. More file workers reduce
+    idle time between files but increase memory usage.
+  default: "max(1, cpu_cores // 8)"
+
+cl_lingua_batch_size:
+  prompt: "Lingua batch size (rows per batch)"
+  explain: >
+    Rows read and processed per batch. Larger batches reduce I/O overhead
+    but use more memory. 2M is a good default for machines with 16GB+ RAM.
+  default: "2000000"
+
+cl_lingua_low_accuracy:
+  prompt: "Low accuracy mode (faster)?"
+  explain: >
+    Lingua's low-accuracy mode skips some detection steps for ~2x speed.
+    Accuracy drop is modest for longer texts but significant for short
+    texts (< 20 chars).
+  default: "no"
+
+# ===========================================================================
+# sdp.py runtime
+# ===========================================================================
+
+sdp_db_password:
+  prompt: "Database admin password"
+  explain: >
+    Runtime password prompt for authenticated database operations (start,
+    ingest, create-indexes). This is the same password set during db setup.
+  default: null
+
+sdp_recover_password:
+  prompt: "New admin password"
+  explain: >
+    New password during password recovery. Temporarily switches to trust auth,
+    sets this password, then restores scram-sha-256.
+  default: null
+
+sdp_recover_password_confirm:
+  prompt: "Confirm new password"
+  explain: Confirmation of the recovery password.
+  default: null
+
+sdp_idx_database:
+  prompt: "Which database?"
+  explain: >
+    When both PostgreSQL and MongoDB are configured, choose which to create
+    indexes on.
+  default: "Both"
+  options:
+    1: PostgreSQL
+    2: MongoDB
+    3: Both
+
+sdp_idx_save:
+  prompt: "Save new indexes to platform.yaml?"
+  explain: >
+    Persist the indexes just created to the source's platform.yaml so they
+    are recreated automatically on future ingestion runs.
+  default: "no"
+
+sdp_add_missing_profiles:
+  prompt: "Add missing profile configurations now?"
+  explain: >
+    After reddit platform configuration, offers to add config for profiles
+    that don't have override files yet (e.g. postgres_ingest, lingua).
+  default: "yes"
+
+# ===========================================================================
+# sdp db setup — tablespace loop (dynamic, may repeat)
+# ===========================================================================
+
+db_ts_name:
+  prompt: "Tablespace name"
+  explain: >
+    Name for the tablespace (e.g. nvme1). Used in CREATE TABLESPACE and
+    table assignments. "pgdata" is reserved for the default data directory.
+  default: null
+
+db_ts_path:
+  prompt: "Host path for tablespace"
+  explain: >
+    Absolute path on the host to the directory for this tablespace. Must be
+    on a separate disk/filesystem to benefit from parallel I/O.
+  default: null
+
+db_ts_more:
+  prompt: "Add another tablespace?"
+  explain: Add more tablespaces for additional disks.
+  default: "no"
+
+# ===========================================================================
+# sdp db setup — PGTune conditional prompts
+# ===========================================================================
+
+db_pgtune_paste:
+  prompt: "Paste PGTune output below"
+  explain: >
+    Multi-line input for PGTune output. Paste the full output from
+    pgtune.leopard.in.ua, then press Enter on an empty line.
+  default: null
+
+db_pgtune_file:
+  prompt: "Path to file with PGTune output"
+  explain: Path to a text file containing PGTune configuration output.
+  default: null
+
+# ===========================================================================
+# sdp db setup — auth conditional prompts
+# ===========================================================================
+
+db_password_confirm:
+  prompt: "Confirm admin password"
+  explain: Re-enter the admin password for confirmation.
+  default: null
+
+db_ro_password:
+  prompt: "Read-only password"
+  explain: >
+    Manual password for the read-only user (only if auto-generate is declined).
+    Stored in .ro_credentials.
+  default: null
+
+# ===========================================================================
+# sdp source add — custom platform prompts
+# ===========================================================================
+
+src_name:
+  prompt: "Source name"
+  explain: >
+    Name for the data source (e.g. reddit, twitter_academic). Used as the
+    directory name under config/sources/ and data/. Must be a valid directory name.
+  default: null
+
+src_reconfigure:
+  prompt: "Source already exists. Reconfigure?"
+  explain: >
+    Prompted when running source add for a source that already has config files.
+    Yes overwrites existing configuration.
+  default: "no"
+
+src_csv_delimiter:
+  prompt: "CSV delimiter character"
+  explain: >
+    Delimiter for CSV input files. Common values: comma (,), tab (\t), pipe (|).
+  default: ","
+
+# Dynamic tags (one per data_type):
+# src_dump_glob_{dt}:      Dump file glob pattern for this data type
+# src_compression_{dt}:    Compression format (when auto-detect fails)
+# src_tablespace_{dt}:     Tablespace assignment for this data type
+# src_mongo_collection_{dt}: MongoDB collection name for this data type
+# src_pg_indexes_{dt}:     PostgreSQL index columns for this data type
+# src_mongo_indexes_{dt}:  MongoDB index columns for this data type
+
+# ===========================================================================
+# sdp source configure (reddit) — field/index selection
+# ===========================================================================
+
+reddit_submissions_fields:
+  prompt: "Submissions fields"
+  explain: >
+    Multi-select to exclude fields from the submissions field list. Deselected
+    fields are not parsed or ingested, saving storage and processing time.
+  default: "all fields selected"
+
+reddit_comments_fields:
+  prompt: "Comments fields"
+  explain: Same as submissions fields, for the comments data type.
+  default: "all fields selected"
+
+reddit_submissions_indexes:
+  prompt: "Submissions index columns"
+  explain: >
+    Comma-separated column names to index on the submissions table.
+    Default from template: dataset, author, subreddit, domain.
+  default: "dataset, author, subreddit, domain"
+
+reddit_comments_indexes:
+  prompt: "Comments index columns"
+  explain: >
+    Comma-separated column names to index on the comments table.
+    Default from template: dataset, author, subreddit, link_id.
+  default: "dataset, author, subreddit, link_id"
+
+reddit_write_files:
+  prompt: "Apply these overrides?"
+  explain: Confirmation before writing reddit platform overrides.
+  default: "yes"
+
+# ===========================================================================
+# sdp classifiers — text columns and GPU settings
+# ===========================================================================
+
+# Dynamic tag: cl_text_columns_{dt} — text columns for each data type
+
+cl_remove_strings:
+  prompt: "Exact strings to remove before classification"
+  explain: >
+    Strings removed verbatim from text before language/ML classification.
+    Common for Reddit: [deleted], [removed], [unavailable].
+  default: "none"
+
+cl_remove_patterns:
+  prompt: "Regex patterns to remove"
+  explain: >
+    Regex patterns removed from text before classification. Default removes
+    URLs. Add platform-specific patterns (e.g. subreddit mentions).
+  default: "https?://\\S+"
+
+cl_extra_fields:
+  prompt: "Extra fields to keep in GPU classifier output"
+  explain: >
+    Additional columns (beyond id, dataset, retrieved_utc) to include in
+    GPU classifier output files. Useful for downstream joins.
+  default: "none"
+
+cl_gpu_select:
+  prompt: "GPUs to use"
+  explain: >
+    Multi-select from detected GPUs. Each GPU runs a persistent worker thread
+    with its own model copy.
+  default: "all detected GPUs"
+
+cl_gpu_ids:
+  prompt: "GPU IDs (comma-separated)"
+  explain: >
+    Manual GPU ID entry when nvidia-smi detection fails or you want to
+    specify a subset.
+  default: "0"
+
+cl_gpu_file_workers:
+  prompt: "File workers"
+  explain: >
+    Number of files processed concurrently by GPU classifiers. Should match
+    the number of GPUs for maximum throughput.
+  default: "number of selected GPUs"
+
+cl_gpu_tokenize_workers:
+  prompt: "Tokenize workers"
+  explain: >
+    CPU threads for tokenization (runs ahead of GPU inference). More workers
+    keep the GPU pipeline fed.
+  default: "min(max(1, cores//2), 8)"
+
+cl_gpu_batch_size:
+  prompt: "Classifier batch size"
+  explain: >
+    Rows per GPU inference batch. Larger batches improve throughput but
+    require more VRAM. Reduce if you get OOM errors.
+  default: "16"
+
+cl_gpu_classifiers:
+  prompt: "Classifiers to run"
+  explain: >
+    Multi-select from available GPU classifiers (defined in
+    config/ml/gpu_classifiers.yaml). Each runs as a separate pass over
+    the data.
+  default: "all available"
+
+cl_hf_token:
+  prompt: "HuggingFace token"
+  explain: >
+    Optional HF token for downloading gated/private models. Press Enter to
+    skip. Stored in .env as HF_TOKEN.
+  default: "none (skip)"
+
+cl_write_files:
+  prompt: "Write these files?"
+  explain: Confirmation before writing classifier configuration files.
+  default: "yes"
+
+# ===========================================================================
+# sdp db setup-mcp
+# ===========================================================================
+
+mcp_pg_enable:
+  prompt: "Enable PostgreSQL MCP server?"
+  explain: >
+    Starts an SSE-based MCP server (crystaldba/postgres-mcp) that exposes
+    PostgreSQL to AI tools (Claude Desktop, VS Code, Cursor).
+  default: "yes"
+
+mcp_pg_port:
+  prompt: "PostgreSQL MCP SSE port"
+  explain: Host port for the PostgreSQL MCP server's SSE endpoint.
+  default: "8000"
+
+mcp_pg_write_access:
+  prompt: "Allow write access?"
+  explain: >
+    When disabled (default), the MCP server runs in restricted mode
+    (read-only transactions). Enable only if AI tools need to modify data.
+  default: "no (read-only)"
+
+mcp_mongo_enable:
+  prompt: "Enable MongoDB MCP server?"
+  explain: >
+    Starts a Streamable HTTP MCP server for MongoDB access from AI tools.
+  default: "yes"
+
+mcp_mongo_port:
+  prompt: "MongoDB MCP port"
+  explain: Host port for the MongoDB MCP server's HTTP endpoint.
+  default: "3000"
+
+mcp_mongo_write_access:
+  prompt: "Allow write access?"
+  explain: >
+    When disabled (default), the MCP server blocks write operations.
+  default: "no (read-only)"
+
+mcp_write_files:
+  prompt: "Write these files?"
+  explain: Confirmation before writing MCP configuration files.
+  default: "yes"
+
+# ===========================================================================
+# sdp source add — HF dataset prompts (dynamic, per schema group)
+# ===========================================================================
+
+# Dynamic tags (one per schema group index gi):
+# hf_include_configs_{gi}:   Multi-select which HF configs to include
+# hf_data_type_name_{gi}:    Name for the SDP data type
+# hf_select_fields_{gi}:     Multi-select fields from mappable fields
+# hf_unmappable_{field_name}: Action for unmappable field (skip/cast/custom)
+# hf_custom_type_{field_name}: SQL type for unmappable field (if "enter custom type")
