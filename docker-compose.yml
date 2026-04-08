@@ -107,7 +107,7 @@ services:
       dockerfile: Dockerfile.postgres
     ipc: host  # Fixes 64MB shared memory limit from default Docker IPC
     mem_limit: ${POSTGRES_MEM_LIMIT:-0}
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 10m
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
@@ -186,7 +186,7 @@ services:
     profiles: [mongo]
     image: mongo:8
     mem_limit: ${MONGO_MEM_LIMIT:-0}
-    restart: unless-stopped
+    restart: "no"
     stop_grace_period: 5m
     ports:
       - "${MONGO_PORT:-27017}:27017"
@@ -212,7 +212,7 @@ services:
   postgres-mcp:
     profiles: [postgres_mcp]
     image: crystaldba/postgres-mcp
-    restart: unless-stopped
+    restart: "no"
     entrypoint: ["sh", "/mcp-config/entrypoint-postgres.sh"]
     command: >-
       --access-mode=${POSTGRES_MCP_ACCESS_MODE:-restricted}
@@ -240,7 +240,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mcp-mongo
-    restart: unless-stopped
+    restart: "no"
     environment:
       MCP_MONGODB_URI: mongodb://mongo:27017
       MCP_MONGODB_READONLY: "${MONGO_MCP_READ_ONLY:-true}"
