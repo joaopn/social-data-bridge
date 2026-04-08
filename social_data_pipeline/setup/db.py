@@ -163,7 +163,7 @@ def run_questionnaire(hw):
 
         print()
         suggested_pg_mem = int(hw["ram_gb"] * 0.6) if hw["ram_gb"] else 0
-        pg_mem = ask_int("PostgreSQL container memory limit (GB, 0=unlimited)", suggested_pg_mem)
+        pg_mem = ask_int("PostgreSQL container memory limit (GB, 0=unlimited)", suggested_pg_mem, tag="db_pg_mem_limit")
         if pg_mem > 0:
             settings["pg_mem_limit"] = pg_mem
 
@@ -176,9 +176,24 @@ def run_questionnaire(hw):
 
         mongo_cache = settings.get("mongo_cache_size_gb", 2)
         suggested_mongo_mem = max(2, mongo_cache * 2)
-        mongo_mem = ask_int("MongoDB container memory limit (GB, 0=unlimited)", suggested_mongo_mem)
+        mongo_mem = ask_int("MongoDB container memory limit (GB, 0=unlimited)", suggested_mongo_mem, tag="db_mongo_mem_limit")
         if mongo_mem > 0:
             settings["mongo_mem_limit"] = mongo_mem
+
+        print()
+        print("  Pre-import file validation prevents partial ingestion of corrupt files.")
+        print("  mongoimport is not atomic — without validation, truncated or malformed")
+        print("  files leave partial data permanently in the database.")
+        print()
+        print("    full: validates every JSON line before import (one sequential read per file)")
+        print("    tail: checks only the last 8KB (catches truncation, not malformed lines)")
+        print("    none: skip validation")
+        settings["mongo_validate"] = ask_choice(
+            "Pre-import file validation",
+            ["full", "tail", "none"],
+            default="full",
+            tag="db_mongo_validate",
+        )
 
     # ---- Authentication ----
     if has_postgres or has_mongo:
@@ -285,6 +300,7 @@ def generate_db_mongo_yaml(settings):
     config = {
         "port": settings.get("mongo_port", 27017),
         "cache_size_gb": settings.get("mongo_cache_size_gb", 2),
+        "validate_before_import": settings.get("mongo_validate", "full"),
     }
     if settings.get("auth_enabled"):
         config["auth"] = True

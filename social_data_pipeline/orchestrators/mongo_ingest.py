@@ -20,6 +20,7 @@ from ..core.decompress import decompress_file, is_compressed, strip_compression_
 from ..core.config import (
     load_profile_config,
     load_platform_config as _load_platform_config,
+    load_db_config,
     get_required,
     get_optional,
     validate_processing_config,
@@ -266,6 +267,13 @@ def run_pipeline(config_dir: str = "/app/config"):
     mongo_exclude_fields = platform_config.get('mongo_exclude_fields', {})
     num_workers = get_required(config, 'processing', 'num_insertion_workers')
 
+    # validate_before_import: db config (from sdp db setup) > pipeline config > default
+    db_mongo_config = load_db_config('mongo', config_dir) or {}
+    validate_mode = db_mongo_config.get(
+        'validate_before_import',
+        get_optional(config, 'processing', 'validate_before_import', default='full'),
+    )
+
     host = db_config['host']
     port = db_config['port']
     user = db_config.get('user')
@@ -457,6 +465,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     user=user,
                     password=password,
                     exclude_columns=dt_exclude if dt_exclude else None,
+                    validate=validate_mode,
                 )
 
                 # Record in metadata collection

@@ -9,6 +9,7 @@ processing:
   data_types: []           # Override in user.yaml or set via platform config
   num_insertion_workers: 4        # mongoimport --numInsertionWorkers
   create_indexes: true            # Create indexes after ingestion
+  validate_before_import: full     # Validate files before ingestion: "full", "tail", or "none"
   cleanup_temp: false             # Delete extracted JSON after ingestion
   watch_interval: 0               # Check for new files every N minutes (0 = run once)
 

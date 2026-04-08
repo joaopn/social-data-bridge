@@ -10,7 +10,7 @@ Full flow:
   sdp db stop mongo
 """
 
-from tests.e2e.helpers.sdp import SDPSession, run_sdp, wait_for_healthy
+from tests.e2e.helpers.sdp import SDPSession, run_sdp, wait_for_healthy, WORKSPACE
 from tests.e2e.helpers.fixtures import place_reddit_extracted
 from tests.e2e.helpers.db import mongo_connect
 
@@ -21,6 +21,8 @@ DB_SETUP_ANSWERS = {
     "db_mongo_data_path": "",
     "db_mongo_port": "",
     "db_mongo_cache": "1",       # 1 GB (small for tests)
+    "db_mongo_mem_limit": "0",   # unlimited
+    "db_mongo_validate": "",     # full (default)
     "db_auth": "",               # no
     "db_write_files": "",
 }
@@ -86,4 +88,67 @@ def test_mongo_full_flow(workspace):
         client.close()
 
     # 7. Stop MongoDB
+    run_sdp("db stop mongo")
+
+
+def test_mongo_validation_rejects_truncated(workspace):
+    """Truncated NDJSON is rejected before mongoimport; valid files still succeed."""
+    # 1. Database setup
+    session = SDPSession(DB_SETUP_ANSWERS)
+    rc, output = session.run_interactive("db setup")
+    assert rc == 0, f"db setup failed:\n{output}"
+
+    # 2. Source add
+    session = SDPSession(SOURCE_ADD_ANSWERS)
+    rc, output = session.run_interactive("source add reddit")
+    assert rc == 0, f"source add failed:\n{output}"
+
+    # 3. Place valid test data
+    place_reddit_extracted("reddit", data_types=["comments"])
+
+    # 4. Place truncated NDJSON alongside the valid file
+    #    Filename must match the json pattern: ^RC_(\d{4}-\d{2})$
+    truncated_dir = WORKSPACE / "data" / "extracted" / "reddit" / "comments"
+    truncated_file = truncated_dir / "RC_2024-02"
+    truncated_file.write_text(
+        '{"id":"abc123","author":"user1","body":"valid line"}\n'
+        '{"id":"def456","author":"user2","body":"truncated'
+    )
+
+    # 5. Start MongoDB
+    result = run_sdp("db start mongo")
+    assert result.returncode == 0, f"db start failed:\n{result.stderr}"
+    wait_for_healthy("mongo")
+
+    # 6. Run mongo_ingest — pipeline continues past the failed file
+    result = run_sdp("run mongo_ingest --source reddit --build")
+    assert result.returncode == 0, f"run mongo_ingest failed:\n{result.stderr}"
+
+    # Pipeline output should mention the validation failure
+    combined = result.stdout + result.stderr
+    assert "Failed: 1" in combined, f"Expected 1 failure in output:\n{combined}"
+
+    # 7. Verify MongoDB state
+    client = mongo_connect()
+    try:
+        db_name = "reddit_comments"
+
+        # Valid file (RC_2024-01) was ingested: 10 documents
+        assert "2024-01" in client[db_name].list_collection_names()
+        doc_count = client[db_name]["2024-01"].count_documents({})
+        assert doc_count == 10, f"Expected 10 docs in 2024-01, got {doc_count}"
+
+        # Truncated file (RC_2024-02) was rejected: collection should not exist
+        # or be empty (no partial data leaked)
+        collections = [c for c in client[db_name].list_collection_names()
+                       if not c.startswith("_") and not c.startswith("system.")]
+        if "2024-02" in collections:
+            bad_count = client[db_name]["2024-02"].count_documents({})
+            assert bad_count == 0, (
+                f"Truncated file leaked {bad_count} documents into 2024-02"
+            )
+    finally:
+        client.close()
+
+    # 8. Stop MongoDB
     run_sdp("db stop mongo")

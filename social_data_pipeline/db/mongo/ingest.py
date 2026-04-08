@@ -70,6 +70,141 @@ def _redact_uri(uri: str) -> str:
     return re.sub(r'://([^:]+):([^@]+)@', r'://\1:***@', uri)
 
 
+def _validate_ndjson_tail(filepath: str) -> None:
+    """Validate an NDJSON file by checking only the last 8KB.
+
+    Catches truncated files (the most common failure mode) at near-zero cost.
+    Raises ValueError if the file is empty or the last line is not valid JSON.
+    """
+    size = os.path.getsize(filepath)
+    if size == 0:
+        raise ValueError(f"Empty file: {filepath}")
+
+    with open(filepath, 'rb') as f:
+        # Read last 8KB (or entire file if smaller)
+        offset = max(0, size - 8192)
+        f.seek(offset)
+        tail = f.read().decode('utf-8', errors='replace')
+
+    # Find last non-empty line
+    lines = tail.split('\n')
+    last_line = ''
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped:
+            last_line = stripped
+            break
+
+    if not last_line:
+        raise ValueError(f"File contains no non-empty lines: {filepath}")
+
+    try:
+        json.loads(last_line)
+    except json.JSONDecodeError as e:
+        preview = last_line[:200]
+        raise ValueError(
+            f"Truncated or malformed NDJSON file: {filepath}\n"
+            f"Last line is not valid JSON: {e}\n"
+            f"Content (first 200 chars): {preview}"
+        ) from e
+
+
+def _validate_ndjson_full(filepath: str) -> None:
+    """Validate every line of an NDJSON file.
+
+    Streams line-by-line with O(1) memory. Catches truncation, malformed lines,
+    and encoding errors. Reports the first bad line with its line number.
+    Raises ValueError on any invalid content.
+    """
+    size = os.path.getsize(filepath)
+    if size == 0:
+        raise ValueError(f"Empty file: {filepath}")
+
+    line_count = 0
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line_num, line in enumerate(f, 1):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            line_count += 1
+            try:
+                json.loads(stripped)
+            except json.JSONDecodeError as e:
+                preview = stripped[:200]
+                raise ValueError(
+                    f"Invalid JSON at line {line_num} in {filepath}\n"
+                    f"Parse error: {e}\n"
+                    f"Content (first 200 chars): {preview}"
+                ) from e
+
+    if line_count == 0:
+        raise ValueError(f"File contains no non-empty lines: {filepath}")
+
+
+def _validate_csv_tail(filepath: str) -> None:
+    """Validate a CSV file by checking the tail for truncation.
+
+    Verifies the file ends with a newline and the last line has the same
+    number of fields as the header. Catches truncated files at near-zero cost.
+    """
+    size = os.path.getsize(filepath)
+    if size == 0:
+        raise ValueError(f"Empty file: {filepath}")
+
+    # Read header (first line)
+    with open(filepath, 'r', encoding='utf-8') as f:
+        header = f.readline()
+    if not header.strip():
+        raise ValueError(f"CSV file has empty header: {filepath}")
+    header_fields = header.strip().count(',') + 1
+
+    # Read tail
+    with open(filepath, 'rb') as f:
+        offset = max(0, size - 8192)
+        f.seek(offset)
+        tail = f.read().decode('utf-8', errors='replace')
+
+    if not tail.endswith('\n'):
+        raise ValueError(f"Truncated CSV file (does not end with newline): {filepath}")
+
+    # Check last non-empty line field count
+    lines = tail.split('\n')
+    for line in reversed(lines):
+        stripped = line.strip()
+        if stripped:
+            tail_fields = stripped.count(',') + 1
+            if tail_fields != header_fields:
+                raise ValueError(
+                    f"Truncated CSV file: {filepath}\n"
+                    f"Header has {header_fields} fields, last line has {tail_fields}"
+                )
+            break
+
+
+def validate_file(filepath: str, mode: str = "full") -> None:
+    """Validate a file before mongoimport ingestion.
+
+    Args:
+        filepath: Path to the file to validate (NDJSON or CSV).
+        mode: "full" (default, validate every line), "tail" (check last 8KB),
+              or "none" (skip validation).
+
+    Raises:
+        ValueError: If validation fails, with details about the failure.
+    """
+    if mode == "none":
+        return
+
+    is_csv = filepath.lower().endswith('.csv')
+
+    if is_csv:
+        _validate_csv_tail(filepath)
+    elif mode == "full":
+        _validate_ndjson_full(filepath)
+    else:
+        _validate_ndjson_tail(filepath)
+
+
 def _parquet_to_ndjson(filepath: str, exclude_columns: List[str] = None) -> str:
     """Convert a Parquet file to temp NDJSON for mongoimport.
 
@@ -125,18 +260,22 @@ def mongoimport_file(
     num_workers: int = 4,
     log_dir: str = "/data/mongo/logs",
     exclude_columns: List[str] = None,
+    validate: str = "full",
 ) -> None:
     """
     Ingest a file using mongoimport subprocess.
 
     Supports JSON/NDJSON (default), CSV (auto-detected from .csv extension),
     and Parquet (auto-detected from .parquet extension, converted to temp NDJSON).
+    Validates file integrity before import to prevent partial ingestion.
     Logs are appended to {log_dir}/mongoimport_{db}_{collection}.log.
     Raises RuntimeError on failure (never exposes credentials in exceptions).
 
     Args:
         exclude_columns: For parquet files, column names to skip during conversion
             (e.g., embedding arrays). List-type columns are auto-excluded.
+        validate: Pre-import validation mode: "full" (every line), "tail" (last 8KB),
+            or "none" (skip). Default "full".
     """
     # Transparent parquet → temp NDJSON conversion
     ndjson_temp = None
@@ -146,6 +285,10 @@ def mongoimport_file(
         ndjson_temp = _parquet_to_ndjson(filepath, exclude_columns=exclude_columns)
         import_path = ndjson_temp
 
+    # Validate file before ingestion (mongoimport is not atomic)
+    if validate != "none":
+        validate_file(import_path, mode=validate)
+
     uri = get_mongo_uri(host, port, user, password)
     command = [
         "mongoimport",
@@ -153,6 +296,7 @@ def mongoimport_file(
         "--db", db_name,
         "--collection", collection_name,
         "--file", import_path,
+        "--stopOnError",
         "--numInsertionWorkers", str(num_workers),
     ]
 

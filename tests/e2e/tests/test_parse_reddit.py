@@ -23,6 +23,7 @@ DB_SETUP_ANSWERS = {
     "db_tablespaces": "",        # no
     "db_filesystem": "1",        # standard
     "db_pgtune_method": "3",     # skip
+    "db_pg_mem_limit": "0",      # unlimited
     "db_auth": "",               # no
     "db_write_files": "",        # yes
 }

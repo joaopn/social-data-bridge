@@ -97,6 +97,14 @@ db_pgtune_method:
     2: file
     3: skip
 
+db_pg_mem_limit:
+  prompt: "PostgreSQL container memory limit (GB, 0=unlimited)"
+  explain: >
+    Docker memory limit for the PostgreSQL container. Prevents runaway memory
+    usage from consuming all system RAM. Set to 0 for unlimited (not recommended
+    on shared machines). Suggested value is ~60% of system RAM.
+  default: "60% of system RAM"
+
 db_mongo_port:
   prompt: "MongoDB port"
   explain: >
@@ -110,6 +118,28 @@ db_mongo_cache:
     WiredTiger internal cache. MongoDB recommends 50% of RAM minus 1GB for
     dedicated servers. For shared machines, 2GB is a safe starting point.
   default: "2"
+
+db_mongo_mem_limit:
+  prompt: "MongoDB container memory limit (GB, 0=unlimited)"
+  explain: >
+    Docker memory limit for the MongoDB container. Suggested value is ~2x the
+    WiredTiger cache size. Set to 0 for unlimited.
+  default: "2x WiredTiger cache"
+
+db_mongo_validate:
+  prompt: "Pre-import file validation"
+  explain: >
+    Validates files before mongoimport to prevent partial ingestion of corrupt
+    data. mongoimport is not atomic — truncated or malformed files leave partial
+    data permanently in the database. "full" validates every JSON line (safest,
+    adds one sequential read per file). "tail" checks only the last 8KB
+    (catches truncation at near-zero cost, misses malformed lines in the middle).
+    "none" skips validation entirely.
+  default: "full"
+  options:
+    1: full
+    2: tail
+    3: none
 
 db_auth:
   prompt: "Enable database authentication?"

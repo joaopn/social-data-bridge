@@ -32,6 +32,7 @@ DB_SETUP_ANSWERS = {
     "db_tablespaces": "",
     "db_filesystem": "1",
     "db_pgtune_method": "3",     # skip
+    "db_pg_mem_limit": "0",      # unlimited
     "db_auth": "",
     "db_write_files": "",
 }
