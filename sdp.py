@@ -1267,7 +1267,7 @@ def _interactive_mongo_indexes(source, platform_config, password):
                     script = (
                         f"use('{db_name}'); "
                         f"db.getCollection('{coll}').createIndex("
-                        f"{{{field}: 1}}, {{name: '{field}_1'}});"
+                        f"{{'{field}': 1}}, {{name: '{field}_1'}});"
                     )
                     _mongosh_eval(0, script, password)
                     success += 1
