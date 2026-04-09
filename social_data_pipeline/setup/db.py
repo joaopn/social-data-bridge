@@ -351,7 +351,11 @@ def run_questionnaire(hw):
 # ============================================================================
 
 def generate_env(settings):
-    """Generate .env file content with database and global settings."""
+    """Generate .env file content with database and global settings.
+
+    Preserves existing env vars not managed by db setup (e.g. MCP ports,
+    HF_TOKEN) by reading the current .env and appending unmanaged keys.
+    """
     lines = [
         "# ===== DATA PATH =====",
         f"DATA_PATH={settings.get('data_path', './data')}",
@@ -399,7 +403,27 @@ def generate_env(settings):
                 f"MONGO_RO_USER={settings['ro_username']}",
             ]
 
-    return "\n".join(lines) + "\n"
+    # Preserve existing env vars not managed by this function
+    new_content = "\n".join(lines) + "\n"
+    managed_keys = set()
+    for line in lines:
+        stripped = line.lstrip("# ").strip()
+        if "=" in stripped and not stripped.startswith("="):
+            managed_keys.add(stripped.split("=", 1)[0])
+
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        preserved = []
+        for line in env_path.read_text().splitlines():
+            stripped = line.lstrip("# ").strip()
+            if "=" in stripped and not stripped.startswith("="):
+                key = stripped.split("=", 1)[0]
+                if key not in managed_keys:
+                    preserved.append(line)
+        if preserved:
+            new_content += "\n".join(preserved) + "\n"
+
+    return new_content
 
 
 def generate_db_postgres_yaml(settings):

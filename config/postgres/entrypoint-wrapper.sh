@@ -17,32 +17,35 @@ if [ -d /data/tablespace ]; then
     done
 fi
 
+# --- PostgreSQL 18 PGDATA path ---
+PGDATA=/var/lib/postgresql/18/docker
+
 # --- Auth migration for existing databases ---
 if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ]; then
     # Check if this is an existing database (not first init)
-    if [ -f "/var/lib/postgresql/data/PG_VERSION" ]; then
+    if [ -f "$PGDATA/PG_VERSION" ]; then
         echo '[CONFIG] Auth enabled on existing database — setting password'
         # Start postgres temporarily with trust auth on a different port to set password.
         # Uses port 54321 and localhost-only to avoid tripping the healthcheck.
         AUTH_INIT_PORT=54321
-        su postgres -c "pg_ctl start -D /var/lib/postgresql/data \
+        su postgres -c "pg_ctl start -D $PGDATA \
             -o \"-c hba_file=$CFG/pg_hba.conf -c port=$AUTH_INIT_PORT -c listen_addresses=127.0.0.1\" \
             -w -l /tmp/pg_auth_init.log"
         su postgres -c "psql -p $AUTH_INIT_PORT -c \
             \"ALTER USER postgres WITH PASSWORD '${POSTGRES_PASSWORD}'\""
-        su postgres -c "pg_ctl stop -D /var/lib/postgresql/data -w"
+        su postgres -c "pg_ctl stop -D $PGDATA -w"
         echo '[CONFIG] Password set successfully'
     fi
 fi
 
 # --- Read-only user sync (every start) ---
 RO_CRED_FILE="/data/database/.ro_credentials"
-if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -f "$RO_CRED_FILE" ] && [ -f "/var/lib/postgresql/data/PG_VERSION" ]; then
+if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -f "$RO_CRED_FILE" ] && [ -f "$PGDATA/PG_VERSION" ]; then
     RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
     RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
     echo "[CONFIG] Syncing read-only user: $RO_USER"
     RO_INIT_PORT=54321
-    su postgres -c "pg_ctl start -D /var/lib/postgresql/data \
+    su postgres -c "pg_ctl start -D $PGDATA \
         -o \"-c hba_file=$CFG/pg_hba.conf -c port=$RO_INIT_PORT -c listen_addresses=127.0.0.1\" \
         -w -l /tmp/pg_ro_init.log"
     su postgres -c "psql -p $RO_INIT_PORT -c \
@@ -56,7 +59,7 @@ if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -f "$RO_CRED_FILE" ] && [ -f "
             RAISE NOTICE 'RO user password synced: %', '$RO_USER';
           END IF;
         END \\\$\\\$;\""
-    su postgres -c "pg_ctl stop -D /var/lib/postgresql/data -w"
+    su postgres -c "pg_ctl stop -D $PGDATA -w"
     echo '[CONFIG] Read-only user ready'
 fi
 

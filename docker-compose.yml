@@ -192,6 +192,7 @@ services:
       - "${MONGO_PORT:-27017}:27017"
     volumes:
       - ${MONGO_DATA_PATH:-./data/database/mongo}/db:/data/db
+      - ${MONGO_DATA_PATH:-./data/database/mongo}:/data/mongo:ro
       - ./config/mongo:/etc/mongo/config:ro
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ADMIN_USER:-}

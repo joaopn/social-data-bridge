@@ -46,7 +46,7 @@ if [ "${MONGO_AUTH_ENABLED:-}" = "true" ]; then
 
         # Localhost exception allows creating the first user without auth
         ADMIN_USER="${MONGO_ADMIN_USER:-admin}"
-        ADMIN_PWD="${MONGO_ADMIN_PASSWORD}"
+        ADMIN_PWD="${MONGO_INITDB_ROOT_PASSWORD}"
         mongosh --host 127.0.0.1 --port $AUTH_INIT_PORT --quiet admin <<EOJS
 db.createUser({
     user: $(_js_escape "$ADMIN_USER"),
@@ -68,7 +68,7 @@ EOJS
         RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
         RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
         ADMIN_USER="${MONGO_ADMIN_USER:-admin}"
-        ADMIN_PWD="${MONGO_ADMIN_PASSWORD}"
+        ADMIN_PWD="${MONGO_INITDB_ROOT_PASSWORD}"
         echo "[CONFIG] Syncing read-only user: $RO_USER"
         RO_INIT_PORT=27018
         mongod --fork --logpath /tmp/mongod_ro_init.log \
