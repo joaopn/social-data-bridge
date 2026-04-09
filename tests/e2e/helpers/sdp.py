@@ -82,13 +82,14 @@ class SDPSession:
         return child.exitstatus, "".join(output_parts)
 
 
-def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT):
+def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT, input_text=None):
     """Run a non-interactive sdp.py command via subprocess.
 
     Args:
         cmd: Command string after "python sdp.py", e.g. "db start postgres"
         extra_env: Optional dict of extra environment variables.
         timeout: Command timeout in seconds.
+        input_text: Optional string to feed to stdin (for prompts during pipeline runs).
 
     Returns:
         subprocess.CompletedProcess
@@ -104,6 +105,7 @@ def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT):
         capture_output=True,
         text=True,
         timeout=timeout,
+        input=input_text,
     )
 
 

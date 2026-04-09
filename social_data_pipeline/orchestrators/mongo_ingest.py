@@ -33,6 +33,7 @@ from ..db.mongo.ingest import (
     mongoimport_file,
     create_index,
     record_ingested_file,
+    validate_file,
 )
 
 
@@ -238,14 +239,15 @@ def get_db_name(platform_config: Dict, platform: str, data_type: str) -> str:
 # Pipeline
 # ---------------------------------------------------------------------------
 
-def run_pipeline(config_dir: str = "/app/config"):
+def run_pipeline(config_dir: str = "/app/config", watch_mode: bool = False):
     """
     Run the MongoDB ingestion pipeline.
 
     Phases:
         1. Extract .zst files to JSON
-        2. Ingest JSON files into MongoDB via mongoimport
-        3. Create indexes on collections
+        2. Validate all files (malformed → abort, truncated → prompt)
+        3. Ingest JSON files into MongoDB via mongoimport
+        4. Create indexes on collections
     """
     # Load configuration
     config = load_config(config_dir)
@@ -411,7 +413,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         total_timings['extraction'] = time.time() - t_start
 
     # =====================================================================
-    # PHASE 2: INGESTION
+    # PHASE 2: VALIDATION
     # =====================================================================
     # Re-detect files (JSON may have been created during extraction)
     json_files = detect_json_files(extracted_dir, data_types, file_patterns)
@@ -428,9 +430,68 @@ def run_pipeline(config_dir: str = "/app/config"):
             if not states[dt].is_processed(fid)
         )
 
+    # Pre-flight validation: check all files before any ingestion starts.
+    # Malformed files (bad JSON in the middle) block the entire run.
+    # Truncated files (incomplete last line) prompt the user for confirmation.
+    approved_truncated_ids = set()
+    if files_to_ingest and validate_mode != "none":
+        print("\n" + "=" * 60)
+        print("PHASE 2: VALIDATION")
+        print("=" * 60)
+
+        malformed_files = []
+        truncated_files = []
+
+        for filepath, file_id, data_type in files_to_ingest:
+            print(f"[sdp] Validating {file_id} ({validate_mode})...")
+            try:
+                status = validate_file(filepath, mode=validate_mode)
+                if status == "truncated":
+                    truncated_files.append((filepath, file_id, data_type))
+            except ValueError as e:
+                malformed_files.append((file_id, str(e)))
+
+        if malformed_files:
+            print(f"\n[sdp] ERROR: {len(malformed_files)} malformed file(s) found:")
+            for file_id, error in malformed_files:
+                print(f"  {file_id}: {error}")
+            raise RuntimeError(
+                f"Aborting: {len(malformed_files)} file(s) have malformed content. "
+                f"Fix the source data before re-running."
+            )
+
+        if truncated_files:
+            print(f"\n[sdp] WARNING: {len(truncated_files)} truncated file(s) found:")
+            for _, file_id, _ in truncated_files:
+                print(f"  {file_id}")
+            print()
+
+            if watch_mode:
+                raise RuntimeError(
+                    f"Aborting: {len(truncated_files)} truncated file(s) detected in watch mode. "
+                    f"Fix the source data and restart."
+                )
+
+            confirm = input("[sdp] Ingest truncated files anyway? [y/N]: ").strip().lower()
+            if confirm not in ("y", "yes"):
+                truncated_ids = {fid for _, fid, _ in truncated_files}
+                files_to_ingest = [
+                    (p, fid, dt) for p, fid, dt in files_to_ingest
+                    if fid not in truncated_ids
+                ]
+                print(f"[sdp] Skipping {len(truncated_ids)} truncated file(s)")
+            else:
+                approved_truncated_ids = {fid for _, fid, _ in truncated_files}
+                print(f"[sdp] Will ingest {len(truncated_files)} truncated file(s) (partial data)")
+        else:
+            print(f"[sdp] All {len(files_to_ingest)} files validated successfully")
+
+    # =====================================================================
+    # PHASE 3: INGESTION
+    # =====================================================================
     if files_to_ingest:
         print("\n" + "=" * 60)
-        print("PHASE 2: INGESTION")
+        print("PHASE 3: INGESTION")
         print("=" * 60)
 
         t_start = time.time()
@@ -443,6 +504,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             collection_name = get_collection_name(
                 file_id, data_type, collection_strategy, file_patterns, collection_map
             )
+            is_truncated = file_id in approved_truncated_ids
 
             try:
                 states[data_type].mark_in_progress(file_id)
@@ -466,8 +528,16 @@ def run_pipeline(config_dir: str = "/app/config"):
                     user=user,
                     password=password,
                     exclude_columns=dt_exclude if dt_exclude else None,
-                    validate=validate_mode,
+                    allow_truncated=is_truncated,
                 )
+
+                # Determine validation status for metadata
+                if validate_mode == "none":
+                    file_validation = "none"
+                elif is_truncated:
+                    file_validation = "truncated"
+                else:
+                    file_validation = "pass"
 
                 # Record in metadata collection
                 record_ingested_file(
@@ -479,6 +549,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                     port=port,
                     user=user,
                     password=password,
+                    validation=file_validation,
                 )
 
                 states[data_type].mark_completed(file_id)
@@ -507,7 +578,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         collections_by_db = {}
 
     # =====================================================================
-    # PHASE 3: INDEXES
+    # PHASE 4: INDEXES
     # =====================================================================
     create_indexes = get_required(config, 'processing', 'create_indexes')
     if create_indexes and success_count > 0 and collections_by_db:
@@ -580,7 +651,7 @@ def main():
         interval_seconds = watch_interval * 60
         while True:
             try:
-                run_pipeline(config_dir)
+                run_pipeline(config_dir, watch_mode=True)
             except Exception as e:
                 print(f"[sdp] Pipeline error: {e}")
                 print("[sdp] Will retry next interval...")

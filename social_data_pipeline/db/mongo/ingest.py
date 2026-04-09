@@ -70,11 +70,16 @@ def _redact_uri(uri: str) -> str:
     return re.sub(r'://([^:]+):([^@]+)@', r'://\1:***@', uri)
 
 
-def _validate_ndjson_tail(filepath: str) -> None:
+def _validate_ndjson_tail(filepath: str) -> str:
     """Validate an NDJSON file by checking only the last 8KB.
 
     Catches truncated files (the most common failure mode) at near-zero cost.
-    Raises ValueError if the file is empty or the last line is not valid JSON.
+
+    Returns:
+        "ok" if valid, "truncated" if last line is incomplete JSON.
+
+    Raises:
+        ValueError: If the file is empty or contains no non-empty lines.
     """
     size = os.path.getsize(filepath)
     if size == 0:
@@ -100,52 +105,78 @@ def _validate_ndjson_tail(filepath: str) -> None:
 
     try:
         json.loads(last_line)
-    except json.JSONDecodeError as e:
-        preview = last_line[:200]
-        raise ValueError(
-            f"Truncated or malformed NDJSON file: {filepath}\n"
-            f"Last line is not valid JSON: {e}\n"
-            f"Content (first 200 chars): {preview}"
-        ) from e
+    except json.JSONDecodeError:
+        return "truncated"
+
+    return "ok"
 
 
-def _validate_ndjson_full(filepath: str) -> None:
+def _validate_ndjson_full(filepath: str) -> str:
     """Validate every line of an NDJSON file.
 
-    Streams line-by-line with O(1) memory. Catches truncation, malformed lines,
-    and encoding errors. Reports the first bad line with its line number.
-    Raises ValueError on any invalid content.
+    Streams line-by-line with O(1) memory. Distinguishes truncation (last line
+    is bad, all prior lines valid) from malformed (bad line in the middle).
+
+    Returns:
+        "ok" if all lines valid, "truncated" if only the last line is bad.
+
+    Raises:
+        ValueError: If the file is empty, has no content, or has malformed
+            JSON in the middle (not just truncation at the end).
     """
     size = os.path.getsize(filepath)
     if size == 0:
         raise ValueError(f"Empty file: {filepath}")
 
     line_count = 0
+    last_nonempty_num = 0
     with open(filepath, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
             stripped = line.strip()
             if not stripped:
                 continue
             line_count += 1
+            last_nonempty_num = line_num
             try:
                 json.loads(stripped)
             except json.JSONDecodeError as e:
-                preview = stripped[:200]
-                raise ValueError(
-                    f"Invalid JSON at line {line_num} in {filepath}\n"
-                    f"Parse error: {e}\n"
-                    f"Content (first 200 chars): {preview}"
-                ) from e
+                # Check if this is the last non-empty line (truncation)
+                # by reading ahead to see if there are more non-empty lines
+                remaining_has_content = False
+                for rest_line in f:
+                    if rest_line.strip():
+                        remaining_has_content = True
+                        break
+
+                if remaining_has_content:
+                    # Bad line in the middle → malformed
+                    preview = stripped[:200]
+                    raise ValueError(
+                        f"Malformed JSON at line {line_num} in {filepath}\n"
+                        f"Parse error: {e}\n"
+                        f"Content (first 200 chars): {preview}"
+                    ) from e
+                else:
+                    # Bad line at the end, all prior lines valid → truncated
+                    return "truncated"
 
     if line_count == 0:
         raise ValueError(f"File contains no non-empty lines: {filepath}")
 
+    return "ok"
 
-def _validate_csv_tail(filepath: str) -> None:
+
+def _validate_csv_tail(filepath: str) -> str:
     """Validate a CSV file by checking the tail for truncation.
 
     Verifies the file ends with a newline and the last line has the same
     number of fields as the header. Catches truncated files at near-zero cost.
+
+    Returns:
+        "ok" if valid, "truncated" if the file appears truncated.
+
+    Raises:
+        ValueError: If the file is empty or has no header.
     """
     size = os.path.getsize(filepath)
     if size == 0:
@@ -165,7 +196,7 @@ def _validate_csv_tail(filepath: str) -> None:
         tail = f.read().decode('utf-8', errors='replace')
 
     if not tail.endswith('\n'):
-        raise ValueError(f"Truncated CSV file (does not end with newline): {filepath}")
+        return "truncated"
 
     # Check last non-empty line field count
     lines = tail.split('\n')
@@ -174,14 +205,13 @@ def _validate_csv_tail(filepath: str) -> None:
         if stripped:
             tail_fields = stripped.count(',') + 1
             if tail_fields != header_fields:
-                raise ValueError(
-                    f"Truncated CSV file: {filepath}\n"
-                    f"Header has {header_fields} fields, last line has {tail_fields}"
-                )
+                return "truncated"
             break
 
+    return "ok"
 
-def validate_file(filepath: str, mode: str = "full") -> None:
+
+def validate_file(filepath: str, mode: str = "full") -> str:
     """Validate a file before mongoimport ingestion.
 
     Args:
@@ -189,20 +219,23 @@ def validate_file(filepath: str, mode: str = "full") -> None:
         mode: "full" (default, validate every line), "tail" (check last 8KB),
               or "none" (skip validation).
 
+    Returns:
+        "ok" if valid, "truncated" if file is truncated, "none" if skipped.
+
     Raises:
-        ValueError: If validation fails, with details about the failure.
+        ValueError: If the file has malformed content (not just truncation).
     """
     if mode == "none":
-        return
+        return "none"
 
     is_csv = filepath.lower().endswith('.csv')
 
     if is_csv:
-        _validate_csv_tail(filepath)
+        return _validate_csv_tail(filepath)
     elif mode == "full":
-        _validate_ndjson_full(filepath)
+        return _validate_ndjson_full(filepath)
     else:
-        _validate_ndjson_tail(filepath)
+        return _validate_ndjson_tail(filepath)
 
 
 def _parquet_to_ndjson(filepath: str, exclude_columns: List[str] = None) -> str:
@@ -260,22 +293,24 @@ def mongoimport_file(
     num_workers: int = 4,
     log_dir: str = "/data/mongo/logs",
     exclude_columns: List[str] = None,
-    validate: str = "full",
+    allow_truncated: bool = False,
 ) -> None:
     """
     Ingest a file using mongoimport subprocess.
 
     Supports JSON/NDJSON (default), CSV (auto-detected from .csv extension),
     and Parquet (auto-detected from .parquet extension, converted to temp NDJSON).
-    Validates file integrity before import to prevent partial ingestion.
     Logs are appended to {log_dir}/mongoimport_{db}_{collection}.log.
     Raises RuntimeError on failure (never exposes credentials in exceptions).
+
+    File validation is handled by the orchestrator's pre-flight phase, not here.
 
     Args:
         exclude_columns: For parquet files, column names to skip during conversion
             (e.g., embedding arrays). List-type columns are auto-excluded.
-        validate: Pre-import validation mode: "full" (every line), "tail" (last 8KB),
-            or "none" (skip). Default "full".
+        allow_truncated: If True, tolerate "unexpected EOF" from mongoimport
+            (partial data before truncation is kept). Used for user-approved
+            truncated files.
     """
     # Transparent parquet → temp NDJSON conversion
     ndjson_temp = None
@@ -284,11 +319,6 @@ def mongoimport_file(
         print(f"[sdp] Converting parquet to NDJSON: {Path(filepath).name}")
         ndjson_temp = _parquet_to_ndjson(filepath, exclude_columns=exclude_columns)
         import_path = ndjson_temp
-
-    # Validate file before ingestion (mongoimport is not atomic)
-    if validate != "none":
-        print(f"[sdp] Validating {Path(import_path).name} ({validate})...")
-        validate_file(import_path, mode=validate)
 
     uri = get_mongo_uri(host, port, user, password)
     command = [
@@ -330,10 +360,22 @@ def mongoimport_file(
             )
 
         if result.returncode != 0:
-            raise RuntimeError(
-                f"mongoimport failed for {filepath} -> {db_name}.{collection_name}. "
-                f"See log: {log_file}"
-            )
+            # Check if this is a truncation EOF that the user approved
+            if allow_truncated:
+                with open(log_file, 'r') as lf:
+                    log_tail = lf.read()[-500:]
+                if 'unexpected EOF' in log_tail:
+                    print(f"[sdp] Truncated file accepted (partial data ingested): {Path(filepath).name}")
+                else:
+                    raise RuntimeError(
+                        f"mongoimport failed for {filepath} -> {db_name}.{collection_name}. "
+                        f"See log: {log_file}"
+                    )
+            else:
+                raise RuntimeError(
+                    f"mongoimport failed for {filepath} -> {db_name}.{collection_name}. "
+                    f"See log: {log_file}"
+                )
 
         # Success: clean up temp NDJSON
         if ndjson_temp and os.path.exists(ndjson_temp):
@@ -444,12 +486,16 @@ def record_ingested_file(
     port: int,
     user: str = None,
     password: str = None,
+    validation: str = "pass",
 ) -> None:
     """
     Record an ingested file in the _sdp_metadata collection.
 
-    Stores file_id, data_type, collection_name, and timestamp.
+    Stores file_id, data_type, collection_name, validation status, and timestamp.
     Used for state recovery when the state JSON file is lost.
+
+    Args:
+        validation: File validation status: "pass", "truncated", or "none".
     """
     client = _get_client(host, port, user, password)
     try:
@@ -461,6 +507,7 @@ def record_ingested_file(
                     'file_id': file_id,
                     'data_type': data_type,
                     'collection': collection_name,
+                    'validation': validation,
                     'ingested_at': datetime.now().isoformat(),
                 }
             },

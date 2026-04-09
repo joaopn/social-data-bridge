@@ -92,7 +92,7 @@ def test_mongo_full_flow(workspace):
 
 
 def test_mongo_validation_rejects_truncated(workspace):
-    """Truncated NDJSON is rejected before mongoimport; valid files still succeed."""
+    """Truncated NDJSON detected in pre-flight; user declines → not ingested."""
     # 1. Database setup
     session = SDPSession(DB_SETUP_ANSWERS)
     rc, output = session.run_interactive("db setup")
@@ -120,13 +120,14 @@ def test_mongo_validation_rejects_truncated(workspace):
     assert result.returncode == 0, f"db start failed:\n{result.stderr}"
     wait_for_healthy("mongo")
 
-    # 6. Run mongo_ingest — pipeline continues past the failed file
-    result = run_sdp("run mongo_ingest --source reddit --build")
+    # 6. Run mongo_ingest — answer "N" to truncation prompt (skip truncated files)
+    result = run_sdp("run mongo_ingest --source reddit --build", input_text="N\n")
     assert result.returncode == 0, f"run mongo_ingest failed:\n{result.stderr}"
 
-    # Pipeline output should mention the validation failure
+    # Pipeline output should warn about truncated files
     combined = result.stdout + result.stderr
-    assert "Failed: 1" in combined, f"Expected 1 failure in output:\n{combined}"
+    assert "truncated" in combined.lower(), f"Expected truncation warning:\n{combined}"
+    assert "RC_2024-02" in combined, f"Expected truncated file name in output:\n{combined}"
 
     # 7. Verify MongoDB state
     client = mongo_connect()
@@ -138,8 +139,7 @@ def test_mongo_validation_rejects_truncated(workspace):
         doc_count = client[db_name]["2024-01"].count_documents({})
         assert doc_count == 10, f"Expected 10 docs in 2024-01, got {doc_count}"
 
-        # Truncated file (RC_2024-02) was rejected: collection should not exist
-        # or be empty (no partial data leaked)
+        # Truncated file (RC_2024-02) was skipped: collection should not exist
         collections = [c for c in client[db_name].list_collection_names()
                        if not c.startswith("_") and not c.startswith("system.")]
         if "2024-02" in collections:
