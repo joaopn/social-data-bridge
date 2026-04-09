@@ -44,7 +44,7 @@ docker run -d \
 
 # Wait for inner dockerd to be ready
 echo "Waiting for dockerd..."
-for i in $(seq 1 30); do
+for _i in $(seq 1 30); do
     if docker exec "$CONTAINER_NAME" docker info >/dev/null 2>&1; then
         break
     fi
