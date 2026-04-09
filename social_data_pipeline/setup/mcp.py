@@ -23,11 +23,42 @@ from social_data_pipeline.setup.utils import (
 
 
 # ============================================================================
+# Load existing configuration
+# ============================================================================
+
+def _load_existing_mcp_config():
+    """Load existing MCP configuration for use as defaults on re-run."""
+    existing = {}
+    mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
+    if mcp_path.exists():
+        try:
+            mc = yaml.safe_load(mcp_path.read_text()) or {}
+            pg = mc.get("postgres", {})
+            if pg.get("enabled") is not None:
+                existing["postgres_mcp_enabled"] = pg["enabled"]
+            if pg.get("port") is not None:
+                existing["postgres_mcp_port"] = pg["port"]
+            if pg.get("access_mode"):
+                existing["postgres_mcp_access_mode"] = pg["access_mode"]
+            mg = mc.get("mongo", {})
+            if mg.get("enabled") is not None:
+                existing["mongo_mcp_enabled"] = mg["enabled"]
+            if mg.get("port") is not None:
+                existing["mongo_mcp_port"] = mg["port"]
+            if mg.get("read_only") is not None:
+                existing["mongo_mcp_read_only"] = mg["read_only"]
+        except (OSError, yaml.YAMLError):
+            pass
+    return existing
+
+
+# ============================================================================
 # Interactive questionnaire
 # ============================================================================
 
 def run_questionnaire(db_setup):
     """Run the MCP configuration questionnaire. Returns settings dict."""
+    existing = _load_existing_mcp_config()
     settings = {}
     databases = db_setup["databases"]
 
@@ -38,20 +69,22 @@ def run_questionnaire(db_setup):
 
     # ---- PostgreSQL MCP ----
     if "postgres" in databases:
-        if ask_bool("Enable PostgreSQL MCP server?", True, tag="mcp_pg_enable"):
+        if ask_bool("Enable PostgreSQL MCP server?", existing.get("postgres_mcp_enabled", True), tag="mcp_pg_enable"):
             settings["postgres_mcp_enabled"] = True
-            settings["postgres_mcp_port"] = ask_int("PostgreSQL MCP SSE port", 8000, tag="mcp_pg_port")
-            write_access = ask_bool("Allow write access? (default: read-only)", False, tag="mcp_pg_write_access")
+            settings["postgres_mcp_port"] = ask_int("PostgreSQL MCP SSE port", existing.get("postgres_mcp_port", 8000), tag="mcp_pg_port")
+            cur_write = existing.get("postgres_mcp_access_mode") == "unrestricted"
+            write_access = ask_bool("Allow write access? (default: read-only)", cur_write, tag="mcp_pg_write_access")
             settings["postgres_mcp_access_mode"] = "unrestricted" if write_access else "restricted"
         else:
             settings["postgres_mcp_enabled"] = False
 
     # ---- MongoDB MCP ----
     if "mongo" in databases:
-        if ask_bool("Enable MongoDB MCP server?", True, tag="mcp_mongo_enable"):
+        if ask_bool("Enable MongoDB MCP server?", existing.get("mongo_mcp_enabled", True), tag="mcp_mongo_enable"):
             settings["mongo_mcp_enabled"] = True
-            settings["mongo_mcp_port"] = ask_int("MongoDB MCP SSE port", 3000, tag="mcp_mongo_port")
-            write_access = ask_bool("Allow write access? (default: read-only)", False, tag="mcp_mongo_write_access")
+            settings["mongo_mcp_port"] = ask_int("MongoDB MCP SSE port", existing.get("mongo_mcp_port", 3000), tag="mcp_mongo_port")
+            cur_write = existing.get("mongo_mcp_read_only") is False
+            write_access = ask_bool("Allow write access? (default: read-only)", cur_write, tag="mcp_mongo_write_access")
             settings["mongo_mcp_read_only"] = not write_access
         else:
             settings["mongo_mcp_enabled"] = False

@@ -17,7 +17,7 @@ from social_data_pipeline.setup.utils import (
     detect_hardware,
     ask, ask_int, ask_bool, ask_list, ask_multi_select, ask_password,
     section_header, require_source_state, update_env_file, write_files,
-    print_pipeline_commands,
+    print_pipeline_commands, SOURCES_DIR,
 )
 
 
@@ -94,10 +94,73 @@ def compute_classifier_defaults(hw, profiles):
 
 
 # ============================================================================
+# Load existing configuration
+# ============================================================================
+
+def _load_existing_classifier_config(source_name):
+    """Load existing classifier configuration for use as defaults on re-run."""
+    existing = {}
+    source_dir = SOURCES_DIR / source_name
+
+    # Load lingua.yaml
+    lingua_path = source_dir / "lingua.yaml"
+    if lingua_path.exists():
+        try:
+            lc = yaml.safe_load(lingua_path.read_text()) or {}
+            lingua = lc.get("cpu_classifiers", {}).get("lingua", {})
+            if lingua.get("workers") is not None:
+                existing["lingua_workers"] = lingua["workers"]
+            if lingua.get("file_workers") is not None:
+                existing["lingua_file_workers"] = lingua["file_workers"]
+            if lingua.get("batch_size") is not None:
+                existing["lingua_batch_size"] = lingua["batch_size"]
+            if lingua.get("low_accuracy") is not None:
+                existing["lingua_low_accuracy"] = lingua["low_accuracy"]
+            tc = lc.get("cpu_classifiers", {}).get("text_columns")
+            if tc:
+                existing["text_columns"] = tc
+            rs = lc.get("cpu_classifiers", {}).get("remove_strings")
+            if rs is not None:
+                existing["remove_strings"] = rs
+            rp = lc.get("cpu_classifiers", {}).get("remove_patterns")
+            if rp is not None:
+                existing["remove_patterns"] = rp
+        except (OSError, yaml.YAMLError):
+            pass
+
+    # Load ml.yaml
+    ml_path = source_dir / "ml.yaml"
+    if ml_path.exists():
+        try:
+            mc = yaml.safe_load(ml_path.read_text()) or {}
+            gc = mc.get("gpu_classifiers", {})
+            if gc.get("gpu_ids") is not None:
+                existing["gpu_ids"] = gc["gpu_ids"]
+            if gc.get("file_workers") is not None:
+                existing["ml_file_workers"] = gc["file_workers"]
+            if gc.get("tokenize_workers") is not None:
+                existing["ml_tokenize_workers"] = gc["tokenize_workers"]
+            if gc.get("classifier_batch_size") is not None:
+                existing["ml_classifier_batch_size"] = gc["classifier_batch_size"]
+            if gc.get("fields") is not None:
+                existing["gpu_fields"] = gc["fields"]
+            tc = gc.get("text_columns")
+            if tc and "text_columns" not in existing:
+                existing["text_columns"] = tc
+            gpu_cls = mc.get("pipeline", {}).get("gpu_classifiers")
+            if gpu_cls:
+                existing["ml_classifiers"] = gpu_cls
+        except (OSError, yaml.YAMLError):
+            pass
+
+    return existing
+
+
+# ============================================================================
 # Platform-aware text_columns
 # ============================================================================
 
-def ask_text_columns(platform, data_types):
+def ask_text_columns(platform, data_types, existing=None):
     """Get text_columns configuration based on platform.
 
     For Reddit, uses known defaults. For other platforms, asks the user.
@@ -108,15 +171,19 @@ def ask_text_columns(platform, data_types):
         text_columns = {dt: REDDIT_TEXT_COLUMNS[dt] for dt in data_types if dt in REDDIT_TEXT_COLUMNS}
         return text_columns, REDDIT_REMOVE_STRINGS, REDDIT_REMOVE_PATTERNS, REDDIT_GPU_FIELDS
 
+    if existing is None:
+        existing = {}
+
     # Non-Reddit: ask the user
     section_header("Text Column Configuration")
     print("  Classifiers need to know which columns contain text to process.")
     print("  For each data type, specify the column names that contain text.")
     print()
 
+    existing_tc = existing.get("text_columns", {})
     text_columns = {}
     for dt in data_types:
-        cols = ask_list(f"Text columns for '{dt}' (comma-separated)", tag=f"cl_text_columns_{dt}")
+        cols = ask_list(f"Text columns for '{dt}' (comma-separated)", existing_tc.get(dt), tag=f"cl_text_columns_{dt}")
         if cols:
             text_columns[dt] = cols
         else:
@@ -125,17 +192,20 @@ def ask_text_columns(platform, data_types):
     print()
     remove_strings = ask_list(
         "Exact strings to remove before classification (comma-separated, or Enter for none)",
+        existing.get("remove_strings"),
         tag="cl_remove_strings",
     )
+    existing_rp = existing.get("remove_patterns", [r"https?://\S+"])
     remove_patterns_str = ask(
         "Regex patterns to remove (comma-separated)",
-        r"https?://\S+",
+        ", ".join(existing_rp) if existing_rp else r"https?://\S+",
         tag="cl_remove_patterns",
     )
     remove_patterns = [p.strip() for p in remove_patterns_str.split(",") if p.strip()]
 
     fields = ask_list(
         "Extra fields to keep in GPU classifier output (besides id, dataset, retrieved_utc)",
+        existing.get("gpu_fields"),
         tag="cl_extra_fields",
     )
 
@@ -152,6 +222,8 @@ def run_questionnaire(hw, state):
     profiles = state["profiles"]
     platform = state["platform"]
     data_types = state["data_types"]
+    source_name = state.get("source")
+    existing = _load_existing_classifier_config(source_name) if source_name else {}
 
     settings["platform"] = platform
     settings["data_types"] = data_types
@@ -173,7 +245,7 @@ def run_questionnaire(hw, state):
     defaults = compute_classifier_defaults(hw, profiles)
 
     # Get platform-aware text columns
-    text_columns, remove_strings, remove_patterns, gpu_fields = ask_text_columns(platform, data_types)
+    text_columns, remove_strings, remove_patterns, gpu_fields = ask_text_columns(platform, data_types, existing=existing)
     settings["text_columns"] = text_columns
     settings["remove_strings"] = remove_strings
     settings["remove_patterns"] = remove_patterns
@@ -182,10 +254,10 @@ def run_questionnaire(hw, state):
     # ---- Lingua ----
     if "lingua" in profiles:
         section_header("Language Detection (Lingua)")
-        settings["lingua_workers"] = ask_int("Lingua workers (total Rayon threads)", defaults["lingua_workers"], tag="cl_lingua_workers")
-        settings["lingua_file_workers"] = ask_int("Lingua file workers (concurrent files)", defaults["lingua_file_workers"], tag="cl_lingua_file_workers")
-        settings["lingua_batch_size"] = ask_int("Lingua batch size (rows per batch)", defaults["lingua_batch_size"], tag="cl_lingua_batch_size")
-        settings["lingua_low_accuracy"] = ask_bool("Low accuracy mode (faster)?", defaults["lingua_low_accuracy"], tag="cl_lingua_low_accuracy")
+        settings["lingua_workers"] = ask_int("Lingua workers (total Rayon threads)", existing.get("lingua_workers", defaults["lingua_workers"]), tag="cl_lingua_workers")
+        settings["lingua_file_workers"] = ask_int("Lingua file workers (concurrent files)", existing.get("lingua_file_workers", defaults["lingua_file_workers"]), tag="cl_lingua_file_workers")
+        settings["lingua_batch_size"] = ask_int("Lingua batch size (rows per batch)", existing.get("lingua_batch_size", defaults["lingua_batch_size"]), tag="cl_lingua_batch_size")
+        settings["lingua_low_accuracy"] = ask_bool("Low accuracy mode (faster)?", existing.get("lingua_low_accuracy", defaults["lingua_low_accuracy"]), tag="cl_lingua_low_accuracy")
 
     # ---- GPU Classifiers ----
     if "ml" in profiles:
@@ -208,15 +280,15 @@ def run_questionnaire(hw, state):
         # Recompute file_workers default based on selected GPUs
         defaults["ml_file_workers"] = max(1, len(settings["gpu_ids"]))
 
-        settings["ml_file_workers"] = ask_int("File workers", defaults["ml_file_workers"], tag="cl_gpu_file_workers")
-        settings["ml_tokenize_workers"] = ask_int("Tokenize workers", defaults["ml_tokenize_workers"], tag="cl_gpu_tokenize_workers")
-        settings["ml_classifier_batch_size"] = ask_int("Classifier batch size", defaults["ml_classifier_batch_size"], tag="cl_gpu_batch_size")
+        settings["ml_file_workers"] = ask_int("File workers", existing.get("ml_file_workers", defaults["ml_file_workers"]), tag="cl_gpu_file_workers")
+        settings["ml_tokenize_workers"] = ask_int("Tokenize workers", existing.get("ml_tokenize_workers", defaults["ml_tokenize_workers"]), tag="cl_gpu_tokenize_workers")
+        settings["ml_classifier_batch_size"] = ask_int("Classifier batch size", existing.get("ml_classifier_batch_size", defaults["ml_classifier_batch_size"]), tag="cl_gpu_batch_size")
 
         available_classifiers = defaults["ml_classifiers"]
         settings["ml_classifiers"] = ask_multi_select(
             "Classifiers to run:",
             available_classifiers,
-            defaults["ml_classifiers"],
+            existing.get("ml_classifiers", defaults["ml_classifiers"]),
             tag="cl_gpu_classifiers",
         )
 

@@ -283,6 +283,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdp] Platform: {PLATFORM}")
     print(f"[sdp] Collection strategy: {collection_strategy}")
     print(f"[sdp] Data types: {data_types}")
+    print(f"[sdp] File validation: {validate_mode}")
 
     # Initialize state managers - one per data_type
     mongo_data_path = os.environ.get('MONGO_DATA_PATH', '/data/mongo')

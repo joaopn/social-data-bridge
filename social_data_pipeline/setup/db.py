@@ -21,7 +21,7 @@ except ImportError:
 
 from social_data_pipeline.setup.utils import (
     ROOT, CONFIG_DIR,
-    detect_hardware,
+    detect_hardware, load_env,
     ask, ask_int, ask_bool, ask_choice, ask_multi_select, ask_multi_line,
     section_header, write_files,
 )
@@ -51,11 +51,114 @@ def generate_password() -> str:
 
 
 # ============================================================================
+# Load existing configuration
+# ============================================================================
+
+def _extract_existing_pgtune():
+    """Extract pgtune content from existing postgresql.local.conf, if any."""
+    local_conf = CONFIG_DIR / "postgres" / "postgresql.local.conf"
+    if not local_conf.exists():
+        return ""
+    try:
+        content = local_conf.read_text()
+    except OSError:
+        return ""
+    marker = "# PASTE PGTUNE OUTPUT BELOW THIS LINE"
+    if marker not in content:
+        return ""
+    idx = content.index(marker)
+    after_marker = content[content.index("\n", idx) + 1:]
+    return after_marker.strip()
+
+
+def _load_existing_db_config():
+    """Load existing database configuration for use as defaults on re-run."""
+    existing = {}
+    env = load_env()
+
+    # Load scalar values from .env
+    if env.get("DATA_PATH"):
+        existing["data_path"] = env["DATA_PATH"]
+    if env.get("PGDATA_PATH"):
+        existing["pgdata_path"] = env["PGDATA_PATH"]
+    if env.get("DB_NAME"):
+        existing["db_name"] = env["DB_NAME"]
+    if env.get("MONGO_DATA_PATH"):
+        existing["mongo_data_path"] = env["MONGO_DATA_PATH"]
+    for env_key, setting_key in [
+        ("POSTGRES_PORT", "pg_port"),
+        ("MONGO_PORT", "mongo_port"),
+        ("MONGO_CACHE_SIZE_GB", "mongo_cache_size_gb"),
+    ]:
+        if env.get(env_key):
+            try:
+                existing[setting_key] = int(env[env_key])
+            except (ValueError, TypeError):
+                pass
+    for env_key, setting_key in [
+        ("POSTGRES_MEM_LIMIT", "pg_mem_limit"),
+        ("MONGO_MEM_LIMIT", "mongo_mem_limit"),
+    ]:
+        if env.get(env_key):
+            try:
+                existing[setting_key] = int(env[env_key].rstrip("g"))
+            except (ValueError, TypeError):
+                pass
+
+    # Load from YAML configs (fill gaps not covered by .env)
+    pg_yaml = CONFIG_DIR / "db" / "postgres.yaml"
+    if pg_yaml.exists():
+        try:
+            pg = yaml.safe_load(pg_yaml.read_text()) or {}
+            if pg.get("port") is not None:
+                existing.setdefault("pg_port", pg["port"])
+            if pg.get("name"):
+                existing.setdefault("db_name", pg["name"])
+            if pg.get("tablespaces"):
+                existing["tablespaces"] = pg["tablespaces"]
+            if pg.get("auth"):
+                existing["auth_enabled"] = True
+            if pg.get("ro_username"):
+                existing["ro_username"] = pg["ro_username"]
+        except (OSError, yaml.YAMLError):
+            pass
+
+    mongo_yaml = CONFIG_DIR / "db" / "mongo.yaml"
+    if mongo_yaml.exists():
+        try:
+            mg = yaml.safe_load(mongo_yaml.read_text()) or {}
+            if mg.get("port") is not None:
+                existing.setdefault("mongo_port", mg["port"])
+            if mg.get("cache_size_gb") is not None:
+                existing.setdefault("mongo_cache_size_gb", mg["cache_size_gb"])
+            if mg.get("validate_before_import"):
+                existing["mongo_validate"] = mg["validate_before_import"]
+            if mg.get("auth"):
+                existing["auth_enabled"] = True
+            if mg.get("ro_username"):
+                existing.setdefault("ro_username", mg["ro_username"])
+        except (OSError, yaml.YAMLError):
+            pass
+
+    # Determine databases from existing config files
+    databases = []
+    if pg_yaml.exists():
+        databases.append("postgres")
+    if mongo_yaml.exists():
+        databases.append("mongo")
+    if databases:
+        existing["databases"] = databases
+
+    return existing
+
+
+# ============================================================================
 # Interactive questionnaire
 # ============================================================================
 
 def run_questionnaire(hw):
     """Run the database configuration questionnaire. Returns settings dict."""
+    existing = _load_existing_db_config()
     settings = {}
 
     # --- Print hardware summary ---
@@ -70,14 +173,14 @@ def run_questionnaire(hw):
     section_header("Data Path")
     print("  Base directory for all data (dumps, parsed, output, databases).")
     print()
-    data_path = ask("Data base path", "./data", tag="db_data_path")
+    data_path = ask("Data base path", existing.get("data_path", "./data"), tag="db_data_path")
     settings["data_path"] = data_path
 
     # ---- Database selection ----
     section_header("Database Selection")
 
     all_databases = ["postgres", "mongo"]
-    databases = ask_multi_select("Databases:", all_databases, ["postgres"], tag="db_databases")
+    databases = ask_multi_select("Databases:", all_databases, existing.get("databases", ["postgres"]), tag="db_databases")
     settings["databases"] = databases
 
     has_postgres = "postgres" in databases
@@ -86,33 +189,44 @@ def run_questionnaire(hw):
     # ---- Paths (database data dirs) ----
     section_header("Database Paths")
     if has_postgres:
-        settings["pgdata_path"] = ask("PostgreSQL data path", f"{data_path}/database/postgres", tag="db_pgdata_path")
+        settings["pgdata_path"] = ask("PostgreSQL data path", existing.get("pgdata_path", f"{data_path}/database/postgres"), tag="db_pgdata_path")
     if has_mongo:
-        settings["mongo_data_path"] = ask("MongoDB data path", f"{data_path}/database/mongo", tag="db_mongo_data_path")
+        settings["mongo_data_path"] = ask("MongoDB data path", existing.get("mongo_data_path", f"{data_path}/database/mongo"), tag="db_mongo_data_path")
 
     # ---- PostgreSQL ----
     if has_postgres:
         section_header("PostgreSQL Configuration")
 
-        settings["db_name"] = ask("Database name", "datasets", tag="db_name")
-        settings["pg_port"] = ask_int("PostgreSQL port", 5432, tag="db_pg_port")
+        settings["db_name"] = ask("Database name", existing.get("db_name", "datasets"), tag="db_name")
+        settings["pg_port"] = ask_int("PostgreSQL port", existing.get("pg_port", 5432), tag="db_pg_port")
 
         # Tablespace configuration
-        if ask_bool("Use tablespaces? (spread tables across multiple disks)", False, tag="db_tablespaces"):
+        if ask_bool("Use tablespaces? (spread tables across multiple disks)", bool(existing.get("tablespaces")), tag="db_tablespaces"):
             print()
             print("  Note: Check documentation for expected disk usage per data type.")
             print()
+            existing_ts = existing.get("tablespaces", {})
             ts_tablespaces = {}
-            while True:
-                ts_name = ask("Tablespace name (e.g. nvme1)", tag="db_ts_name")
-                if not ts_name or ts_name == "pgdata":
-                    print("    'pgdata' is reserved for the default PostgreSQL data directory.")
-                    continue
-                ts_path = ask(f"Host path for '{ts_name}' (directory on disk)", tag="db_ts_path")
-                if ts_path:
-                    ts_tablespaces[ts_name] = ts_path
-                if not ask_bool("Add another tablespace?", False, tag="db_ts_more"):
-                    break
+
+            if existing_ts:
+                print("  Current tablespaces:")
+                for name, path in existing_ts.items():
+                    print(f"    {name}: {path}")
+                print()
+                if ask_bool("Keep existing tablespaces?", True, tag="db_ts_keep"):
+                    ts_tablespaces = dict(existing_ts)
+
+            if not ts_tablespaces:
+                while True:
+                    ts_name = ask("Tablespace name (e.g. nvme1)", tag="db_ts_name")
+                    if not ts_name or ts_name == "pgdata":
+                        print("    'pgdata' is reserved for the default PostgreSQL data directory.")
+                        continue
+                    ts_path = ask(f"Host path for '{ts_name}' (directory on disk)", tag="db_ts_path")
+                    if ts_path:
+                        ts_tablespaces[ts_name] = ts_path
+                    if not ask_bool("Add another tablespace?", False, tag="db_ts_more"):
+                        break
 
             if ts_tablespaces:
                 settings["tablespaces"] = ts_tablespaces
@@ -133,13 +247,21 @@ def run_questionnaire(hw):
         if hw["ram_gb"]:
             print(f"    Total Memory: {hw['ram_gb']} GB | CPUs: {hw['cpu_cores']}")
         print()
+        existing_pgtune = _extract_existing_pgtune()
+        pgtune_choices = ["paste", "file", "skip"]
+        pgtune_default = "paste"
+        if existing_pgtune:
+            pgtune_choices = ["keep", "paste", "file", "skip"]
+            pgtune_default = "keep"
         pgtune_method = ask_choice(
             "PGTune output:",
-            ["paste", "file", "skip"],
-            default="paste",
+            pgtune_choices,
+            default=pgtune_default,
             tag="db_pgtune_method",
         )
-        if pgtune_method == "paste":
+        if pgtune_method == "keep":
+            settings["pgtune_output"] = existing_pgtune
+        elif pgtune_method == "paste":
             settings["pgtune_output"] = ask_multi_line("Paste PGTune output below:", tag="db_pgtune_paste")
         elif pgtune_method == "file":
             pgtune_path = ask("Path to file with PGTune output", tag="db_pgtune_file")
@@ -163,7 +285,7 @@ def run_questionnaire(hw):
 
         print()
         suggested_pg_mem = int(hw["ram_gb"] * 0.6) if hw["ram_gb"] else 0
-        pg_mem = ask_int("PostgreSQL container memory limit (GB, 0=unlimited)", suggested_pg_mem, tag="db_pg_mem_limit")
+        pg_mem = ask_int("PostgreSQL container memory limit (GB, 0=unlimited)", existing.get("pg_mem_limit", suggested_pg_mem), tag="db_pg_mem_limit")
         if pg_mem > 0:
             settings["pg_mem_limit"] = pg_mem
 
@@ -171,12 +293,12 @@ def run_questionnaire(hw):
     if has_mongo:
         section_header("MongoDB Configuration")
 
-        settings["mongo_port"] = ask_int("MongoDB port", 27017, tag="db_mongo_port")
-        settings["mongo_cache_size_gb"] = ask_int("MongoDB WiredTiger cache size (GB)", 2, tag="db_mongo_cache")
+        settings["mongo_port"] = ask_int("MongoDB port", existing.get("mongo_port", 27017), tag="db_mongo_port")
+        settings["mongo_cache_size_gb"] = ask_int("MongoDB WiredTiger cache size (GB)", existing.get("mongo_cache_size_gb", 2), tag="db_mongo_cache")
 
         mongo_cache = settings.get("mongo_cache_size_gb", 2)
         suggested_mongo_mem = max(2, mongo_cache * 2)
-        mongo_mem = ask_int("MongoDB container memory limit (GB, 0=unlimited)", suggested_mongo_mem, tag="db_mongo_mem_limit")
+        mongo_mem = ask_int("MongoDB container memory limit (GB, 0=unlimited)", existing.get("mongo_mem_limit", suggested_mongo_mem), tag="db_mongo_mem_limit")
         if mongo_mem > 0:
             settings["mongo_mem_limit"] = mongo_mem
 
@@ -191,7 +313,7 @@ def run_questionnaire(hw):
         settings["mongo_validate"] = ask_choice(
             "Pre-import file validation",
             ["full", "tail", "none"],
-            default="full",
+            default=existing.get("mongo_validate", "full"),
             tag="db_mongo_validate",
         )
 
@@ -202,7 +324,7 @@ def run_questionnaire(hw):
         print("  Recommended for multi-user or remote servers.")
         print()
 
-        if ask_bool("Enable database authentication?", False, tag="db_auth"):
+        if ask_bool("Enable database authentication?", existing.get("auth_enabled", False), tag="db_auth"):
             settings["auth_enabled"] = True
 
             print()
@@ -213,7 +335,7 @@ def run_questionnaire(hw):
 
             print()
             if ask_bool("Create a read-only user? (required for MCP servers)", True, tag="db_ro_user"):
-                ro_username = ask("Read-only username", "readonly", tag="db_ro_username")
+                ro_username = ask("Read-only username", existing.get("ro_username", "readonly"), tag="db_ro_username")
                 settings["ro_username"] = ro_username
                 print()
                 if ask_bool("Auto-generate read-only password?", True, tag="db_ro_auto_password"):

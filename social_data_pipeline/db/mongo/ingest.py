@@ -287,6 +287,7 @@ def mongoimport_file(
 
     # Validate file before ingestion (mongoimport is not atomic)
     if validate != "none":
+        print(f"[sdp] Validating {Path(import_path).name} ({validate})...")
         validate_file(import_path, mode=validate)
 
     uri = get_mongo_uri(host, port, user, password)
@@ -297,6 +298,7 @@ def mongoimport_file(
         "--collection", collection_name,
         "--file", import_path,
         "--stopOnError",
+        "--legacy",
         "--numInsertionWorkers", str(num_workers),
     ]
 

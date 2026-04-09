@@ -21,6 +21,7 @@ from social_data_pipeline.setup.utils import (
     detect_hardware,
     ask, ask_int, ask_bool, ask_choice, ask_list, ask_multi_select,
     section_header, write_files, list_sources, load_db_setup, load_env,
+    load_source_config,
     print_pipeline_commands, update_env_file,
     detect_compression_from_glob, derive_file_patterns,
     get_source_profiles,
@@ -190,8 +191,76 @@ def _suggest_data_type_name(config_names):
     return config_names[0]
 
 
+def _load_existing_source_config(source_name):
+    """Load existing source configuration for use as defaults on re-run."""
+    existing = {}
+    source_dir = CONFIG_DIR / "sources" / source_name
+
+    # Load platform.yaml
+    pc = load_source_config(source_name) or {}
+    if pc:
+        if pc.get("data_types"):
+            existing["data_types"] = pc["data_types"]
+        paths = pc.get("paths", {})
+        for key in ("dumps", "extracted", "parsed", "output"):
+            if paths.get(key):
+                existing[f"{key}_path"] = paths[key]
+        if pc.get("file_format"):
+            existing["file_format"] = pc["file_format"]
+        if pc.get("parquet_row_group_size"):
+            existing["parquet_row_group_size"] = pc["parquet_row_group_size"]
+        if pc.get("db_schema"):
+            existing["db_schema"] = pc["db_schema"]
+        if pc.get("input_format"):
+            existing["input_format"] = pc["input_format"]
+        if pc.get("input_csv_delimiter"):
+            existing["input_csv_delimiter"] = pc["input_csv_delimiter"]
+        if pc.get("mongo_collection_strategy"):
+            existing["mongo_collection_strategy"] = pc["mongo_collection_strategy"]
+        if pc.get("mongo_db_name"):
+            existing["mongo_db_name"] = pc["mongo_db_name"]
+        if pc.get("mongo_collections"):
+            existing["mongo_collections"] = pc["mongo_collections"]
+        if pc.get("indexes"):
+            existing["custom_indexes"] = pc["indexes"]
+        if pc.get("mongo_indexes"):
+            existing["custom_mongo_indexes"] = pc["mongo_indexes"]
+        if pc.get("file_patterns"):
+            existing["file_patterns"] = pc["file_patterns"]
+
+    # Load parse.yaml
+    parse_path = source_dir / "parse.yaml"
+    if parse_path.exists():
+        try:
+            prc = yaml.safe_load(parse_path.read_text()) or {}
+            proc = prc.get("pipeline", {}).get("processing", {})
+            if proc.get("parse_workers") is not None:
+                existing["parse_workers"] = proc["parse_workers"]
+        except (OSError, yaml.YAMLError):
+            pass
+
+    # Load postgres.yaml
+    pg_path = source_dir / "postgres.yaml"
+    if pg_path.exists():
+        try:
+            pgc = yaml.safe_load(pg_path.read_text()) or {}
+            proc = pgc.get("pipeline", {}).get("processing", {})
+            if proc.get("prefer_lingua") is not None:
+                existing["pg_prefer_lingua"] = proc["prefer_lingua"]
+            if proc.get("parallel_index_workers") is not None:
+                existing["pg_parallel_index_workers"] = proc["parallel_index_workers"]
+            tts = pgc.get("pipeline", {}).get("table_tablespaces")
+            if tts:
+                existing["table_tablespaces"] = tts
+        except (OSError, yaml.YAMLError):
+            pass
+
+    return existing
+
+
 def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     """Run the source configuration questionnaire. Returns settings dict."""
+    existing = _load_existing_source_config(source_name)
     settings = {}
     settings["source_name"] = source_name
 
@@ -219,11 +288,11 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- Data types (non-HF) ----
     elif platform == "reddit":
         section_header("Data Types")
-        data_types = ask_list("Data types", ["submissions", "comments"], tag="src_data_types")
+        data_types = ask_list("Data types", existing.get("data_types", ["submissions", "comments"]), tag="src_data_types")
         settings["data_types"] = data_types
     else:
         section_header("Data Types")
-        data_types = ask_list("Data types (comma-separated)", tag="src_data_types")
+        data_types = ask_list("Data types (comma-separated)", existing.get("data_types"), tag="src_data_types")
         if not data_types:
             print("    Error: At least one data type is required.")
             sys.exit(1)
@@ -232,22 +301,23 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- Data paths ----
     section_header("Data Paths")
     data_path = load_env().get("DATA_PATH", "./data")
-    settings["dumps_path"] = ask("Dumps directory", f"{data_path}/dumps/{source_name}", tag="src_dumps_path")
-    settings["extracted_path"] = ask("Extracted directory", f"{data_path}/extracted/{source_name}", tag="src_extracted_path")
-    settings["parsed_path"] = ask("Parsed directory", f"{data_path}/parsed/{source_name}", tag="src_parsed_path")
-    settings["output_path"] = ask("Output directory", f"{data_path}/output/{source_name}", tag="src_output_path")
+    settings["dumps_path"] = ask("Dumps directory", existing.get("dumps_path", f"{data_path}/dumps/{source_name}"), tag="src_dumps_path")
+    settings["extracted_path"] = ask("Extracted directory", existing.get("extracted_path", f"{data_path}/extracted/{source_name}"), tag="src_extracted_path")
+    settings["parsed_path"] = ask("Parsed directory", existing.get("parsed_path", f"{data_path}/parsed/{source_name}"), tag="src_parsed_path")
+    settings["output_path"] = ask("Output directory", existing.get("output_path", f"{data_path}/output/{source_name}"), tag="src_output_path")
 
     # ---- File format ----
     section_header("File Format")
     print("  Parquet files are smaller, enforce schema, and preserve text")
     print("  without escaping. CSV is the legacy format.")
     settings["file_format"] = ask_choice(
-        "Intermediate file format", ["parquet", "csv"], default="parquet",
+        "Intermediate file format", ["parquet", "csv"],
+        default=existing.get("file_format", "parquet"),
         tag="src_file_format",
     )
 
     if settings["file_format"] == "parquet":
-        rg_size = ask_int("Parquet row-group size (larger = better compression, more RAM)", 1_000_000, tag="src_parquet_rg_size")
+        rg_size = ask_int("Parquet row-group size (larger = better compression, more RAM)", existing.get("parquet_row_group_size", 1_000_000), tag="src_parquet_rg_size")
         if rg_size != 1_000_000:
             settings["parquet_row_group_size"] = rg_size
 
@@ -286,7 +356,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- Parse settings ----
     if "parse" in profiles:
         section_header("Parse Settings")
-        settings["parse_workers"] = ask_int("Parse workers", defaults["parse_workers"], tag="src_parse_workers")
+        settings["parse_workers"] = ask_int("Parse workers", existing.get("parse_workers", defaults["parse_workers"]), tag="src_parse_workers")
 
     # ---- PostgreSQL settings (per-source) ----
     has_postgres = any(p.startswith("postgres") for p in profiles)
@@ -297,11 +367,12 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
         if "postgres_ingest" in profiles:
             settings["pg_prefer_lingua"] = ask_bool(
                 "Use Lingua files (includes lang columns in base tables)?",
-                defaults["pg_prefer_lingua"],
+                existing.get("pg_prefer_lingua", defaults["pg_prefer_lingua"]),
                 tag="src_pg_prefer_lingua",
             )
             settings["pg_parallel_index_workers"] = ask_int(
-                "Parallel index workers", defaults["pg_parallel_index_workers"],
+                "Parallel index workers",
+                existing.get("pg_parallel_index_workers", defaults["pg_parallel_index_workers"]),
                 tag="src_pg_index_workers",
             )
 
@@ -312,12 +383,13 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             print()
             print("  Assign each data type to a tablespace:")
             print(f"    Available: {', '.join(ts_choices)}")
+            existing_ts = existing.get("table_tablespaces", {})
             ts_assignments = {}
             for dt in data_types:
                 ts = ask_choice(
                     f"  {dt} tablespace:",
                     ts_choices,
-                    default="pgdata",
+                    default=existing_ts.get(dt, "pgdata"),
                     tag=f"src_tablespace_{dt}",
                 )
                 ts_assignments[dt] = ts
@@ -329,7 +401,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
         section_header("Custom Platform Configuration")
 
         if has_postgres:
-            settings["db_schema"] = ask("PostgreSQL schema name", source_name, tag="src_db_schema")
+            settings["db_schema"] = ask("PostgreSQL schema name", existing.get("db_schema", source_name), tag="src_db_schema")
 
         if is_hf:
             # HF sources: input_format is parquet, file patterns auto-generated
@@ -347,11 +419,12 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             print("  NDJSON: one JSON object per line (default for most data dumps)")
             print("  CSV: comma/tab/pipe-separated values with headers")
             settings["input_format"] = ask_choice(
-                "Raw input file format", ["ndjson", "csv"], default="ndjson",
+                "Raw input file format", ["ndjson", "csv"],
+                default=existing.get("input_format", "ndjson"),
                 tag="src_input_format",
             )
             if settings["input_format"] == "csv":
-                delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", ",", tag="src_csv_delimiter")
+                delimiter = ask("CSV delimiter character (comma=, tab=\\t pipe=|)", existing.get("input_csv_delimiter", ","), tag="src_csv_delimiter")
                 if delimiter == "\\t":
                     delimiter = "\t"
                 settings["input_csv_delimiter"] = delimiter
@@ -362,7 +435,8 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                 print("    Enter a glob pattern for your compressed dump files.")
                 print("    Examples: tweets_*.json.gz, RC_*.zst, data_*.csv.xz")
                 print()
-                dump_glob = ask(f"    Dump file glob pattern for {dt}", tag=f"src_dump_glob_{dt}")
+                existing_glob = (existing.get("file_patterns", {}).get(dt, {}) or {}).get("dump_glob")
+                dump_glob = ask(f"    Dump file glob pattern for {dt}", existing_glob, tag=f"src_dump_glob_{dt}")
                 if not dump_glob:
                     print("    Error: A glob pattern is required.")
                     sys.exit(1)
@@ -393,18 +467,19 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             settings["mongo_collection_strategy"] = ask_choice(
                 "MongoDB collection strategy:",
                 ["per_data_type", "per_file"],
-                default="per_data_type",
+                default=existing.get("mongo_collection_strategy", "per_data_type"),
                 tag="src_mongo_strategy",
             )
             if settings["mongo_collection_strategy"] == "per_data_type":
                 settings["mongo_collections"] = {}
                 for dt in data_types:
-                    coll = ask(f"  MongoDB collection name for '{dt}'", dt, tag=f"src_mongo_collection_{dt}")
+                    existing_coll = existing.get("mongo_collections", {}).get(dt, dt)
+                    coll = ask(f"  MongoDB collection name for '{dt}'", existing_coll, tag=f"src_mongo_collection_{dt}")
                     settings["mongo_collections"][dt] = coll
             else:
                 print("    (per_file: one collection per input file, named from filename)")
 
-            settings["mongo_db_name"] = ask("MongoDB database name", source_name, tag="src_mongo_db_name")
+            settings["mongo_db_name"] = ask("MongoDB database name", existing.get("mongo_db_name", source_name), tag="src_mongo_db_name")
 
         # ---- Index configuration ----
         if has_postgres or has_mongo:
@@ -415,17 +490,19 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
 
             if has_postgres:
                 print()
+                existing_pg_idx = existing.get("custom_indexes", {})
                 settings["custom_indexes"] = {}
                 for dt in data_types:
-                    idx = ask_list(f"  PostgreSQL indexes for '{dt}'", tag=f"src_pg_indexes_{dt}")
+                    idx = ask_list(f"  PostgreSQL indexes for '{dt}'", existing_pg_idx.get(dt), tag=f"src_pg_indexes_{dt}")
                     if idx:
                         settings["custom_indexes"][dt] = idx
 
             if has_mongo:
                 print()
+                existing_mongo_idx = existing.get("custom_mongo_indexes", {})
                 settings["custom_mongo_indexes"] = {}
                 for dt in data_types:
-                    idx = ask_list(f"  MongoDB indexes for '{dt}'", tag=f"src_mongo_indexes_{dt}")
+                    idx = ask_list(f"  MongoDB indexes for '{dt}'", existing_mongo_idx.get(dt), tag=f"src_mongo_indexes_{dt}")
                     if idx:
                         settings["custom_mongo_indexes"][dt] = idx
 
