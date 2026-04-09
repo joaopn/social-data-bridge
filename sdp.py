@@ -316,8 +316,11 @@ def cmd_db_stop(args):
         if mcp_profile not in mcp_services:
             print(f"  Error: '{service}' is not configured.")
             return 1
-        compose_args = ["--profile", parent_db, "--profile", mcp_profile, "down"]
-        result = docker_compose(*compose_args)
+        profiles = ["--profile", parent_db, "--profile", mcp_profile]
+        result = docker_compose(*profiles, "stop", service)
+        if result.returncode != 0:
+            return result.returncode
+        result = docker_compose(*profiles, "rm", "-f", service)
         return result.returncode
 
     # Database target (stops DB + its MCP)
