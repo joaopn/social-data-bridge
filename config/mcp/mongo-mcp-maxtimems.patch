@@ -1,0 +1,141 @@
+diff --git a/src/schemas/call.ts b/src/schemas/call.ts
+index c2fa40f..c12305d 100644
+--- a/src/schemas/call.ts
++++ b/src/schemas/call.ts
+@@ -414,26 +414,24 @@ async function handleQuery(
+   if (!collection) {
+     throw new Error("Collection is required for query operation");
+   }
+-  const { filter, projection, limit, explain, sort } = args;
++  const { filter, projection, limit, explain, sort, maxTimeMS } = args;
+   const queryFilter = parseFilter(filter, objectIdMode);
++  const findOptions: FindOptions = {
++    projection,
++    limit: limit || 100,
++    sort,
++  };
++  if (maxTimeMS) findOptions.maxTimeMS = maxTimeMS as number;
+   try {
+     if (explain) {
+       const explainResult = await collection
+-        .find(queryFilter, {
+-          projection,
+-          limit: limit || 100,
+-          sort,
+-        } as FindOptions)
++        .find(queryFilter, findOptions)
+         .explain(explain as string);
+ 
+       return formatResponse(explainResult);
+     }
+ 
+-    const cursor = collection.find(queryFilter, {
+-      projection,
+-      limit: limit || 100,
+-      sort,
+-    } as FindOptions);
++    const cursor = collection.find(queryFilter, findOptions);
+     const results = await cursor.toArray();
+ 
+     return formatResponse(results);
+@@ -450,7 +448,7 @@ async function handleAggregate(
+   if (!collection) {
+     throw new Error("Collection is required for aggregate operation");
+   }
+-  const { pipeline, explain } = args;
++  const { pipeline, explain, maxTimeMS } = args;
+ 
+   if (!Array.isArray(pipeline)) {
+     throw new Error("Pipeline must be an array");
+@@ -467,6 +465,9 @@ async function handleAggregate(
+     return stage;
+   });
+ 
++  const aggOptions: Record<string, unknown> = {};
++  if (maxTimeMS) aggOptions.maxTimeMS = maxTimeMS as number;
++
+   try {
+     if (explain) {
+       const explainResult = await collection
+@@ -474,13 +475,16 @@ async function handleAggregate(
+           explain: {
+             verbosity: explain as string,
+           },
++          ...aggOptions,
+         })
+         .toArray();
+ 
+       return formatResponse(explainResult);
+     }
+ 
+-    const results = await collection.aggregate(processedPipeline).toArray();
++    const results = await collection
++      .aggregate(processedPipeline, aggOptions)
++      .toArray();
+     return formatResponse(results);
+   } catch (error) {
+     return handleError(error, "aggregate", collection.collectionName);
+@@ -821,7 +825,7 @@ async function handleListCollections(
+   args: Record<string, unknown>,
+   objectIdMode: ObjectIdConversionMode = "auto",
+ ) {
+-  const { nameOnly, filter } = args;
++  const { nameOnly, filter, maxTimeMS } = args;
+ 
+   // Process ObjectId strings in filter if present
+   let processedFilter = filter;
+@@ -834,8 +838,12 @@ async function handleListCollections(
+ 
+   try {
+     // Get the list of collections
+-    const options = processedFilter ? { filter: processedFilter } : {};
+-    const collections = await db.listCollections(options).toArray();
++    const listFilter = processedFilter ? { filter: processedFilter } : {};
++    const listOptions: Record<string, unknown> = {};
++    if (maxTimeMS) listOptions.maxTimeMS = maxTimeMS as number;
++    const collections = await db
++      .listCollections(listFilter, listOptions)
++      .toArray();
+ 
+     // If nameOnly is true, return only the collection names
+     const result = nameOnly
+diff --git a/src/schemas/tools.ts b/src/schemas/tools.ts
+index 0cdbcd0..0508f80 100644
+--- a/src/schemas/tools.ts
++++ b/src/schemas/tools.ts
+@@ -55,6 +55,11 @@ export async function handleListToolsRequest({
+               enum: ["auto", "none", "force"],
+               default: "auto",
+             },
++            maxTimeMS: {
++              type: "integer",
++              description:
++                "Maximum execution time in milliseconds. The operation will be terminated if it exceeds this limit.",
++            },
+           },
+           required: ["collection"],
+         },
+@@ -95,6 +100,11 @@ export async function handleListToolsRequest({
+               enum: ["auto", "none", "force"],
+               default: "auto",
+             },
++            maxTimeMS: {
++              type: "integer",
++              description:
++                "Maximum execution time in milliseconds. The operation will be terminated if it exceeds this limit.",
++            },
+           },
+           required: ["collection", "pipeline"],
+         },
+@@ -337,6 +347,11 @@ export async function handleListToolsRequest({
+               enum: ["auto", "none", "force"],
+               default: "auto",
+             },
++            maxTimeMS: {
++              type: "integer",
++              description:
++                "Maximum execution time in milliseconds. The operation will be terminated if it exceeds this limit.",
++            },
+           },
+         },
+       },
