@@ -90,12 +90,15 @@ try {
     db.createUser({
         user: $(_js_escape "$RO_USER"),
         pwd: $(_js_escape "$RO_PWD"),
-        roles: [{role: 'readAnyDatabase', db: 'admin'}]
+        roles: [{role: 'readAnyDatabase', db: 'admin'}, {role: 'clusterMonitor', db: 'admin'}]
     });
     print('[CONFIG] Created read-only user: $RO_USER');
 } catch (e) {
     if (e.codeName === 'DuplicateKey' || e.code === 51003) {
-        db.updateUser($(_js_escape "$RO_USER"), { pwd: $(_js_escape "$RO_PWD") });
+        db.updateUser($(_js_escape "$RO_USER"), {
+            pwd: $(_js_escape "$RO_PWD"),
+            roles: [{role: 'readAnyDatabase', db: 'admin'}, {role: 'clusterMonitor', db: 'admin'}]
+        });
         print('[CONFIG] Read-only user password synced: $RO_USER');
     } else {
         throw e;
@@ -122,7 +125,7 @@ try {
     db.createUser({
         user: $(_js_escape "$RO_USER"),
         pwd: $(_js_escape "$RO_PWD"),
-        roles: [{role: 'readAnyDatabase', db: 'admin'}]
+        roles: [{role: 'readAnyDatabase', db: 'admin'}, {role: 'clusterMonitor', db: 'admin'}]
     });
     print('[CONFIG] Read-only user created');
 } catch (e) {
