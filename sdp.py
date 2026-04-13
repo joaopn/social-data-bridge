@@ -373,7 +373,21 @@ def cmd_db_status(args):
             print(f"    RW user:       {', '.join(rw_parts)}")
         ro_user = env.get("POSTGRES_RO_USER") or env.get("MONGO_RO_USER")
         if ro_user:
-            print(f"    RO user:       {ro_user} (no password)")
+            # Check if RO credentials file exists in any data path
+            ro_cred_path = None
+            for path_key, default in [("PGDATA_PATH", "./data/database/postgres"),
+                                      ("MONGO_DATA_PATH", "./data/database/mongo")]:
+                dp = Path(env.get(path_key, default))
+                if not dp.is_absolute():
+                    dp = ROOT / dp
+                cred_file = dp / ".ro_credentials"
+                if cred_file.exists():
+                    ro_cred_path = cred_file
+                    break
+            if ro_cred_path:
+                print(f"    RO user:       {ro_user} (password in {ro_cred_path})")
+            else:
+                print(f"    RO user:       {ro_user} (no password)")
         mcp_user = env.get("POSTGRES_MCP_USER") or env.get("MONGO_MCP_USER")
         if mcp_user:
             print(f"    MCP user:      {mcp_user}")
