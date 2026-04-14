@@ -470,4 +470,15 @@ def apply_env_overrides(config: Dict, profile: str) -> Dict:
         if os.environ.get('MONGO_ADMIN_PASSWORD'):
             result['database']['password'] = os.environ['MONGO_ADMIN_PASSWORD']
 
+    if profile in ('sr_ingest', 'sr_ml'):
+        if 'database' not in result:
+            result['database'] = {}
+
+        if 'STARROCKS_PORT' in os.environ:
+            result['database']['port'] = int(os.environ['STARROCKS_PORT'])
+        if 'STARROCKS_FE_HTTP_PORT' in os.environ:
+            result['database']['fe_http_port'] = int(os.environ['STARROCKS_FE_HTTP_PORT'])
+        if os.environ.get('STARROCKS_ROOT_PASSWORD'):
+            result['database']['password'] = os.environ['STARROCKS_ROOT_PASSWORD']
+
     return result

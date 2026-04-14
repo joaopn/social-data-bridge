@@ -1,7 +1,9 @@
 """Database configuration for Social Data Pipeline.
 
-Configures PostgreSQL and MongoDB settings (port, tablespaces, PGTune, cache).
-Generates .env, config/db/*.yaml, postgresql.local.conf, docker-compose.override.yml.
+Configures PostgreSQL, MongoDB, and StarRocks settings (port, tablespaces,
+PGTune, cache, FE/BE memory).
+Generates .env, config/db/*.yaml, postgresql.local.conf, fe.conf, be.conf,
+docker-compose.override.yml.
 
 This is a global, one-time configuration independent of any source.
 """
@@ -87,10 +89,14 @@ def _load_existing_db_config():
         existing["mongo_data_path"] = env["MONGO_DATA_PATH"]
     if env.get("DB_EXPORT_PATH"):
         existing["export_path"] = env["DB_EXPORT_PATH"]
+    if env.get("STARROCKS_DATA_PATH"):
+        existing["starrocks_data_path"] = env["STARROCKS_DATA_PATH"]
     for env_key, setting_key in [
         ("POSTGRES_PORT", "pg_port"),
         ("MONGO_PORT", "mongo_port"),
         ("MONGO_CACHE_SIZE_GB", "mongo_cache_size_gb"),
+        ("STARROCKS_PORT", "starrocks_port"),
+        ("STARROCKS_FE_HTTP_PORT", "starrocks_fe_http_port"),
     ]:
         if env.get(env_key):
             try:
@@ -100,6 +106,7 @@ def _load_existing_db_config():
     for env_key, setting_key in [
         ("POSTGRES_MEM_LIMIT", "pg_mem_limit"),
         ("MONGO_MEM_LIMIT", "mongo_mem_limit"),
+        ("STARROCKS_MEM_LIMIT", "starrocks_mem_limit"),
     ]:
         if env.get(env_key):
             try:
@@ -142,12 +149,31 @@ def _load_existing_db_config():
         except (OSError, yaml.YAMLError):
             pass
 
+    sr_yaml = CONFIG_DIR / "db" / "starrocks.yaml"
+    if sr_yaml.exists():
+        try:
+            sr = yaml.safe_load(sr_yaml.read_text()) or {}
+            if sr.get("port") is not None:
+                existing.setdefault("starrocks_port", sr["port"])
+            if sr.get("fe_http_port") is not None:
+                existing.setdefault("starrocks_fe_http_port", sr["fe_http_port"])
+            if sr.get("fe_jvm_heap") is not None:
+                existing.setdefault("sr_fe_jvm_heap", sr["fe_jvm_heap"])
+            if sr.get("be_mem_limit") is not None:
+                existing.setdefault("sr_be_mem_limit", sr["be_mem_limit"])
+            if sr.get("storage_paths"):
+                existing["starrocks_storage_paths"] = sr["storage_paths"]
+        except (OSError, yaml.YAMLError):
+            pass
+
     # Determine databases from existing config files
     databases = []
     if pg_yaml.exists():
         databases.append("postgres")
     if mongo_yaml.exists():
         databases.append("mongo")
+    if sr_yaml.exists():
+        databases.append("starrocks")
     if databases:
         existing["databases"] = databases
 
@@ -181,12 +207,13 @@ def run_questionnaire(hw):
     # ---- Database selection ----
     section_header("Database Selection")
 
-    all_databases = ["postgres", "mongo"]
+    all_databases = ["postgres", "mongo", "starrocks"]
     databases = ask_multi_select("Databases:", all_databases, existing.get("databases", ["postgres"]), tag="db_databases")
     settings["databases"] = databases
 
     has_postgres = "postgres" in databases
     has_mongo = "mongo" in databases
+    has_starrocks = "starrocks" in databases
 
     # ---- Paths (database data dirs) ----
     section_header("Database Paths")
@@ -194,6 +221,8 @@ def run_questionnaire(hw):
         settings["pgdata_path"] = ask("PostgreSQL data path", existing.get("pgdata_path", f"{data_path}/database/postgres"), tag="db_pgdata_path")
     if has_mongo:
         settings["mongo_data_path"] = ask("MongoDB data path", existing.get("mongo_data_path", f"{data_path}/database/mongo"), tag="db_mongo_data_path")
+    if has_starrocks:
+        settings["starrocks_data_path"] = ask("StarRocks data path", existing.get("starrocks_data_path", f"{data_path}/database/starrocks"), tag="db_sr_data_path")
 
     print()
     print("  Host directory bind-mounted into database containers at /export.")
@@ -329,8 +358,80 @@ def run_questionnaire(hw):
             tag="db_mongo_validate",
         )
 
+    # ---- StarRocks ----
+    if has_starrocks:
+        section_header("StarRocks Configuration")
+
+        settings["starrocks_port"] = ask_int("StarRocks MySQL protocol port", existing.get("starrocks_port", 9030), tag="db_sr_port")
+        settings["starrocks_fe_http_port"] = ask_int("StarRocks FE HTTP port (admin/Stream Load)", existing.get("starrocks_fe_http_port", 8030), tag="db_sr_fe_http_port")
+
+        print()
+        print("  StarRocks runs FE (query planner) and BE (storage engine) in one container.")
+        print("  Allocate memory to each component separately.")
+        print()
+
+        # FE JVM heap
+        default_fe_heap = max(2, min(8, int(ram // 8))) if ram else 4
+        settings["sr_fe_jvm_heap"] = ask(
+            "FE JVM heap size (GB)",
+            existing.get("sr_fe_jvm_heap", default_fe_heap),
+            tag="db_sr_fe_heap",
+        )
+        fe_heap = float(settings["sr_fe_jvm_heap"])
+
+        # Container memory limit (asked before BE so the BE default can use it)
+        print()
+        if ram:
+            suggested_sr_mem = int(max(fe_heap + 4, ram * 0.6))
+        else:
+            suggested_sr_mem = 0
+        sr_mem_str = ask(
+            "StarRocks container memory limit (GB, 0=unlimited)",
+            existing.get("starrocks_mem_limit", suggested_sr_mem),
+            tag="db_sr_mem_limit",
+        )
+        sr_mem = float(sr_mem_str)
+        if sr_mem > 0:
+            settings["starrocks_mem_limit"] = sr_mem_str
+
+        # BE memory limit (default: container_limit - fe_heap - 2GB headroom, or 50% RAM)
+        if sr_mem > 0:
+            default_be_mem = int(max(2, sr_mem - fe_heap - 2))
+        elif ram:
+            default_be_mem = int(max(2, ram * 0.5))
+        else:
+            default_be_mem = 8
+        settings["sr_be_mem_limit"] = ask(
+            "BE memory limit (GB)",
+            existing.get("sr_be_mem_limit", default_be_mem),
+            tag="db_sr_be_mem",
+        )
+
+        # Multi-disk storage
+        if ask_bool("Use multiple disks for StarRocks storage?", bool(existing.get("starrocks_storage_paths")), tag="db_sr_multidisk"):
+            existing_paths = existing.get("starrocks_storage_paths", [])
+            if existing_paths:
+                print()
+                print("  Current storage paths:")
+                for p in existing_paths:
+                    print(f"    {p}")
+                print()
+                if ask_bool("Keep existing storage paths?", True, tag="db_sr_keep_paths"):
+                    settings["starrocks_storage_paths"] = list(existing_paths)
+
+            if "starrocks_storage_paths" not in settings:
+                storage_paths = []
+                while True:
+                    sp = ask("Host path for StarRocks storage (e.g. /mnt/nvme1/starrocks)", tag="db_sr_storage_path")
+                    if sp:
+                        storage_paths.append(sp)
+                    if not ask_bool("Add another storage path?", False, tag="db_sr_more_paths"):
+                        break
+                if storage_paths:
+                    settings["starrocks_storage_paths"] = storage_paths
+
     # ---- Authentication ----
-    if has_postgres or has_mongo:
+    if has_postgres or has_mongo or has_starrocks:
         section_header("Authentication")
         print("  Enable database authentication to require passwords for connections.")
         print("  Recommended for multi-user or remote servers.")
@@ -400,6 +501,17 @@ def generate_env(settings):
         ]
         if settings.get("mongo_mem_limit"):
             lines.append(f"MONGO_MEM_LIMIT={settings['mongo_mem_limit']}g")
+
+    if "starrocks_data_path" in settings:
+        lines += [
+            "",
+            "# ===== STARROCKS CONFIGURATION =====",
+            f"STARROCKS_DATA_PATH={settings['starrocks_data_path']}",
+            f"STARROCKS_PORT={settings.get('starrocks_port', 9030)}",
+            f"STARROCKS_FE_HTTP_PORT={settings.get('starrocks_fe_http_port', 8030)}",
+        ]
+        if settings.get("starrocks_mem_limit"):
+            lines.append(f"STARROCKS_MEM_LIMIT={settings['starrocks_mem_limit']}g")
 
     if "export_path" in settings:
         lines += [
@@ -474,28 +586,96 @@ def generate_db_mongo_yaml(settings):
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
 
-def generate_docker_compose_override(settings):
-    """Generate docker-compose.override.yml with tablespace volume mounts."""
-    tablespaces = settings.get("tablespaces", {})
+def generate_db_starrocks_yaml(settings):
+    """Generate config/db/starrocks.yaml content."""
+    config = {
+        "port": settings.get("starrocks_port", 9030),
+        "fe_http_port": settings.get("starrocks_fe_http_port", 8030),
+        "fe_jvm_heap": settings.get("sr_fe_jvm_heap", 4),
+        "be_mem_limit": settings.get("sr_be_mem_limit", 8),
+    }
+    if settings.get("starrocks_storage_paths"):
+        config["storage_paths"] = settings["starrocks_storage_paths"]
+    if settings.get("auth_enabled"):
+        config["auth"] = True
+    if settings.get("ro_username"):
+        config["ro_username"] = settings["ro_username"]
+    return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
-    volume_lines = []
+
+def _replace_conf_value(content, key, value):
+    """Replace a key = value line in a .conf file (properties format)."""
+    import re
+    pattern = rf"^(\s*#?\s*){re.escape(key)}\s*=.*$"
+    replacement = f"{key} = {value}"
+    new_content, count = re.subn(pattern, replacement, content, flags=re.MULTILINE)
+    if count == 0:
+        new_content = content.rstrip("\n") + f"\n{replacement}\n"
+    return new_content
+
+
+def generate_starrocks_fe_conf(settings):
+    """Generate config/starrocks/fe.conf with tuned JVM heap."""
+    base_path = CONFIG_DIR / "starrocks" / "fe.conf"
+    content = base_path.read_text()
+
+    jvm_heap = settings.get("sr_fe_jvm_heap", 4)
+    content = _replace_conf_value(content, "jvm_heap_size", f"{jvm_heap}g")
+
+    return content
+
+
+def generate_starrocks_be_conf(settings):
+    """Generate config/starrocks/be.conf with storage paths and memory."""
+    base_path = CONFIG_DIR / "starrocks" / "be.conf"
+    content = base_path.read_text()
+
+    # Multi-disk storage paths
+    storage_paths = settings.get("starrocks_storage_paths")
+    if storage_paths:
+        container_paths = [
+            f"/data/starrocks/be/storage_{i}" for i in range(len(storage_paths))
+        ]
+        content = _replace_conf_value(
+            content, "storage_root_path", ";".join(container_paths)
+        )
+
+    # BE memory limit (absolute GB value)
+    be_mem = settings.get("sr_be_mem_limit")
+    if be_mem:
+        content = _replace_conf_value(content, "mem_limit", f"{be_mem}G")
+
+    return content
+
+
+def generate_docker_compose_override(settings):
+    """Generate docker-compose.override.yml with extra volume mounts.
+
+    Handles PostgreSQL tablespace volumes and StarRocks multi-disk storage.
+    """
+    tablespaces = settings.get("tablespaces", {})
+    pg_lines = []
     for ts_name, host_path in tablespaces.items():
         if ts_name != "pgdata":
-            volume_lines.append(f"      - {host_path}:/data/tablespace/{ts_name}")
+            pg_lines.append(f"      - {host_path}:/data/tablespace/{ts_name}")
 
-    if not volume_lines:
+    sr_storage = settings.get("starrocks_storage_paths", [])
+    sr_lines = []
+    for i, host_path in enumerate(sr_storage):
+        sr_lines.append(f"      - {host_path}:/data/starrocks/be/storage_{i}")
+
+    if not pg_lines and not sr_lines:
         return None
 
-    volumes_str = "\n".join(volume_lines)
-    return (
-        "# Auto-generated by sdp db setup — tablespace volume mounts.\n"
-        "# Each volume maps a host directory to a container path used by CREATE TABLESPACE.\n"
-        "\n"
-        "services:\n"
-        "  postgres:\n"
-        "    volumes:\n"
-        f"{volumes_str}\n"
-    )
+    content = "# Auto-generated by sdp db setup — extra volume mounts.\n\nservices:\n"
+    if pg_lines:
+        content += "  postgres:\n    volumes:\n" + "\n".join(pg_lines) + "\n"
+    if sr_lines:
+        if pg_lines:
+            content += "\n"
+        content += "  starrocks:\n    volumes:\n" + "\n".join(sr_lines) + "\n"
+
+    return content
 
 
 def generate_postgresql_local_conf(settings):
@@ -613,6 +793,21 @@ def print_summary(settings, files_to_write):
         print(f"    Data path:           {settings.get('mongo_data_path', './data/database/mongo')}")
         print()
 
+    if "starrocks" in databases:
+        print(f"  StarRocks:")
+        print(f"    Port (MySQL):        {settings.get('starrocks_port', 9030)}")
+        print(f"    FE HTTP port:        {settings.get('starrocks_fe_http_port', 8030)}")
+        print(f"    FE JVM heap:         {settings.get('sr_fe_jvm_heap', 4)} GB")
+        print(f"    BE memory limit:     {settings.get('sr_be_mem_limit', 8)} GB")
+        print(f"    Data path:           {settings.get('starrocks_data_path', './data/database/starrocks')}")
+        if settings.get("starrocks_storage_paths"):
+            print(f"    Storage paths:")
+            for sp in settings["starrocks_storage_paths"]:
+                print(f"      {sp}")
+        if settings.get("starrocks_mem_limit"):
+            print(f"    Container limit:     {settings['starrocks_mem_limit']} GB")
+        print()
+
     if settings.get("auth_enabled"):
         print(f"  Authentication:  enabled")
         if settings.get("ro_username"):
@@ -666,6 +861,8 @@ def _write_ro_credentials(settings):
         _write_cred_file(Path(settings["pgdata_path"]))
     if "mongo_data_path" in settings:
         _write_cred_file(Path(settings["mongo_data_path"]))
+    if "starrocks_data_path" in settings:
+        _write_cred_file(Path(settings["starrocks_data_path"]))
 
     return written
 
@@ -679,7 +876,7 @@ def main():
     print("  Social Data Pipeline - Database Configuration")
     print("  =============================================")
     print()
-    print("  Configure database infrastructure (PostgreSQL, MongoDB).")
+    print("  Configure database infrastructure (PostgreSQL, MongoDB, StarRocks).")
     print("  Press Enter to accept defaults shown in [brackets].")
     print()
 
@@ -718,7 +915,22 @@ def main():
             generate_db_mongo_yaml(settings),
         ))
 
-    # docker-compose.override.yml (tablespace volumes)
+    # config/db/starrocks.yaml + conf files
+    if "starrocks" in settings["databases"]:
+        files_to_write.append((
+            CONFIG_DIR / "db" / "starrocks.yaml",
+            generate_db_starrocks_yaml(settings),
+        ))
+        files_to_write.append((
+            CONFIG_DIR / "starrocks" / "fe.conf",
+            generate_starrocks_fe_conf(settings),
+        ))
+        files_to_write.append((
+            CONFIG_DIR / "starrocks" / "be.conf",
+            generate_starrocks_be_conf(settings),
+        ))
+
+    # docker-compose.override.yml (tablespace volumes / SR multi-disk)
     if "tablespaces" in settings:
         override_content = generate_docker_compose_override(settings)
         if override_content:

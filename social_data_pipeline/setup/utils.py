@@ -298,6 +298,7 @@ def get_source_profiles(source_name):
         "postgres.yaml": "postgres_ingest",
         "postgres_ml.yaml": "postgres_ml",
         "mongo.yaml": "mongo_ingest",
+        "starrocks.yaml": "sr_ingest",
     }
 
     profiles = []
@@ -337,6 +338,16 @@ def load_db_setup():
             result["databases"].append("mongo")
             if mongo_config.get("auth"):
                 result["mongo_auth"] = True
+        except (OSError, yaml.YAMLError):
+            pass
+
+    starrocks_path = DB_CONFIG_DIR / "starrocks.yaml"
+    if starrocks_path.exists():
+        try:
+            sr_config = yaml.safe_load(starrocks_path.read_text()) or {}
+            result["databases"].append("starrocks")
+            if sr_config.get("auth"):
+                result["starrocks_auth"] = True
         except (OSError, yaml.YAMLError):
             pass
 
