@@ -6,6 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![MongoDB 8](https://img.shields.io/badge/MongoDB-8-47A248.svg?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![StarRocks](https://img.shields.io/badge/StarRocks-OLAP-FF6D00.svg?logo=starrocks&logoColor=white)](https://www.starrocks.io/)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![ONNX](https://img.shields.io/badge/ONNX-Runtime-005CED.svg?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
@@ -18,7 +19,7 @@ A researcher-focused pipeline for processing, classifying, and ingesting large-s
 
 ```bash
 # Configure databases
-python sdp.py db setup                      # Configure PostgreSQL/MongoDB (one-time)
+python sdp.py db setup                      # Configure databases (one-time)
 python sdp.py db start                      # Start database(s)
 
 # Process and ingest data
@@ -63,6 +64,7 @@ python sdp.py source error-logs             # Show error details for failed data
 - **Modular classification** — CPU-based (Lingua) and GPU-based (transformers) with multi-GPU parallelization and language filtering
 - **PostgreSQL ingestion** of parsed files with finetuned settings and duplicate handling
 - **MongoDB ingestion** of raw JSON, CSV, and Parquet directly after extraction, for raw data inspection
+- **StarRocks ingestion** via the StarRocks OLAP engine for high-performance analytical queries
 - **Optional authentication** with admin and read-only database users
 - **MCP servers** for PostgreSQL and MongoDB, exposing read-only databases to AI tools (Claude Desktop, VS Code, Cursor)
 
@@ -88,8 +90,9 @@ flowchart TB
         direction LR
         PG[(PostgreSQL)]
         MONGO[(MongoDB)]
+        SR[(StarRocks)]
         MCP{{MCP servers}}
-        PG & MONGO -.-> MCP
+        PG & MONGO & SR -.-> MCP
     end
 
     RAW -->|parse| PARSED
@@ -120,11 +123,11 @@ flowchart TB
 #### 1. Configure
 
 ```bash
-python sdp.py db setup              # Configure databases (PostgreSQL, MongoDB — one-time)
+python sdp.py db setup              # Configure databases (PostgreSQL, MongoDB, StarRocks — one-time)
 python sdp.py source add reddit     # Add a data source (interactive setup)
 ```
 
-`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, and `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
+`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration), and StarRocks `fe.conf`/`be.conf` (with FE/BE memory tuning). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
 
 For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). For manual configuration or to understand what each setting does, see the [Configuration Reference](docs/configuration.md).
 
@@ -177,17 +180,17 @@ python sdp.py <db|source|run> [options]
 
 | Command | Description |
 |---------|-------------|
-| `sdp.py db setup` | Configure databases (PostgreSQL, MongoDB, optional auth) — global, one-time |
+| `sdp.py db setup` | Configure databases (PostgreSQL, MongoDB, StarRocks, optional auth) — global, one-time |
 | `sdp.py db setup-mcp` | Configure MCP servers for AI tool access (ports, read-only mode) |
-| `sdp.py db start [service]` | Start services: `postgres\|mongo\|postgres-mcp\|mongo-mcp` (all if unspecified) |
-| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|postgres-mcp\|mongo-mcp` (all if unspecified) |
+| `sdp.py db start [service]` | Start services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp` (all if unspecified) |
+| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp` (all if unspecified) |
 | `sdp.py db status` | Show database config, health, and MCP status |
 | `sdp.py db recover-password` | Reset database admin password (requires auth enabled) |
-| `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes (PostgreSQL and/or MongoDB) |
+| `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes |
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
 | `sdp.py db unsetup-mcp` | Remove MCP configuration and stop MCP containers |
 
-`db setup` generates `.env`, `config/db/*.yaml`, and `config/postgres/postgresql.local.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and MCP credential files. Database deletion in `db unsetup` requires two separate confirmations.
+`db setup` generates `.env`, `config/db/*.yaml`, `config/postgres/postgresql.local.conf`, and `config/starrocks/{fe,be}.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and MCP credential files. Database deletion in `db unsetup` requires two separate confirmations.
 
 ### Source Management (`sdp.py source`)
 
@@ -231,6 +234,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 | `postgres_ml` | Ingest ML outputs into PostgreSQL | Classifier output files | PostgreSQL tables |
 | `mongo` | MongoDB database server | — | — |
 | `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV/Parquet | MongoDB collections |
+| `starrocks` | StarRocks OLAP database server | — | — |
 
 > [!NOTE]
 > GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). All profiles track progress and resume automatically — rerun any profile safely without reprocessing completed files.
@@ -238,7 +242,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 For detailed configuration and algorithm documentation, see the per-profile docs:
 - [Parse Profile](docs/profiles/parse.md)
 - [Classification Profiles (lingua / ml)](docs/profiles/classification.md)
-- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest)](docs/profiles/database.md)
+- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest / starrocks)](docs/profiles/database.md)
 
 ## ◾ Platform Support
 

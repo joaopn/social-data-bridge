@@ -30,6 +30,10 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `MONGO_DATA_PATH` | MongoDB data directory | `./data/database/mongo` |
 | `MONGO_PORT` | MongoDB port exposed to host | `27017` |
 | `MONGO_CACHE_SIZE_GB` | MongoDB WiredTiger cache size in GB | `2` |
+| `STARROCKS_DATA_PATH` | StarRocks data directory | `./data/database/starrocks` |
+| `STARROCKS_PORT` | StarRocks MySQL protocol port | `9030` |
+| `STARROCKS_FE_HTTP_PORT` | StarRocks FE HTTP port (admin, Stream Load) | `8030` |
+| `STARROCKS_MEM_LIMIT` | StarRocks container memory limit | `0` (unlimited) |
 | `HF_HOME` | HuggingFace model cache directory | (system default) |
 | `HF_TOKEN` | HuggingFace authentication token | (none) |
 | `CLASSIFIER` | Run a single GPU classifier by name | (all enabled) |
@@ -64,6 +68,7 @@ config/
 ├── db/                            # Global database config (written by sdp db setup)
 │   ├── postgres.yaml             # Port, name, tablespaces, auth flag
 │   ├── mongo.yaml                # Port, cache size, auth flag
+│   ├── starrocks.yaml            # Port, FE/BE memory, storage paths, auth flag
 │   └── mcp.yaml                  # MCP server config (written by sdp db setup-mcp)
 ├── sources/                       # Per-source config (written by sdp source add)
 │   └── <name>/                   # One directory per source
@@ -96,6 +101,9 @@ config/
 │   ├── pipeline.yaml             # MongoDB ingestion settings
 │   ├── mongod.conf               # MongoDB server configuration
 │   └── entrypoint-wrapper.sh     # Container entrypoint (auth migration)
+├── starrocks/
+│   ├── fe.conf                   # StarRocks FE config (written by sdp db setup)
+│   └── be.conf                   # StarRocks BE config (written by sdp db setup)
 ├── mcp/
 │   ├── entrypoint-postgres.sh    # PostgreSQL MCP entrypoint
 │   └── entrypoint-mongo.sh       # MongoDB MCP entrypoint

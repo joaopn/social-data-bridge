@@ -86,6 +86,8 @@ def _get_configured_db_services():
         services.append("postgres")
     if (db_dir / "mongo.yaml").exists():
         services.append("mongo")
+    if (db_dir / "starrocks.yaml").exists():
+        services.append("starrocks")
     return services
 
 
@@ -425,6 +427,19 @@ def cmd_db_status(args):
         state_dir = mongo_data / "state_tracking"
         _print_ingestion_state(state_dir, "_mongo_", "mongo")
 
+    # StarRocks
+    if "starrocks" in configured:
+        sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+        sr_data = Path(sr_data_path)
+        if not sr_data.is_absolute():
+            sr_data = ROOT / sr_data
+
+        print(f"\n  StarRocks:")
+        print(f"    Path:      {sr_data_path}")
+        print(f"    Port:      {env.get('STARROCKS_PORT', '9030')}")
+        print(f"    FE HTTP:   {env.get('STARROCKS_FE_HTTP_PORT', '8030')}")
+        print(f"    Running:   {'yes' if 'starrocks' in running_services else 'no'}")
+
     # MCP servers
     mcp_config = _load_mcp_config()
     if mcp_config:
@@ -605,9 +620,12 @@ def _print_ingestion_state(state_dir, label_split, db_type):
 DB_GENERATED_FILES = [
     "config/db/postgres.yaml",
     "config/db/mongo.yaml",
+    "config/db/starrocks.yaml",
     "config/db/mcp.yaml",
     "config/postgres/postgresql.local.conf",
     "config/postgres/pg_hba.local.conf",
+    "config/starrocks/fe.conf",
+    "config/starrocks/be.conf",
     "docker-compose.override.yml",
     ".env",
 ]
@@ -758,8 +776,45 @@ def cmd_db_unsetup(args):
                 print("  MongoDB data removal skipped.")
             print()
 
+    # --- StarRocks data removal ---
+    sr_data_path = env.get("STARROCKS_DATA_PATH", "")
+    sr_removed = False
+
+    if sr_data_path:
+        sr_data = Path(sr_data_path)
+        if not sr_data.is_absolute():
+            sr_data = ROOT / sr_data
+        if sr_data.exists():
+            print(f"  StarRocks data directory: {sr_data_path}")
+            print()
+            confirm1 = input("  Delete the StarRocks data? This CANNOT be undone [y/N]: ").strip().lower()
+            if confirm1 in ("y", "yes"):
+                confirm2 = input("  Are you SURE? All StarRocks data will be permanently lost [y/N]: ").strip().lower()
+                if confirm2 in ("y", "yes"):
+                    print()
+                    print("  Stopping StarRocks...")
+                    docker_compose("--profile", "starrocks", "down", "--timeout", "30")
+                    print("  Fixing directory permissions...")
+                    sr_parent = sr_data.resolve().parent
+                    uid_gid = f"{os.getuid()}:{os.getgid()}"
+                    subprocess.run(
+                        ["docker", "run", "--rm",
+                         "-v", f"{sr_parent}:/dbparent",
+                         "starrocks/allin1-ubuntu", "chown", "-R", uid_gid, "/dbparent"],
+                        cwd=ROOT,
+                    )
+                    print(f"  Removing {sr_data}...")
+                    shutil.rmtree(sr_data)
+                    sr_removed = True
+                    print("  StarRocks data removed.")
+                else:
+                    print("  StarRocks data removal skipped.")
+            else:
+                print("  StarRocks data removal skipped.")
+            print()
+
     # --- Remove RO credentials from data directories ---
-    for data_path_str in (pgdata_path, mongo_data_path):
+    for data_path_str in (pgdata_path, mongo_data_path, sr_data_path):
         if not data_path_str:
             continue
         dp = Path(data_path_str)
@@ -807,6 +862,12 @@ def cmd_db_unsetup(args):
             mongo_data = ROOT / mongo_data
         if mongo_data.exists():
             data_paths["MongoDB data"] = mongo_data_path
+    if not sr_removed and sr_data_path:
+        sr_data = Path(sr_data_path)
+        if not sr_data.is_absolute():
+            sr_data = ROOT / sr_data
+        if sr_data.exists():
+            data_paths["StarRocks data"] = sr_data_path
 
     if data_paths:
         print()
@@ -1333,6 +1394,8 @@ def cmd_db_create_indexes(args):
         source_dbs.append("postgres")
     if "mongo_ingest" in source_profiles:
         source_dbs.append("mongo")
+    if "sr_ingest" in source_profiles:
+        source_dbs.append("starrocks")
     available = [db for db in configured if db in source_dbs]
 
     if not available:
@@ -1340,18 +1403,19 @@ def cmd_db_create_indexes(args):
         return 1
 
     # Determine which DB(s) to target
+    db_labels = {"postgres": "PostgreSQL", "mongo": "MongoDB", "starrocks": "StarRocks"}
     if len(available) == 1:
         targets = available
-        db_label = "PostgreSQL" if "postgres" in available else "MongoDB"
-        print(f"\n  Database: {db_label}")
+        print(f"\n  Database: {db_labels.get(available[0], available[0])}")
     else:
-        choice = ask_choice("Which database?", ["PostgreSQL", "MongoDB", "Both"], default="Both", tag="sdp_idx_database")
-        if choice == "PostgreSQL":
-            targets = ["postgres"]
-        elif choice == "MongoDB":
-            targets = ["mongo"]
-        else:
+        choices = [db_labels[db] for db in available] + ["All"]
+        choice = ask_choice("Which database?", choices, default="All", tag="sdp_idx_database")
+        if choice == "All":
             targets = available
+        else:
+            # Map label back to key
+            label_to_key = {v: k for k, v in db_labels.items()}
+            targets = [label_to_key[choice]]
 
     # Prompt for password if needed
     env = load_env()
@@ -1369,6 +1433,9 @@ def cmd_db_create_indexes(args):
 
     if "mongo" in targets:
         mongo_created = _interactive_mongo_indexes(source, platform_config, password)
+
+    if "starrocks" in targets:
+        print("\n  StarRocks index creation is not yet available (requires ingestion module).")
 
     # Summary
     total = sum(len(v) for v in pg_created.values()) + sum(len(v) for v in mongo_created.values())
@@ -2010,13 +2077,15 @@ def build_parser():
 
     db_start_p = db_sub.add_parser("start", help="Start database services")
     db_start_p.add_argument("service", nargs="?",
-                            choices=["postgres", "mongo", "postgres-mcp", "mongo-mcp"],
+                            choices=["postgres", "mongo", "starrocks",
+                                     "postgres-mcp", "mongo-mcp"],
                             help="Specific service (default: all configured)")
     db_start_p.set_defaults(func=cmd_db_start)
 
     db_stop_p = db_sub.add_parser("stop", help="Stop database services")
     db_stop_p.add_argument("service", nargs="?",
-                           choices=["postgres", "mongo", "postgres-mcp", "mongo-mcp"],
+                           choices=["postgres", "mongo", "starrocks",
+                                    "postgres-mcp", "mongo-mcp"],
                            help="Specific service (default: all configured)")
     db_stop_p.set_defaults(func=cmd_db_stop)
 
