@@ -38,6 +38,14 @@ Runs a PostgreSQL 18 server using a custom Docker image (`Dockerfile.postgres`) 
 
 The Docker entrypoint automatically loads local override files if present.
 
+### Export Volume
+
+The host directory `DB_EXPORT_PATH` (default: `./data/export`) is bind-mounted at `/export` inside the container. Use this path in SQL queries to write results to the host:
+
+```sql
+COPY (SELECT * FROM reddit.submissions LIMIT 100) TO '/export/sample.csv' WITH CSV HEADER;
+```
+
 ### Tuning Recommendations
 
 Use [PGTune](https://pgtune.leopard.in.ua/) to generate optimal settings:
@@ -360,6 +368,10 @@ The `mongod.conf` configures:
 - **Diagnostics disabled** — reduces disk noise
 
 WiredTiger cache size is controlled via the `MONGO_CACHE_SIZE_GB` environment variable (default: 2 GB), passed as a CLI flag in docker-compose.
+
+### Export Volume
+
+The host directory `DB_EXPORT_PATH` (default: `./data/export`) is bind-mounted at `/export` inside the container. Use this path with `mongoexport` or `mongosh` to write results to the host.
 
 ---
 

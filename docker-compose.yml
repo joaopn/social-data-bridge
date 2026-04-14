@@ -122,6 +122,7 @@ services:
       - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ${PGDATA_PATH:-./data/database/postgres}:/data/database
+      - ${DB_EXPORT_PATH:-./data/export}:/export
       - ./config/postgres:/etc/postgresql/config:ro
     entrypoint: ["bash", "/etc/postgresql/config/entrypoint-wrapper.sh"]
     healthcheck:
@@ -193,6 +194,7 @@ services:
     volumes:
       - ${MONGO_DATA_PATH:-./data/database/mongo}/db:/data/db
       - ${MONGO_DATA_PATH:-./data/database/mongo}:/data/mongo:ro
+      - ${DB_EXPORT_PATH:-./data/export}:/export
       - ./config/mongo:/etc/mongo/config:ro
     environment:
       MONGO_INITDB_ROOT_USERNAME: ${MONGO_ADMIN_USER:-}

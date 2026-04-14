@@ -296,6 +296,14 @@ def main():
         print(f"    URL: http://<host>:{mongo_port}/mcp")
         print()
 
+    export_path = env_vars.get("DB_EXPORT_PATH")
+    if export_path:
+        print("  Export:")
+        print(f"    Database containers mount {export_path} at /export (read-write).")
+        print(f"    Use /export in SQL COPY or mongoexport to write results to the host.")
+        print(f"    Example: COPY (SELECT * FROM table) TO '/export/results.csv' WITH CSV HEADER;")
+        print()
+
     print("  Example VS Code mcp.json:")
     print()
     servers = {}

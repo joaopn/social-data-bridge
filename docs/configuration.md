@@ -30,6 +30,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `MONGO_DATA_PATH` | MongoDB data directory | `./data/database/mongo` |
 | `MONGO_PORT` | MongoDB port exposed to host | `27017` |
 | `MONGO_CACHE_SIZE_GB` | MongoDB WiredTiger cache size in GB | `2` |
+| `DB_EXPORT_PATH` | Host directory bind-mounted at `/export` in database containers for SQL COPY, mongoexport, etc. | `./data/export` |
 | `HF_HOME` | HuggingFace model cache directory | (system default) |
 | `HF_TOKEN` | HuggingFace authentication token | (none) |
 | `CLASSIFIER` | Run a single GPU classifier by name | (all enabled) |

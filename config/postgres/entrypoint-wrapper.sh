@@ -17,6 +17,9 @@ if [ -d /data/tablespace ]; then
     done
 fi
 
+# --- Export directory permissions ---
+[ -d /export ] && chown -R postgres:postgres /export
+
 # --- PostgreSQL 18 PGDATA path ---
 PGDATA=/var/lib/postgresql/18/docker
 

@@ -85,6 +85,8 @@ def _load_existing_db_config():
         existing["db_name"] = env["DB_NAME"]
     if env.get("MONGO_DATA_PATH"):
         existing["mongo_data_path"] = env["MONGO_DATA_PATH"]
+    if env.get("DB_EXPORT_PATH"):
+        existing["export_path"] = env["DB_EXPORT_PATH"]
     for env_key, setting_key in [
         ("POSTGRES_PORT", "pg_port"),
         ("MONGO_PORT", "mongo_port"),
@@ -192,6 +194,16 @@ def run_questionnaire(hw):
         settings["pgdata_path"] = ask("PostgreSQL data path", existing.get("pgdata_path", f"{data_path}/database/postgres"), tag="db_pgdata_path")
     if has_mongo:
         settings["mongo_data_path"] = ask("MongoDB data path", existing.get("mongo_data_path", f"{data_path}/database/mongo"), tag="db_mongo_data_path")
+
+    print()
+    print("  Host directory bind-mounted into database containers at /export.")
+    print("  Use this path in SQL COPY, mongoexport, etc. to write results to the host.")
+    print()
+    settings["export_path"] = ask(
+        "Export path",
+        existing.get("export_path", f"{data_path}/export"),
+        tag="db_export_path",
+    )
 
     # ---- PostgreSQL ----
     if has_postgres:
@@ -389,6 +401,13 @@ def generate_env(settings):
         if settings.get("mongo_mem_limit"):
             lines.append(f"MONGO_MEM_LIMIT={settings['mongo_mem_limit']}g")
 
+    if "export_path" in settings:
+        lines += [
+            "",
+            "# ===== EXPORT =====",
+            f"DB_EXPORT_PATH={settings['export_path']}",
+        ]
+
     if settings.get("auth_enabled"):
         lines += [
             "",
@@ -567,6 +586,8 @@ def print_summary(settings, files_to_write):
 
     data_path = settings.get("data_path", "./data")
     print(f"  Data path:   {data_path}")
+    if "export_path" in settings:
+        print(f"  Export path: {settings['export_path']}  (-> /export in containers)")
 
     databases = settings["databases"]
     print(f"  Databases:   {', '.join(databases)}")
@@ -715,6 +736,14 @@ def main():
 
     print()
     write_files(files_to_write)
+
+    # Create export directory on host (avoids Docker creating it as root)
+    if "export_path" in settings:
+        qo_path = Path(settings["export_path"])
+        if not qo_path.is_absolute():
+            qo_path = ROOT / qo_path
+        qo_path.mkdir(parents=True, exist_ok=True)
+        print(f"  Created:   {qo_path}")
 
     # Write RO user credentials to database data volumes
     if settings.get("auth_enabled") and settings.get("ro_username"):

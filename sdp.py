@@ -439,6 +439,13 @@ def cmd_db_status(args):
         state_dir = mongo_data / "state_tracking"
         _print_ingestion_state(state_dir, "_mongo_", "mongo")
 
+    # Export path
+    export_path = env.get("DB_EXPORT_PATH")
+    if export_path:
+        print(f"\n  Export:")
+        print(f"    Host path:      {export_path}")
+        print(f"    Container path: /export")
+
     # MCP servers
     mcp_config = _load_mcp_config()
     if mcp_config:
