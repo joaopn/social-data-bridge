@@ -40,7 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "config"
 
-VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest"]
+VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest", "sr_ml"]
 
 # Map profile names to docker compose service names (only where they differ)
 PROFILE_SERVICE_MAP = {
@@ -49,6 +49,7 @@ PROFILE_SERVICE_MAP = {
     "postgres_ml": "postgres-ml",
     "mongo_ingest": "mongo-ingest",
     "sr_ingest": "sr-ingest",
+    "sr_ml": "sr-ml",
 }
 
 
@@ -1524,7 +1525,7 @@ def cmd_db_create_indexes(args):
         source_dbs.append("postgres")
     if "mongo_ingest" in source_profiles:
         source_dbs.append("mongo")
-    if "sr_ingest" in source_profiles:
+    if any(p in source_profiles for p in ("sr_ingest", "sr_ml")):
         source_dbs.append("starrocks")
     available = [db for db in configured if db in source_dbs]
 
@@ -1844,6 +1845,16 @@ def cmd_source_status(args):
             state_dir = mongo_data / "state_tracking"
             _print_source_ingestion_state(state_dir, source, "mongo")
 
+        has_starrocks = any(p.startswith("sr_") for p in profiles)
+        if has_starrocks:
+            sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+            sr_data = Path(sr_data_path)
+            if not sr_data.is_absolute():
+                sr_data = ROOT / sr_data
+            state_dir = sr_data / "state_tracking"
+            _print_source_ingestion_state(state_dir, source, "sr_ingest")
+            _print_source_ingestion_state(state_dir, source, "sr_ml")
+
     print()
     return 0
 
@@ -1900,7 +1911,7 @@ def _print_source_ingestion_state(state_dir, source, db_type):
 # sdp source error-logs
 # ============================================================================
 
-INGESTION_PROFILES = ["postgres_ingest", "postgres_ml", "mongo_ingest"]
+INGESTION_PROFILES = ["postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest", "sr_ml"]
 
 
 def cmd_source_error_logs(args):
@@ -1949,6 +1960,12 @@ def cmd_source_error_logs(args):
                 if not pgdata.is_absolute():
                     pgdata = ROOT / pgdata
                 state_dir = pgdata / "state_tracking"
+            elif profile.startswith("sr_"):
+                sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+                sr_data = Path(sr_data_path)
+                if not sr_data.is_absolute():
+                    sr_data = ROOT / sr_data
+                state_dir = sr_data / "state_tracking"
             else:
                 mongo_data_path = env.get("MONGO_DATA_PATH", "./data/database/mongo")
                 mongo_data = Path(mongo_data_path)
@@ -2153,6 +2170,7 @@ def cmd_run(args):
         "postgres_ml": "POSTGRES_AUTH_ENABLED",
         "mongo_ingest": "MONGO_AUTH_ENABLED",
         "sr_ingest": "STARROCKS_AUTH_ENABLED",
+        "sr_ml": "STARROCKS_AUTH_ENABLED",
     }
     auth_key = _profile_auth.get(profile)
     if auth_key and load_env().get(auth_key) == "true":

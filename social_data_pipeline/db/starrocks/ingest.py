@@ -273,3 +273,163 @@ def create_indexes(table, database, fields, host, port, user, password=None,
                         database, table, [f for f, _ in remaining])
 
     return created
+
+
+def _arrow_type_to_sr_sql(arrow_type) -> str:
+    """Map a PyArrow type to a StarRocks SQL type."""
+    import pyarrow as pa
+    if pa.types.is_integer(arrow_type):
+        if arrow_type.bit_width <= 32:
+            return 'INT'
+        return 'BIGINT'
+    if pa.types.is_floating(arrow_type):
+        if arrow_type.bit_width <= 32:
+            return 'FLOAT'
+        return 'DOUBLE'
+    if pa.types.is_boolean(arrow_type):
+        return 'BOOLEAN'
+    return 'STRING'
+
+
+def _infer_sr_type(values: list) -> tuple:
+    """Infer StarRocks SQL type from a list of sample string values.
+
+    Priority: INT > FLOAT > BOOLEAN > STRING.
+
+    Returns:
+        Tuple of (sr_type, has_empty)
+    """
+    has_int = False
+    has_float = False
+    has_bool = False
+    has_empty = False
+
+    for val in values:
+        if not val or val == "":
+            has_empty = True
+            continue
+
+        try:
+            int(val)
+            has_int = True
+            continue
+        except ValueError:
+            pass
+
+        try:
+            float(val)
+            has_float = True
+            continue
+        except ValueError:
+            pass
+
+        if val.lower() in ('true', 'false'):
+            has_bool = True
+            continue
+
+        return ('STRING', has_empty)
+
+    if has_float:
+        return ('FLOAT', has_empty)
+    if has_int:
+        return ('INT', has_empty)
+    if has_bool:
+        return ('BOOLEAN', has_empty)
+    return ('STRING', has_empty)
+
+
+def infer_classifier_schema(file_path, n_rows=1000, column_overrides=None):
+    """Infer column names and StarRocks types from a classifier output file.
+
+    Parquet: reads typed schema from file metadata (no sampling needed).
+    CSV: samples N rows and infers types (integer > float > boolean > string).
+
+    Args:
+        file_path: Path to CSV or Parquet file
+        n_rows: Number of rows to sample for type inference (CSV only)
+        column_overrides: Optional dict of column_name -> sr_type overrides
+
+    Returns:
+        Tuple of (column_list, column_types_dict, nullable_cols)
+    """
+    column_overrides = column_overrides or {}
+
+    if file_path.endswith('.parquet'):
+        import pyarrow.parquet as pq
+        schema = pq.read_schema(file_path)
+        columns = [field.name for field in schema]
+        types = {}
+        for field in schema:
+            if field.name in column_overrides:
+                types[field.name] = column_overrides[field.name]
+            else:
+                types[field.name] = _arrow_type_to_sr_sql(field.type)
+        return columns, types, []
+
+    import csv
+
+    with open(file_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        header = reader.fieldnames
+
+        if not header:
+            raise ValueError(f"CSV file has no header: {file_path}")
+
+        all_cols = list(header)
+        samples: Dict[str, list] = {col: [] for col in all_cols}
+
+        for i, row in enumerate(reader):
+            if i >= n_rows:
+                break
+            for col in samples:
+                samples[col].append(row.get(col, ""))
+
+    column_types = {}
+    nullable_cols = []
+    for col in all_cols:
+        if col in column_overrides:
+            column_types[col] = column_overrides[col]
+        else:
+            sr_type, has_empty = _infer_sr_type(samples[col])
+            column_types[col] = sr_type
+            if has_empty and sr_type != 'STRING':
+                nullable_cols.append(col)
+
+    return all_cols, column_types, nullable_cols
+
+
+def get_classifier_create_table_query(table, database, column_list, column_types, pk_column=None):
+    """Build CREATE TABLE for a classifier output table.
+
+    Uses pre-inferred column types (from infer_classifier_schema) rather than
+    platform_config field_types. No foreign key constraint (SR FKs are
+    non-enforced optimizer hints only).
+    """
+    if pk_column:
+        ordered_cols = [pk_column] + [c for c in column_list if c != pk_column]
+    else:
+        ordered_cols = list(column_list)
+
+    col_defs = []
+    for col in ordered_cols:
+        col_type = column_types.get(col, 'STRING')
+        not_null = " NOT NULL" if col == pk_column else ""
+        col_defs.append(f"    `{col}` {col_type}{not_null}")
+
+    columns_sql = ",\n".join(col_defs)
+
+    if pk_column:
+        query = (
+            f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (\n"
+            f"{columns_sql}\n"
+            f") PRIMARY KEY (`{pk_column}`)\n"
+            f"DISTRIBUTED BY HASH(`{pk_column}`)\n"
+            f"PROPERTIES(\"enable_persistent_index\" = \"true\")"
+        )
+    else:
+        query = (
+            f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (\n"
+            f"{columns_sql}\n"
+            f") DISTRIBUTED BY RANDOM"
+        )
+    return query

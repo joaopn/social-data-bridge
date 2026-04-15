@@ -217,9 +217,9 @@ python sdp.py <db|source|run> [options]
 | `sdp.py run <profile> --source <name>` | Run for a specific source (auto-selects if only one configured) |
 | `sdp.py run <profile> --build` | Rebuild the Docker image before running |
 
-Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`. `--build` rebuilds the Docker image before running (needed after code or dependency changes). The global `--tag` flag (e.g. `python sdp.py --tag db setup`) prefixes each interactive prompt with a `[tag_id]` for automation tools like pexpect.
+Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`, `sr_ingest`, `sr_ml`. `--build` rebuilds the Docker image before running (needed after code or dependency changes). The global `--tag` flag (e.g. `python sdp.py --tag db setup`) prefixes each interactive prompt with a `[tag_id]` for automation tools like pexpect.
 
-`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database. `source error-logs` shows the full error details and relevant mongoimport log output for failed datasets. Use `--profile` to filter by ingestion profile (`postgres_ingest`, `postgres_ml`, `mongo_ingest`).
+`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database. `source error-logs` shows the full error details and relevant mongoimport log output for failed datasets. Use `--profile` to filter by ingestion profile (`postgres_ingest`, `postgres_ml`, `mongo_ingest`, `sr_ingest`, `sr_ml`).
 
 </details>
 
@@ -237,6 +237,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 | `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV/Parquet | MongoDB collections |
 | `starrocks` | StarRocks OLAP database server | — | — |
 | `sr_ingest` | Ingest parsed files into StarRocks | Parsed files (or Lingua-enriched) | StarRocks tables |
+| `sr_ml` | Ingest ML outputs into StarRocks | Classifier output files | StarRocks tables |
 
 > [!NOTE]
 > GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). All profiles track progress and resume automatically — rerun any profile safely without reprocessing completed files.
@@ -244,7 +245,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 For detailed configuration and algorithm documentation, see the per-profile docs:
 - [Parse Profile](docs/profiles/parse.md)
 - [Classification Profiles (lingua / ml)](docs/profiles/classification.md)
-- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest / starrocks / sr_ingest)](docs/profiles/database.md)
+- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest / starrocks / sr_ingest / sr_ml)](docs/profiles/database.md)
 
 ## ◾ Platform Support
 

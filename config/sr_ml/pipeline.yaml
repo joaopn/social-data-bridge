@@ -1,0 +1,14 @@
+# StarRocks ML classifier ingestion profile configuration
+# Ingests ML classifier outputs into StarRocks tables
+
+database:
+  host: starrocks          # Docker service name
+  port: 9030               # MySQL protocol port, override with STARROCKS_PORT
+  user: root               # Default StarRocks user
+
+processing:
+  data_types: []           # Override via platform config
+  check_duplicates: true   # Use merge_condition for conditional upsert
+  parallel_ingestion: true # Ingest submissions and comments concurrently
+  type_inference_rows: 1000  # Rows to sample for CSV column type inference
+  watch_interval: 0        # Check for new files every N minutes (0 = run once)
