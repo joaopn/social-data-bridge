@@ -5,11 +5,19 @@ The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.ta
 ## Running
 
 ```bash
-python sdp.py run parse [--source <name>]
+python sdp.py run parse [--source <name>] [--filter <pattern>]
 ```
 
 > [!NOTE]
 > The platform and source are configured during `python sdp.py source add <name>`. When only one source is configured, `--source` is auto-selected.
+
+Use `--filter` (`-f`) to restrict processing to files matching a pattern (fnmatch glob on file ID). This is useful when adding new data to an existing source — parse only the new files without reprocessing everything:
+
+```bash
+python sdp.py run parse --source reddit --filter "*2024*"       # All 2024 months
+python sdp.py run parse --source reddit --filter "RS_2024-*"    # 2024 submissions only
+python sdp.py run parse --source reddit --filter "RC_2024-06"   # Single file
+```
 
 ---
 

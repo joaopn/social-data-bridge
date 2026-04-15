@@ -6,13 +6,19 @@ The `lingua` and `ml` profiles run classifiers on parsed files (Parquet or CSV).
 
 ```bash
 # CPU language detection
-python sdp.py run lingua [--source <name>]
+python sdp.py run lingua [--source <name>] [--filter <pattern>]
 
 # GPU transformer classifiers (requires NVIDIA GPU)
-python sdp.py run ml [--source <name>]
+python sdp.py run ml [--source <name>] [--filter <pattern>]
 
 # Run a single GPU classifier
 CLASSIFIER=toxic_roberta docker compose --profile ml up
+```
+
+Use `--filter` (`-f`) to restrict processing to files matching a pattern (fnmatch glob on file ID). The classifier's own skip logic (existing output files) still applies — `--filter` narrows the input set before that check:
+
+```bash
+python sdp.py run lingua --source reddit --filter "*2024*"    # Only classify 2024 months
 ```
 
 ---

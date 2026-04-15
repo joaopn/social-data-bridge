@@ -23,7 +23,7 @@ Usage:
     sdp.py source status [name]              Show source processing/ingestion status
     sdp.py source error-logs [name]          Show database ingestion error logs
 
-    sdp.py run <profile> [--source <name>]   Run pipeline for a source (--build to rebuild)
+    sdp.py run <profile> [--source <name>]   Run pipeline for a source (--build to rebuild, --filter to select files)
 
     sdp.py setup                             Legacy: full interactive setup (core + classifiers + platform)
 """
@@ -1991,6 +1991,10 @@ def cmd_run(args):
             data_dir = ROOT / data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
 
+    # Pass file filter if provided
+    if args.filter:
+        env_overrides["FILE_FILTER"] = args.filter
+
     # Set env vars for docker compose
     for key, value in env_overrides.items():
         os.environ[key] = value
@@ -2002,6 +2006,8 @@ def cmd_run(args):
     compose_args.append(service)
 
     print(f"  Source: {source} (platform: {platform})")
+    if args.filter:
+        print(f"  Filter: {args.filter}")
     result = docker_compose(*compose_args)
     return result.returncode
 
@@ -2106,6 +2112,8 @@ def build_parser():
     run_parser.add_argument("--source", "-s", dest="source",
                             help="Source name (auto-selects if only one configured)")
     run_parser.add_argument("--build", action="store_true", help="Rebuild Docker image")
+    run_parser.add_argument("--filter", "-f", dest="filter",
+                            help="Filter files by pattern (fnmatch glob on file ID, e.g. '*2024*', 'RS_2024-*')")
     run_parser.set_defaults(func=cmd_run)
 
     return parser

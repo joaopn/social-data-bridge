@@ -12,6 +12,7 @@ Platform selection via PLATFORM env var (default: reddit).
 import os
 import re
 import time
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -373,6 +374,14 @@ def run_pipeline(config_dir: str = "/app/config", watch_mode: bool = False):
         (p, fid, dt) for p, fid, dt in parquet_files
         if not states[dt].is_processed(fid)
     ]
+
+    # Apply file filter if FILE_FILTER env var is set (fnmatch on file ID)
+    file_filter = os.environ.get('FILE_FILTER', '')
+    if file_filter:
+        print(f"[sdp] Applying filter: {file_filter}")
+        pending_zst_files = [(p, dt) for p, dt in pending_zst_files if fnmatch(get_file_identifier(p), file_filter)]
+        pending_json_files = [(p, fid, dt) for p, fid, dt in pending_json_files if fnmatch(fid, file_filter)]
+        pending_parquet_files = [(p, fid, dt) for p, fid, dt in pending_parquet_files if fnmatch(fid, file_filter)]
 
     print(f"[sdp] {len(pending_json_files)} unprocessed JSON files to ingest")
     if pending_parquet_files:

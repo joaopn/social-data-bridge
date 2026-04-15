@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import time
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Dict, Tuple
 
@@ -321,6 +322,14 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Filter out parquet input files that already have parsed output
     pending_parquet = [(p, fid, dt) for p, fid, dt in parquet_input_files if fid not in existing_parsed_ids]
 
+    # Apply file filter if FILE_FILTER env var is set (fnmatch on file ID)
+    file_filter = os.environ.get('FILE_FILTER', '')
+    if file_filter:
+        print(f"[sdp] Applying filter: {file_filter}")
+        pending_dumps = [(p, dt) for p, dt in pending_dumps if fnmatch(get_file_identifier(p), file_filter)]
+        pending_json = [(p, fid, dt) for p, fid, dt in pending_json if fnmatch(fid, file_filter)]
+        pending_parquet = [(p, fid, dt) for p, fid, dt in pending_parquet if fnmatch(fid, file_filter)]
+
     print(f"[sdp] Pending: {len(pending_dumps)} compressed, {len(pending_json)} JSON", end="")
     if pending_parquet:
         print(f", {len(pending_parquet)} parquet input")
@@ -371,6 +380,10 @@ def run_pipeline(config_dir: str = "/app/config"):
             expected_output = Path(parsed_dir) / data_type / f"{file_id}.{ext}"
             if not expected_output.exists():
                 files_to_parse.append((pq_path, file_id, data_type))
+
+    # Apply file filter to Phase 3 as well (list is rebuilt from re-detection)
+    if file_filter:
+        files_to_parse = [(p, fid, dt) for p, fid, dt in files_to_parse if fnmatch(fid, file_filter)]
 
     if files_to_parse:
         print("\n" + "="*60)

@@ -9,6 +9,7 @@ import re
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
@@ -257,10 +258,17 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
         parsed_files = detect_parsed_files(parsed_dir, data_types, file_format=file_format)
         print(f"[sdp] Found {len(parsed_files)} {ext.upper()} files")
 
+    # Apply file filter if FILE_FILTER env var is set (fnmatch on file ID)
+    file_filter = os.environ.get('FILE_FILTER', '')
+    if file_filter:
+        print(f"[sdp] Applying filter: {file_filter}")
+        parsed_files = [(p, fid, dt) for p, fid, dt in parsed_files if fnmatch(fid, file_filter)]
+        print(f"[sdp] After filter: {len(parsed_files)} files")
+
     if not parsed_files:
         print("\n[sdp] No input files found. Run 'parse' profile first" + ("; use 'lingua' for language detection." if use_lingua else "."))
         return
-    
+
     if not enabled_classifiers:
         print("\n[sdp] No classifiers enabled. Exiting.")
         return

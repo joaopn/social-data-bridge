@@ -48,6 +48,7 @@ services:
     environment:
       - PLATFORM=${PLATFORM:-reddit}
       - SOURCE=${SOURCE:-}
+      - FILE_FILTER=${FILE_FILTER:-}
       - PYTHONUNBUFFERED=1
 
   # ==========================================================================
@@ -62,6 +63,7 @@ services:
     environment:
       - PROFILE=lingua
       - SOURCE=${SOURCE:-}
+      - FILE_FILTER=${FILE_FILTER:-}
       - PYTHONUNBUFFERED=1
     volumes:
       - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
@@ -82,6 +84,7 @@ services:
       - PROFILE=ml
       - SOURCE=${SOURCE:-}
       - CLASSIFIER=${CLASSIFIER:-}
+      - FILE_FILTER=${FILE_FILTER:-}
       - PYTHONUNBUFFERED=1
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
@@ -145,6 +148,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PLATFORM=${PLATFORM:-reddit}
       - SOURCE=${SOURCE:-}
+      - FILE_FILTER=${FILE_FILTER:-}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - DB_NAME=${DB_NAME:-datasets}
       - PGDATA_PATH=/data/database
@@ -171,6 +175,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PLATFORM=${PLATFORM:-reddit}
       - SOURCE=${SOURCE:-}
+      - FILE_FILTER=${FILE_FILTER:-}
       - POSTGRES_PORT=${POSTGRES_PORT:-5432}
       - DB_NAME=${DB_NAME:-datasets}
       - PGDATA_PATH=/data/database
@@ -273,6 +278,7 @@ services:
       - PYTHONUNBUFFERED=1
       - PLATFORM=${PLATFORM:-reddit}
       - SOURCE=${SOURCE:-}
+      - FILE_FILTER=${FILE_FILTER:-}
       - MONGO_PORT=${MONGO_PORT:-27017}
       - MONGO_DATA_PATH=/data/mongo
       - MONGO_ADMIN_USER=${MONGO_ADMIN_USER:-}

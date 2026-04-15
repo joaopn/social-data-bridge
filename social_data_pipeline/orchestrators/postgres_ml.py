@@ -10,6 +10,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
@@ -198,6 +199,10 @@ def run_pipeline(config_dir: str = "/app/config"):
     if table_tablespaces:
         print(f"[sdp] Tablespace assignments: {table_tablespaces}")
 
+    file_filter = os.environ.get('FILE_FILTER', '')
+    if file_filter:
+        print(f"[sdp] File filter: {file_filter}")
+
     # Ensure database and schema exist
     ensure_database_exists(
         dbname=db_config['name'],
@@ -288,6 +293,10 @@ def run_pipeline(config_dir: str = "/app/config"):
         
         print(f"[sdp] {classifier_name}: Found {len(files)} files")
         
+        # Apply file filter (fnmatch on file ID)
+        if file_filter:
+            files = [(fp, dt, fid) for fp, dt, fid in files if fnmatch(fid, file_filter)]
+
         # Filter out already processed files
         pending_files = [(fp, dt, fid) for fp, dt, fid in files if not states[dt].is_processed(fid)]
         skip_count = len(files) - len(pending_files)

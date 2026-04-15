@@ -10,6 +10,7 @@ import os
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional
 
@@ -409,6 +410,14 @@ def run_pipeline(config_dir: str = "/app/config"):
         parsed_files = detect_parsed_files(parsed_dir, data_types, file_patterns, file_format=file_format)
 
     pending_parsed_files = [f for f in parsed_files if not states[f[2]].is_processed(f[1])]
+
+    # Apply file filter if FILE_FILTER env var is set (fnmatch on file ID)
+    file_filter = os.environ.get('FILE_FILTER', '')
+    if file_filter:
+        print(f"[sdp] Applying filter: {file_filter}")
+        pending_zst_files = [(p, dt) for p, dt in pending_zst_files if fnmatch(get_file_identifier(p), file_filter)]
+        json_files = [(p, fid, dt) for p, fid, dt in json_files if fnmatch(fid, file_filter)]
+        pending_parsed_files = [(p, fid, dt) for p, fid, dt in pending_parsed_files if fnmatch(fid, file_filter)]
 
     print(f"[sdp] Found {len(json_files)} JSON files in extracted directory")
     print(f"[sdp] Found {len(pending_parsed_files)} unprocessed parsed files to ingest")

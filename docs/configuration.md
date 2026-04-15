@@ -34,6 +34,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `HF_HOME` | HuggingFace model cache directory | (system default) |
 | `HF_TOKEN` | HuggingFace authentication token | (none) |
 | `CLASSIFIER` | Run a single GPU classifier by name | (all enabled) |
+| `FILE_FILTER` | Only process files matching this fnmatch pattern (set by `--filter`) | (all files) |
 | `PROFILE` | Internal: set automatically by docker-compose | (auto) |
 | `POSTGRES_AUTH_ENABLED` | Enable PostgreSQL authentication | (unset) |
 | `MONGO_AUTH_ENABLED` | Enable MongoDB authentication | (unset) |
@@ -51,6 +52,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 > [!NOTE]
 > - `SOURCE` controls which source config directory is loaded. When running via `sdp.py run`, it is set automatically (auto-selects if only one source configured, or via `--source`).
 > - `CLASSIFIER` is used with the `ml` profile to run only one GPU classifier instead of all enabled classifiers.
+> - `FILE_FILTER` is set automatically by `sdp.py run --filter`. It applies fnmatch glob matching on file IDs (e.g. `*2024*`, `RS_2024-*`) to restrict which files are processed. Works with all profiles.
 > - `PROFILE` is set internally by docker-compose service definitions (`lingua` or `ml`). Do not set this manually.
 > - `HF_TOKEN` is optional but recommended to avoid rate limits and to access private models. Obtain one at https://huggingface.co/settings/tokens.
 > - Auth env vars (`POSTGRES_PASSWORD`, `MONGO_ADMIN_PASSWORD`) are set at runtime via `getpass` prompting — they are never stored in `.env` or on disk.

@@ -17,6 +17,12 @@ python sdp.py db stop                   # Stop configured database(s) + MCP serv
 python sdp.py source error-logs         # Show error details for failed datasets
 ```
 
+All ingestion profiles support `--filter` (`-f`) to restrict processing to files matching a pattern (fnmatch glob on file ID). State-based skip logic still applies — `--filter` narrows the file set before the state check:
+
+```bash
+python sdp.py run postgres_ingest --filter "*2024*"   # Only ingest 2024 months
+```
+
 > [!IMPORTANT]
 > Database servers must be running before ingestion profiles can connect. `sdp.py db start` starts all databases configured during `sdp.py db setup`. Use `sdp.py db start postgres` or `sdp.py db start mongo` to start a specific one.
 
