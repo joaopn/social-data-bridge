@@ -158,6 +158,7 @@ In this example, the `pipeline:` key overrides settings from `config/parse/pipel
 | `config/sources/<name>/postgres_ml.yaml` | `config/postgres_ml/pipeline.yaml`, `services.yaml` |
 | `config/sources/<name>/mongo.yaml` | `config/mongo/pipeline.yaml` |
 | `config/sources/<name>/starrocks.yaml` | `config/sr/pipeline.yaml` |
+| `config/sources/<name>/sr_ml.yaml` | `config/sr_ml/pipeline.yaml`, `services.yaml` |
 
 ---
 
@@ -554,6 +555,35 @@ sr_indexes: {}             # Per-data-type index fields (set via platform config
 | **sr_indexes** | BITMAP index fields per data type. Falls back to `indexes` from platform config. | `{}` |
 
 StarRocks uses database-per-source (database name = source name). Tables are Primary Key tables with `DISTRIBUTED BY HASH(pk)` and `enable_persistent_index = true`.
+
+#### ML Classifier Ingestion: `config/sr_ml/pipeline.yaml` + `services.yaml`
+
+```yaml
+database:
+  host: starrocks          # Docker service name
+  port: 9030               # MySQL protocol port, override with STARROCKS_PORT
+  user: root               # Default StarRocks user
+
+processing:
+  data_types: []           # Set via platform config
+  check_duplicates: true   # Use merge_condition for conditional upsert
+  parallel_ingestion: true # Ingest submissions and comments concurrently
+  type_inference_rows: 1000  # Rows to sample for CSV column type inference
+  watch_interval: 0        # Run once (0) or poll every N minutes
+```
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| **database.host** | StarRocks hostname (Docker service name). | `starrocks` |
+| **database.port** | MySQL protocol port. Overridden by `STARROCKS_PORT` env var. | `9030` |
+| **database.user** | StarRocks user. Overridden by `STARROCKS_ROOT_PASSWORD` for auth. | `root` |
+| **processing.data_types** | Data types to process. Set via source config. | `[]` |
+| **processing.check_duplicates** | Enable `merge_condition` for conditional upsert (keeps row with higher `upsert_order_field`). | `true` |
+| **processing.parallel_ingestion** | Process submissions and comments concurrently. | `true` |
+| **processing.type_inference_rows** | Number of CSV rows to sample for column type inference. | `1000` |
+| **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
+
+Classifier tables (e.g., `submissions_lingua`, `comments_toxicity_en`) are created in the same database as base tables. Schema is auto-inferred from Parquet metadata or CSV sampling. `prefer_lingua` is read from the `sr_ingest` profile config.
 
 ---
 

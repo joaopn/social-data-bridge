@@ -476,11 +476,11 @@ def write_files(files_to_write):
 
 def print_pipeline_commands(profiles, source_name=None):
     """Print sdp.py commands to run the selected profiles in order."""
-    profile_order = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
+    profile_order = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest", "sr_ml"]
     selected = [p for p in profile_order if p in profiles]
 
     # Database servers must run before their ingestion profiles
-    db_profiles = {"postgres_ingest", "postgres_ml", "mongo_ingest"}
+    db_profiles = {"postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest", "sr_ml"}
     needs_start = any(p in profiles for p in db_profiles)
     if needs_start:
         # Insert 'sdp start' before the first db ingestion profile

@@ -1,0 +1,29 @@
+# Classifier output table definitions for StarRocks ML ingestion
+# Column types are auto-inferred from CSV data (no manual column definitions needed)
+#
+# Each classifier maps to an output directory in /data/output/
+# Tables are created as: {data_type}{suffix} (e.g., submissions_lingua)
+#
+# The full CSV file is always ingested (field selection is done in the ML profile)
+#
+# Configuration options:
+#   enabled: true/false           # Whether to process this classifier
+#   source_dir: <dir>             # Directory under /data/output/ (default: classifier name)
+#   suffix: <suffix>              # File and table suffix (e.g., '_lingua')
+
+classifiers:
+  lingua:
+    enabled: true
+    source_dir: lingua            # Directory under /data/output/ (used when prefer_lingua: true, but skipped)
+    source_dir_ingest: lingua_ingest  # Directory for minimal ingest CSVs (used when prefer_lingua: false)
+    suffix: "_lingua"             # File suffix pattern (e.g., RS_2024-01_lingua.csv)
+
+  toxic_roberta:
+    enabled: true
+    source_dir: toxic_roberta
+    suffix: "_toxicity_en"
+
+  go_emotions:
+    enabled: true
+    source_dir: go_emotions
+    suffix: "_emotions_en"

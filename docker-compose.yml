@@ -264,6 +264,27 @@ services:
       - ./config:/app/config:ro
 
   # ==========================================================================
+  # Profile: sr_ml - StarRocks ML classifier table ingestion
+  # Requires: starrocks profile to be running
+  # ==========================================================================
+  sr-ml:
+    profiles: [sr_ml]
+    build:
+      context: .
+      dockerfile: Dockerfile.starrocks
+    command: ["bash", "-c", "umask 0000 && exec python -m social_data_pipeline.orchestrators.sr_ml"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
+      - STARROCKS_PORT=${STARROCKS_PORT:-9030}
+      - STARROCKS_ROOT_PASSWORD=${STARROCKS_ROOT_PASSWORD:-}
+    volumes:
+      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/database
+      - ./config:/app/config:ro
+
+  # ==========================================================================
   # Profile: postgres_mcp - PostgreSQL MCP server (SSE)
   # RO user is created/synced by the postgres entrypoint, not here.
   # ==========================================================================

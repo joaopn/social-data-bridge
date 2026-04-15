@@ -133,6 +133,7 @@ def load_profile_config(
         'postgres_ingest': 'postgres',
         'mongo_ingest': 'mongo',
         'sr_ingest': 'sr',
+        'sr_ml': 'sr_ml',
     }
     folder_name = profile_folders.get(profile, profile)
     config_path = Path(config_dir) / folder_name
@@ -149,6 +150,7 @@ def load_profile_config(
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
         'mongo_ingest': ['pipeline.yaml'],
         'sr_ingest': ['pipeline.yaml'],
+        'sr_ml': ['pipeline.yaml', 'services.yaml'],
     }
 
     if profile not in profile_configs:
@@ -163,6 +165,7 @@ def load_profile_config(
         'postgres_ml': 'postgres_ml.yaml',
         'mongo_ingest': 'mongo.yaml',
         'sr_ingest': 'starrocks.yaml',
+        'sr_ml': 'sr_ml.yaml',
     }
 
     # Try source-specific override first, then fall back to legacy user.yaml

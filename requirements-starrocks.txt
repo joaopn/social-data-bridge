@@ -2,4 +2,5 @@
 # Used by: sr_ingest, sr_ml profiles
 
 mysql-connector-python>=9.0.0
+pyarrow>=18.0.0
 pyyaml>=6.0

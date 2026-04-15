@@ -3,7 +3,7 @@
 Social Data Pipeline supports three database destinations:
 - **PostgreSQL** — ingests parsed files (Parquet or CSV) via three profiles: `postgres` (server), `postgres_ingest` (main tables), `postgres_ml` (classifier outputs)
 - **MongoDB** — ingests raw JSON/NDJSON/CSV/Parquet directly after extraction via two profiles: `mongo` (server), `mongo_ingest` (bulk import)
-- **StarRocks** — OLAP analytical database for high-performance queries via two profiles: `starrocks` (server), `sr_ingest` (main tables)
+- **StarRocks** — OLAP analytical database for high-performance queries via three profiles: `starrocks` (server), `sr_ingest` (main tables), `sr_ml` (classifier outputs)
 
 All databases support optional authentication and MCP servers for AI tool access.
 
@@ -15,6 +15,7 @@ python sdp.py run postgres_ingest       # Ingest parsed files into PostgreSQL
 python sdp.py run postgres_ml           # Ingest ML classifier outputs into PostgreSQL
 python sdp.py run mongo_ingest          # Ingest raw data into MongoDB
 python sdp.py run sr_ingest             # Ingest parsed files into StarRocks
+python sdp.py run sr_ml                 # Ingest ML classifier outputs into StarRocks
 python sdp.py db stop                   # Stop configured database(s) + MCP servers
 python sdp.py source error-logs         # Show error details for failed datasets
 ```
@@ -552,3 +553,43 @@ Source override: `config/sources/<name>/starrocks.yaml`
 - **No tablespaces** — multi-disk handled by BE `storage_root_path` config
 - **No deferred PK** — primary key always defined at table creation
 - **BITMAP indexes** — instead of B-tree. Best for low-cardinality columns
+
+## sr_ml Profile
+
+Ingests ML classifier outputs (lingua, toxic_roberta, go_emotions) into separate StarRocks tables. Feature parity with `postgres_ml` but simpler — no fast-load/standard-load branching, no foreign keys, single ingestion path.
+
+### How It Works
+
+1. **Loads classifier definitions** from `config/sr_ml/services.yaml` (same format as `config/postgres_ml/services.yaml`)
+2. **Detects classifier output files** in `/data/output/{classifier_dir}/{data_type}/`
+3. **Infers schema** from the first file per data type:
+   - **Parquet**: reads typed schema from file metadata (no sampling)
+   - **CSV**: samples N rows and infers types (INT > FLOAT > BOOLEAN > STRING)
+4. **Creates classifier tables** as Primary Key tables (e.g., `submissions_lingua`, `comments_toxicity_en`)
+5. **Ingests files** via `INSERT INTO ... SELECT FROM FILES()` with optional `merge_condition`
+6. **Runs ANALYZE** per classifier table after ingestion
+
+Lingua handling follows the `prefer_lingua` pattern: when `true` (default, read from sr_ingest profile), lingua classifier outputs are already embedded in base tables via sr_ingest, so the lingua classifier is skipped. When `false`, lingua data is ingested from `lingua_ingest/` into separate tables.
+
+### Configuration
+
+Base config: `config/sr_ml/pipeline.yaml` + `services.yaml`
+Source override: `config/sources/<name>/sr_ml.yaml`
+
+| Setting | Config key | Default | Notes |
+|---------|-----------|---------|-------|
+| Host | `database.host` | `starrocks` | Docker service name |
+| Port | `database.port` | `9030` | MySQL protocol port |
+| User | `database.user` | `root` | |
+| Data types | `processing.data_types` | `[]` | Falls back to platform config |
+| Check duplicates | `processing.check_duplicates` | `true` | Use merge_condition for conditional upsert |
+| Parallel ingestion | `processing.parallel_ingestion` | `true` | Process data types concurrently |
+| Type inference rows | `processing.type_inference_rows` | `1000` | CSV rows to sample for type inference |
+| Watch interval | `processing.watch_interval` | `0` | Minutes between checks (0 = run once) |
+
+### Differences from postgres_ml
+
+- **Single code path** — no fast-load vs standard-load branching. Primary Key tables handle dedup natively
+- **No foreign keys** — StarRocks FKs are non-enforced optimizer hints; skipped entirely
+- **No deferred PK** — primary key always defined at table creation
+- **No tablespace management** — not applicable to StarRocks

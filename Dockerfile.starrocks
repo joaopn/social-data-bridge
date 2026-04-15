@@ -1,6 +1,6 @@
 # Social Data Pipeline - StarRocks Ingestion Image
-# Used for: sr_ingest profile
-# Lightweight: only mysql-connector-python needed (sends SQL to StarRocks)
+# Used for: sr_ingest, sr_ml profiles
+# mysql-connector-python for StarRocks SQL, pyarrow for Parquet schema inference
 FROM python:3.13-slim
 
 # Prevent interactive prompts during package installation
