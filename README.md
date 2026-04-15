@@ -27,6 +27,7 @@ python sdp.py source add reddit             # Add a data source (interactive set
 python sdp.py run parse                     # Decompress dumps → parse to cleaned, structured files
 python sdp.py run postgres_ingest           # Ingest parsed files into PostgreSQL
 python sdp.py run mongo_ingest              # Ingest raw data into MongoDB
+python sdp.py run sr_ingest                 # Ingest parsed files into StarRocks
 
 # Optional data-enrichment
 python sdp.py run lingua                    # Adds language detection to parsed files
@@ -235,6 +236,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 | `mongo` | MongoDB database server | — | — |
 | `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV/Parquet | MongoDB collections |
 | `starrocks` | StarRocks OLAP database server | — | — |
+| `sr_ingest` | Ingest parsed files into StarRocks | Parsed files (or Lingua-enriched) | StarRocks tables |
 
 > [!NOTE]
 > GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). All profiles track progress and resume automatically — rerun any profile safely without reprocessing completed files.
@@ -242,7 +244,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 For detailed configuration and algorithm documentation, see the per-profile docs:
 - [Parse Profile](docs/profiles/parse.md)
 - [Classification Profiles (lingua / ml)](docs/profiles/classification.md)
-- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest / starrocks)](docs/profiles/database.md)
+- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest / starrocks / sr_ingest)](docs/profiles/database.md)
 
 ## ◾ Platform Support
 

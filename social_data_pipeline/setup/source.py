@@ -332,6 +332,8 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
         all_profiles += ["postgres_ingest", "postgres_ml"]
     if "mongo" in databases:
         all_profiles += ["mongo_ingest"]
+    if "starrocks" in databases:
+        all_profiles += ["sr_ingest"]
 
     # When reconfiguring an existing source, only pre-check profiles that don't
     # already have a config file — avoids overwriting working configurations.
@@ -361,6 +363,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     # ---- PostgreSQL settings (per-source) ----
     has_postgres = any(p.startswith("postgres") for p in profiles)
     has_mongo = "mongo_ingest" in profiles
+    has_starrocks = "sr_ingest" in profiles
     if has_postgres:
         section_header("PostgreSQL Settings (for this source)")
 
@@ -482,7 +485,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             settings["mongo_db_name"] = ask("MongoDB database name", existing.get("mongo_db_name", source_name), tag="src_mongo_db_name")
 
         # ---- Index configuration ----
-        if has_postgres or has_mongo:
+        if has_postgres or has_mongo or has_starrocks:
             section_header("Database Indexes")
             print("  Indexes speed up queries on specific columns.")
             print("  Enter column names (comma-separated) to index per data type.")
@@ -505,6 +508,15 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                     idx = ask_list(f"  MongoDB indexes for '{dt}'", existing_mongo_idx.get(dt), tag=f"src_mongo_indexes_{dt}")
                     if idx:
                         settings["custom_mongo_indexes"][dt] = idx
+
+            if has_starrocks:
+                print()
+                existing_sr_idx = existing.get("custom_sr_indexes", {})
+                settings["custom_sr_indexes"] = {}
+                for dt in data_types:
+                    idx = ask_list(f"  StarRocks BITMAP indexes for '{dt}'", existing_sr_idx.get(dt), tag=f"src_sr_indexes_{dt}")
+                    if idx:
+                        settings["custom_sr_indexes"][dt] = idx
 
     return settings
 
@@ -554,6 +566,9 @@ def generate_platform_yaml(settings):
         config["mongo_exclude_fields"] = settings["mongo_exclude_fields"]
 
     config["indexes"] = settings.get("custom_indexes", {})
+
+    if settings.get("custom_sr_indexes"):
+        config["sr_indexes"] = settings["custom_sr_indexes"]
 
     # Field types: use HF-derived types if available, otherwise generic defaults
     if settings.get("custom_field_types"):
@@ -670,6 +685,18 @@ def generate_postgres_ml_yaml(settings):
 
 def generate_mongo_yaml(settings):
     """Generate config/sources/<name>/mongo.yaml."""
+    config = {
+        "pipeline": {
+            "processing": {
+                "data_types": settings["data_types"],
+            }
+        }
+    }
+    return yaml.dump(config, default_flow_style=False, sort_keys=False)
+
+
+def generate_starrocks_yaml(settings):
+    """Generate config/sources/<name>/starrocks.yaml."""
     config = {
         "pipeline": {
             "processing": {
@@ -858,6 +885,12 @@ def main(source_name=None, hf_dataset_id=None):
         files_to_write.append((
             source_config_dir / "mongo.yaml",
             generate_mongo_yaml(settings),
+        ))
+
+    if "sr_ingest" in profiles:
+        files_to_write.append((
+            source_config_dir / "starrocks.yaml",
+            generate_starrocks_yaml(settings),
         ))
 
     # Classifier config files (from inline questionnaire)

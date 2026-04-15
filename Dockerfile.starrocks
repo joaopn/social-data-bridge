@@ -1,0 +1,25 @@
+# Social Data Pipeline - StarRocks Ingestion Image
+# Used for: sr_ingest profile
+# Lightweight: only mysql-connector-python needed (sends SQL to StarRocks)
+FROM python:3.13-slim
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Set working directory
+WORKDIR /app
+
+# Copy requirements and install Python dependencies
+COPY requirements-starrocks.txt ./
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements-starrocks.txt
+
+# Copy application code
+COPY social_data_pipeline/ ./social_data_pipeline/
+COPY config/ ./config/
+
+# Create directories
+RUN mkdir -p /data/dumps /data/extracted /data/parsed /data/output /data/database
+
+# Default command
+CMD ["python", "-m", "social_data_pipeline.orchestrators.sr_ingest"]

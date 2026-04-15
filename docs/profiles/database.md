@@ -3,7 +3,7 @@
 Social Data Pipeline supports three database destinations:
 - **PostgreSQL** — ingests parsed files (Parquet or CSV) via three profiles: `postgres` (server), `postgres_ingest` (main tables), `postgres_ml` (classifier outputs)
 - **MongoDB** — ingests raw JSON/NDJSON/CSV/Parquet directly after extraction via two profiles: `mongo` (server), `mongo_ingest` (bulk import)
-- **StarRocks** — OLAP analytical database for high-performance queries. Uses the `starrocks` profile (server). Ingestion profiles coming soon.
+- **StarRocks** — OLAP analytical database for high-performance queries via two profiles: `starrocks` (server), `sr_ingest` (main tables)
 
 All databases support optional authentication and MCP servers for AI tool access.
 
@@ -14,6 +14,7 @@ python sdp.py db start                  # Start configured database(s) + MCP ser
 python sdp.py run postgres_ingest       # Ingest parsed files into PostgreSQL
 python sdp.py run postgres_ml           # Ingest ML classifier outputs into PostgreSQL
 python sdp.py run mongo_ingest          # Ingest raw data into MongoDB
+python sdp.py run sr_ingest             # Ingest parsed files into StarRocks
 python sdp.py db stop                   # Stop configured database(s) + MCP servers
 python sdp.py source error-logs         # Show error details for failed datasets
 ```
@@ -491,3 +492,45 @@ mysql -h 127.0.0.1 -P 9030 -u root --skip-password
 ### Health Check
 
 The container health check verifies MySQL connectivity. StarRocks takes 30-60s to fully start (FE boot + BE registration). The health check uses `start_period: 60s` before counting failures.
+
+---
+
+## sr_ingest Profile
+
+Ingests parsed Parquet or CSV files into StarRocks Primary Key tables. Feature parity with `postgres_ingest` but significantly simpler — StarRocks handles upsert and deduplication natively.
+
+### How It Works
+
+1. **Creates database** — one database per source (e.g., `reddit`, `twitter_academic`), like MongoDB's database-per-source pattern
+2. **Creates Primary Key tables** — columns and types derived from `platform.yaml` field definitions. Primary Key tables auto-deduplicate on insert
+3. **Ingests files** — `INSERT INTO ... SELECT FROM FILES()` reads Parquet/CSV directly from the StarRocks BE filesystem mount. The ingestion container sends SQL; StarRocks BE reads the files itself
+4. **Conditional upsert** — when `check_duplicates: true`, uses `merge_condition` to keep rows with higher `upsert_order_field` (e.g., `retrieved_utc`)
+5. **Creates BITMAP indexes** — for low-cardinality columns (dataset, subreddit, etc.)
+6. **Runs ANALYZE** — collects statistics for the query optimizer
+
+State tracking via JSON files in the StarRocks data directory enables resume after interruption.
+
+### Configuration
+
+Base config: `config/sr/pipeline.yaml`
+Source override: `config/sources/<name>/starrocks.yaml`
+
+| Setting | Config key | Default | Notes |
+|---------|-----------|---------|-------|
+| Host | `database.host` | `starrocks` | Docker service name |
+| Port | `database.port` | `9030` | MySQL protocol port |
+| User | `database.user` | `root` | |
+| Data types | `processing.data_types` | `[]` | Falls back to platform config |
+| Check duplicates | `processing.check_duplicates` | `true` | Use merge_condition for conditional upsert |
+| Create indexes | `processing.create_indexes` | `true` | Create BITMAP indexes after ingestion |
+| Prefer lingua | `processing.prefer_lingua` | `true` | Ingest lingua-enriched files (includes lang columns) |
+| Watch interval | `processing.watch_interval` | `0` | Minutes between checks (0 = run once) |
+| BITMAP indexes | `sr_indexes` | `{}` | Per data type index fields; falls back to `indexes` |
+
+### Differences from postgres_ingest
+
+- **Single code path** — no fast-load vs standard-load branching. Primary Key tables handle dedup natively
+- **No schema** — uses `database.table` (not `schema.table`). Database name = source name
+- **No tablespaces** — multi-disk handled by BE `storage_root_path` config
+- **No deferred PK** — primary key always defined at table creation
+- **BITMAP indexes** — instead of B-tree. Best for low-cardinality columns

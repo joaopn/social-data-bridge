@@ -32,7 +32,7 @@ from ..db.postgres.ingest import (
     # Fast initial load functions
     create_fast_load_table, fast_ingest_csv, delete_duplicates, finalize_fast_load_table,
 )
-from .ml import detect_parsed_files
+from .ml import detect_parsed_files, get_lingua_config, detect_lingua_files
 
 
 # Platform and source selection via environment variables
@@ -206,55 +206,6 @@ def detect_parsed_files(parsed_dir: str, data_types: List[str], file_patterns: D
     files.sort(key=lambda x: (x[3], x[2]))
     
     return [(f[0], f[1], f[2]) for f in files]
-
-
-def get_lingua_config(config_dir: str) -> Optional[Dict]:
-    """
-    Load lingua configuration from lingua profile.
-    
-    Returns:
-        Dict with 'suffix' and 'output_dir' keys, or None if config not found
-    """
-    try:
-        ml_config = load_profile_config('lingua', config_dir, source=SOURCE, quiet=True)
-        lingua_config = ml_config.get('lingua', {})
-        return {
-            'suffix': lingua_config.get('suffix', '_lingua'),
-            'output_dir': '/data/output/lingua'  # Standard output path for lingua
-        }
-    except Exception:
-        return None
-
-
-def detect_lingua_files(
-    data_types: List[str],
-    lingua_config: Dict,
-    file_format: str = 'csv'
-) -> Tuple[List[Tuple[str, str, str]], Dict[str, str]]:
-    """
-    Detect files in the lingua output directory only.
-    Used when prefer_lingua is true; original parsed dir is not checked.
-
-    Returns:
-        Tuple of (list of (filepath, file_id, data_type), source_map with 'lingua')
-    """
-    lingua_output_dir = Path(lingua_config['output_dir'])
-    lingua_suffix = lingua_config['suffix']
-    ext = 'parquet' if file_format == 'parquet' else 'csv'
-    files_with_name = []
-    for data_type in data_types:
-        type_dir = lingua_output_dir / data_type
-        if type_dir.is_dir():
-            for filepath in type_dir.glob(f"*{lingua_suffix}.{ext}"):
-                file_id = filepath.stem
-                if file_id.endswith(lingua_suffix):
-                    file_id = file_id[:-len(lingua_suffix)]
-                files_with_name.append((str(filepath), file_id, data_type, filepath.name))
-    type_order = {dt: i for i, dt in enumerate(data_types)}
-    files_with_name.sort(key=lambda x: (type_order.get(x[2], 99), x[3]))
-    result_files = [(f[0], f[1], f[2]) for f in files_with_name]
-    source_map = {f[1]: 'lingua' for f in result_files}
-    return result_files, source_map
 
 
 def run_pipeline(config_dir: str = "/app/config"):
