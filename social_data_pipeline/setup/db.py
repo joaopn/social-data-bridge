@@ -2,7 +2,7 @@
 
 Configures PostgreSQL, MongoDB, and StarRocks settings (port, tablespaces,
 PGTune, cache, FE/BE memory).
-Generates .env, config/db/*.yaml, postgresql.local.conf, fe.conf, be.conf,
+Generates .env, config/db/*.yaml, postgresql.local.conf, fe.local.conf, be.local.conf,
 docker-compose.override.yml.
 
 This is a global, one-time configuration independent of any source.
@@ -615,7 +615,7 @@ def _replace_conf_value(content, key, value):
 
 
 def generate_starrocks_fe_conf(settings):
-    """Generate config/starrocks/fe.conf with tuned JVM heap."""
+    """Generate config/starrocks/fe.local.conf from base fe.conf with tuned JVM heap."""
     base_path = CONFIG_DIR / "starrocks" / "fe.conf"
     content = base_path.read_text()
 
@@ -626,7 +626,7 @@ def generate_starrocks_fe_conf(settings):
 
 
 def generate_starrocks_be_conf(settings):
-    """Generate config/starrocks/be.conf with storage paths and memory."""
+    """Generate config/starrocks/be.local.conf from base be.conf with storage paths and memory."""
     base_path = CONFIG_DIR / "starrocks" / "be.conf"
     content = base_path.read_text()
 
@@ -922,11 +922,11 @@ def main():
             generate_db_starrocks_yaml(settings),
         ))
         files_to_write.append((
-            CONFIG_DIR / "starrocks" / "fe.conf",
+            CONFIG_DIR / "starrocks" / "fe.local.conf",
             generate_starrocks_fe_conf(settings),
         ))
         files_to_write.append((
-            CONFIG_DIR / "starrocks" / "be.conf",
+            CONFIG_DIR / "starrocks" / "be.local.conf",
             generate_starrocks_be_conf(settings),
         ))
 

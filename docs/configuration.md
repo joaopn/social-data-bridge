@@ -108,6 +108,8 @@ config/
 ├── starrocks/
 │   ├── fe.conf                   # StarRocks FE config (written by sdp db setup)
 │   └── be.conf                   # StarRocks BE config (written by sdp db setup)
+├── sr/
+│   └── pipeline.yaml             # StarRocks ingestion settings
 ├── mcp/
 │   ├── entrypoint-postgres.sh    # PostgreSQL MCP entrypoint
 │   └── entrypoint-mongo.sh       # MongoDB MCP entrypoint
@@ -155,6 +157,7 @@ In this example, the `pipeline:` key overrides settings from `config/parse/pipel
 | `config/sources/<name>/postgres.yaml` | `config/postgres/pipeline.yaml` |
 | `config/sources/<name>/postgres_ml.yaml` | `config/postgres_ml/pipeline.yaml`, `services.yaml` |
 | `config/sources/<name>/mongo.yaml` | `config/mongo/pipeline.yaml` |
+| `config/sources/<name>/starrocks.yaml` | `config/sr/pipeline.yaml` |
 
 ---
 
@@ -517,6 +520,43 @@ Cache size is controlled via `MONGO_CACHE_SIZE_GB` env var (default: 2 GB), not 
 
 ---
 
+### StarRocks Ingestion Profile
+
+#### Ingestion: `config/sr/pipeline.yaml`
+
+```yaml
+database:
+  host: starrocks          # Docker service name
+  port: 9030               # MySQL protocol port, override with STARROCKS_PORT
+  user: root               # Default StarRocks user
+
+processing:
+  data_types: []           # Set via source config
+  check_duplicates: true   # Use merge_condition for conditional upsert
+  create_indexes: true     # Create BITMAP indexes after ingestion
+  cleanup_temp: false      # Delete intermediate files after ingestion
+  watch_interval: 0        # Run once (0) or poll every N minutes
+  prefer_lingua: true      # Ingest lingua-enriched files if available
+
+sr_indexes: {}             # Per-data-type index fields (set via platform config)
+```
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| **database.host** | StarRocks hostname (Docker service name). | `starrocks` |
+| **database.port** | MySQL protocol port. Overridden by `STARROCKS_PORT` env var. | `9030` |
+| **database.user** | StarRocks user. Overridden by `STARROCKS_ROOT_PASSWORD` for auth. | `root` |
+| **processing.data_types** | Data types to process. Set via source config. | `[]` |
+| **processing.check_duplicates** | Enable `merge_condition` for conditional upsert (keeps row with higher `upsert_order_field`). | `true` |
+| **processing.create_indexes** | Create BITMAP indexes after ingestion completes. | `true` |
+| **processing.prefer_lingua** | Prefer lingua-enriched files over original parsed files. | `true` |
+| **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
+| **sr_indexes** | BITMAP index fields per data type. Falls back to `indexes` from platform config. | `{}` |
+
+StarRocks uses database-per-source (database name = source name). Tables are Primary Key tables with `DISTRIBUTED BY HASH(pk)` and `enable_persistent_index = true`.
+
+---
+
 ## 5. Platform Configuration
 
 ### Overview
@@ -539,6 +579,7 @@ Each source has a `platform.yaml` in `config/sources/<name>/` that defines the p
 | `mongo_db_name_template` | Database name template with `{platform}` and `{data_type}` placeholders (built-in platforms). |
 | `mongo_collections` | Per-data-type MongoDB collection names (custom sources). |
 | `mongo_indexes` | Index fields per data type (used by mongo_ingest). |
+| `sr_indexes` | BITMAP index fields per data type (used by sr_ingest). Falls back to `indexes`. |
 | `field_types` | Type definitions for each field (integer, text, boolean, etc.). |
 | `fields` | Fields to extract per data type. |
 | `paths` | Optional per-source data paths (overrides global `DUMPS_PATH`, etc.). |

@@ -232,14 +232,36 @@ services:
       - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/starrocks
       - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
-      - ./config/starrocks/fe.conf:/data/starrocks/fe/conf/fe.conf:ro
-      - ./config/starrocks/be.conf:/data/starrocks/be/conf/be.conf:ro
+      - ./config/starrocks/fe.local.conf:/data/starrocks/fe/conf/fe.conf:ro
+      - ./config/starrocks/be.local.conf:/data/starrocks/be/conf/be.conf:ro
     healthcheck:
       test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e 'SELECT 1' 2>/dev/null || exit 1"]
       interval: 15s
       timeout: 10s
       retries: 20
       start_period: 60s
+
+  # ==========================================================================
+  # Profile: sr_ingest - StarRocks base table ingestion
+  # Requires: starrocks profile to be running
+  # ==========================================================================
+  sr-ingest:
+    profiles: [sr_ingest]
+    build:
+      context: .
+      dockerfile: Dockerfile.starrocks
+    command: ["bash", "-c", "umask 0000 && exec python -m social_data_pipeline.orchestrators.sr_ingest"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
+      - STARROCKS_PORT=${STARROCKS_PORT:-9030}
+      - STARROCKS_ROOT_PASSWORD=${STARROCKS_ROOT_PASSWORD:-}
+    volumes:
+      - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
+      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/database
+      - ./config:/app/config:ro
 
   # ==========================================================================
   # Profile: postgres_mcp - PostgreSQL MCP server (SSE)

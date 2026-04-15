@@ -132,6 +132,7 @@ def load_profile_config(
     profile_folders = {
         'postgres_ingest': 'postgres',
         'mongo_ingest': 'mongo',
+        'sr_ingest': 'sr',
     }
     folder_name = profile_folders.get(profile, profile)
     config_path = Path(config_dir) / folder_name
@@ -147,6 +148,7 @@ def load_profile_config(
         'postgres_ingest': ['pipeline.yaml'],
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
         'mongo_ingest': ['pipeline.yaml'],
+        'sr_ingest': ['pipeline.yaml'],
     }
 
     if profile not in profile_configs:
@@ -160,6 +162,7 @@ def load_profile_config(
         'postgres_ingest': 'postgres.yaml',
         'postgres_ml': 'postgres_ml.yaml',
         'mongo_ingest': 'mongo.yaml',
+        'sr_ingest': 'starrocks.yaml',
     }
 
     # Try source-specific override first, then fall back to legacy user.yaml
@@ -311,6 +314,25 @@ def validate_mongo_config(config: Dict) -> None:
         if 'database' not in config or key not in config['database']:
             raise ConfigurationError(
                 f"[mongo] Required config missing: database.{key}"
+            )
+
+
+def validate_starrocks_config(config: Dict) -> None:
+    """
+    Validate that required StarRocks config exists for sr_ingest profile.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        ConfigurationError: If required config is missing
+    """
+    required_keys = ['host', 'port', 'user']
+
+    for key in required_keys:
+        if 'database' not in config or key not in config['database']:
+            raise ConfigurationError(
+                f"[starrocks] Required config missing: database.{key}"
             )
 
 

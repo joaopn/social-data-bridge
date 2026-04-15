@@ -40,7 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "config"
 
-VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
+VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest"]
 
 # Map profile names to docker compose service names (only where they differ)
 PROFILE_SERVICE_MAP = {
@@ -48,6 +48,7 @@ PROFILE_SERVICE_MAP = {
     "postgres_ingest": "postgres-ingest",
     "postgres_ml": "postgres-ml",
     "mongo_ingest": "mongo-ingest",
+    "sr_ingest": "sr-ingest",
 }
 
 
@@ -124,7 +125,9 @@ def _load_mcp_config():
 def _is_auth_enabled():
     """Check if database authentication is enabled via .env."""
     env = load_env()
-    return env.get("POSTGRES_AUTH_ENABLED") == "true" or env.get("MONGO_AUTH_ENABLED") == "true"
+    return (env.get("POSTGRES_AUTH_ENABLED") == "true"
+            or env.get("MONGO_AUTH_ENABLED") == "true"
+            or env.get("STARROCKS_AUTH_ENABLED") == "true")
 
 
 def _load_db_yaml(name):
@@ -155,6 +158,7 @@ def _set_auth_env(password):
     """Set authentication env vars for docker compose subprocess."""
     os.environ["POSTGRES_PASSWORD"] = password
     os.environ["MONGO_ADMIN_PASSWORD"] = password
+    os.environ["STARROCKS_ROOT_PASSWORD"] = password
 
 
 # ============================================================================
@@ -710,8 +714,8 @@ DB_GENERATED_FILES = [
     "config/db/mcp.yaml",
     "config/postgres/postgresql.local.conf",
     "config/postgres/pg_hba.local.conf",
-    "config/starrocks/fe.conf",
-    "config/starrocks/be.conf",
+    "config/starrocks/fe.local.conf",
+    "config/starrocks/be.local.conf",
     "docker-compose.override.yml",
     ".env",
 ]
@@ -1192,6 +1196,124 @@ def _mongosh_eval(port, script, password=None):
     return result.stdout.strip()
 
 
+def _sr_query(port, database, query, password=None):
+    """Run a MySQL query against StarRocks via docker compose exec and return rows."""
+    cmd = ["docker", "compose", "exec", "-T", "starrocks",
+           "mysql", "-h", "127.0.0.1", "-P", str(port), "-u", "root",
+           "--skip-column-names", "--batch"]
+    if password:
+        cmd += [f"-p{password}"]
+    if database:
+        cmd += ["-D", database]
+    cmd += ["-e", query]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    return [line.split("\t") for line in lines]
+
+
+def _sr_exec(port, database, statement, password=None):
+    """Execute a MySQL statement against StarRocks. Returns (success, stderr)."""
+    cmd = ["docker", "compose", "exec", "-T", "starrocks",
+           "mysql", "-h", "127.0.0.1", "-P", str(port), "-u", "root",
+           "--batch"]
+    if password:
+        cmd += [f"-p{password}"]
+    if database:
+        cmd += ["-D", database]
+    cmd += ["-e", statement]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    return result.returncode == 0, result.stderr.strip()
+
+
+def _interactive_sr_indexes(source, platform_config, password):
+    """Interactive StarRocks BITMAP index creation. Returns {table: [new_fields]} for config persistence."""
+    from social_data_pipeline.setup.utils import ask_multi_select, ask_list, section_header
+    import time
+
+    section_header("StarRocks Index Creation")
+
+    sr_yaml = _load_db_yaml("starrocks")
+    port = int(sr_yaml.get("port", 9030))
+    database = source  # database-per-source
+
+    try:
+        rows = _sr_query(port, database,
+            "SELECT table_name FROM information_schema.tables "
+            f"WHERE table_schema = '{database}' AND table_type = 'BASE TABLE' "
+            "ORDER BY table_name",
+            password)
+        tables = [r[0] for r in rows]
+    except Exception as e:
+        print(f"\n  Could not connect to StarRocks: {e}")
+        print("  Is it running? (sdp db start starrocks)\n")
+        return {}
+
+    if not tables:
+        print(f"\n  No tables found in database '{database}'.\n")
+        return {}
+
+    print(f"  Database: {database}")
+    selected_tables = ask_multi_select("Select tables to create indexes on", tables)
+
+    created = {}
+
+    for table in selected_tables:
+        print(f"\n  --- {table} ---")
+
+        # Get columns
+        try:
+            rows = _sr_query(port, database,
+                f"SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = '{database}' AND table_name = '{table}' "
+                f"ORDER BY ordinal_position",
+                password)
+            columns = [r[0] for r in rows]
+            if columns:
+                print(f"  Columns: {', '.join(columns)}")
+        except Exception:
+            pass
+
+        # Get existing indexes
+        try:
+            rows = _sr_query(port, database,
+                f"SHOW INDEXES FROM `{database}`.`{table}`",
+                password)
+            existing = [r[2] for r in rows] if rows else []
+            if existing:
+                print(f"  Existing indexes: {', '.join(existing)}")
+            else:
+                print("  Existing indexes: (none)")
+        except Exception:
+            print("  Existing indexes: (could not query)")
+
+        fields = ask_list("New BITMAP indexes (comma-separated field names, empty to skip)", default=[])
+        if not fields:
+            continue
+
+        table_created = []
+        for field in fields:
+            index_name = f"idx_{table}_{field}"
+            print(f"  Creating BITMAP index: {index_name} ...", end=" ", flush=True)
+            t_start = time.time()
+
+            statement = f"CREATE INDEX `{index_name}` ON `{database}`.`{table}` (`{field}`) USING BITMAP"
+            success, stderr = _sr_exec(port, database, statement, password)
+            duration = time.time() - t_start
+
+            if success:
+                print(f"done ({_format_duration(duration)})")
+                table_created.append(field)
+            else:
+                print(f"failed: {stderr}")
+
+        if table_created:
+            created[table] = table_created
+
+    return created
+
+
 def _interactive_pg_indexes(source, platform_config, password):
     """Interactive PostgreSQL index creation. Returns {table: [new_fields]} for config persistence."""
     from social_data_pipeline.setup.utils import ask_multi_select, ask_list, section_header
@@ -1430,7 +1552,7 @@ def _interactive_mongo_indexes(source, platform_config, password):
     return created
 
 
-def _persist_indexes_to_config(source, pg_created, mongo_created):
+def _persist_indexes_to_config(source, pg_created, mongo_created, sr_created=None):
     """Merge newly created indexes into platform.yaml."""
     import yaml
 
@@ -1449,6 +1571,14 @@ def _persist_indexes_to_config(source, pg_created, mongo_created):
         mongo_indexes = config.setdefault("mongo_indexes", {})
         for dt, fields in mongo_created.items():
             existing = mongo_indexes.setdefault(dt, [])
+            for f in fields:
+                if f not in existing:
+                    existing.append(f)
+
+    if sr_created:
+        sr_indexes = config.setdefault("sr_indexes", {})
+        for table, fields in sr_created.items():
+            existing = sr_indexes.setdefault(table, [])
             for f in fields:
                 if f not in existing:
                     existing.append(f)
@@ -1508,11 +1638,13 @@ def cmd_db_create_indexes(args):
     password = None
     needs_pg_auth = "postgres" in targets and env.get("POSTGRES_AUTH_ENABLED") == "true"
     needs_mongo_auth = "mongo" in targets and env.get("MONGO_AUTH_ENABLED") == "true"
-    if needs_pg_auth or needs_mongo_auth:
+    needs_sr_auth = "starrocks" in targets and env.get("STARROCKS_AUTH_ENABLED") == "true"
+    if needs_pg_auth or needs_mongo_auth or needs_sr_auth:
         password = _prompt_db_password(tag="sdp_db_password")
 
     pg_created = {}
     mongo_created = {}
+    sr_created = {}
 
     if "postgres" in targets:
         pg_created = _interactive_pg_indexes(source, platform_config, password)
@@ -1521,10 +1653,12 @@ def cmd_db_create_indexes(args):
         mongo_created = _interactive_mongo_indexes(source, platform_config, password)
 
     if "starrocks" in targets:
-        print("\n  StarRocks index creation is not yet available (requires ingestion module).")
+        sr_created = _interactive_sr_indexes(source, platform_config, password)
 
     # Summary
-    total = sum(len(v) for v in pg_created.values()) + sum(len(v) for v in mongo_created.values())
+    total = (sum(len(v) for v in pg_created.values())
+             + sum(len(v) for v in mongo_created.values())
+             + sum(len(v) for v in sr_created.values()))
     if total == 0:
         print("\n  No new indexes created.\n")
         return 0
@@ -1532,7 +1666,7 @@ def cmd_db_create_indexes(args):
     print(f"\n  Created {total} new index(es).")
 
     if ask_bool("Save new indexes to platform.yaml?", default=False, tag="sdp_idx_save"):
-        _persist_indexes_to_config(source, pg_created, mongo_created)
+        _persist_indexes_to_config(source, pg_created, mongo_created, sr_created)
 
     print()
     return 0
@@ -2099,9 +2233,15 @@ def cmd_run(args):
     else:
         platform = f"custom/{source}"
 
-    # Prompt for admin password if auth enabled and profile accesses a database
-    db_profiles = {"postgres_ingest", "postgres_ml", "mongo_ingest"}
-    if profile in db_profiles and _is_auth_enabled():
+    # Prompt for admin password if auth enabled for the target database
+    _profile_auth = {
+        "postgres_ingest": "POSTGRES_AUTH_ENABLED",
+        "postgres_ml": "POSTGRES_AUTH_ENABLED",
+        "mongo_ingest": "MONGO_AUTH_ENABLED",
+        "sr_ingest": "STARROCKS_AUTH_ENABLED",
+    }
+    auth_key = _profile_auth.get(profile)
+    if auth_key and load_env().get(auth_key) == "true":
         password = _prompt_db_password(tag="sdp_db_password")
         _set_auth_env(password)
 

@@ -245,6 +245,86 @@ class PipelineState:
             print("[sdp] No existing metadata found in MongoDB, starting fresh")
             self._save_state()
 
+    def recover_from_starrocks(self):
+        """
+        Recover processed files list by querying unique values of the state_field
+        from StarRocks tables. Uses MySQL protocol via mysql.connector.
+
+        Uses the db_config dict which should contain: host, port, user, database_name,
+        and optionally password.
+        """
+        if not self.db_config:
+            print("[sdp] No database config provided, cannot recover from StarRocks")
+            return
+
+        if not self.state_field:
+            print("[sdp] No state_field configured, cannot recover from StarRocks")
+            return
+
+        try:
+            import mysql.connector
+        except ImportError:
+            print("[sdp] mysql-connector-python not available, cannot recover from StarRocks")
+            return
+
+        recovered = []
+        database = self.db_config.get('database_name', '')
+
+        try:
+            conn_params = dict(
+                host=self.db_config['host'],
+                port=self.db_config['port'],
+                user=self.db_config['user'],
+            )
+            if self.db_config.get('password'):
+                conn_params['password'] = self.db_config['password']
+
+            conn = mysql.connector.connect(**conn_params)
+            cursor = conn.cursor()
+
+            try:
+                for data_type in self.data_types:
+                    # Check if table exists
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM information_schema.tables "
+                        "WHERE table_schema = %s AND table_name = %s",
+                        (database, data_type)
+                    )
+                    if cursor.fetchone()[0] == 0:
+                        print(f"[sdp] {data_type} table does not exist yet in StarRocks")
+                        continue
+
+                    cursor.execute(
+                        f"SELECT DISTINCT `{self.state_field}` "
+                        f"FROM `{database}`.`{data_type}` "
+                        f"ORDER BY `{self.state_field}`"
+                    )
+                    type_count = 0
+                    prefix = self.file_prefixes.get(data_type, f"{data_type}_")
+                    for (value,) in cursor:
+                        value = str(value).strip()
+                        file_id = f"{prefix}{value}"
+                        if file_id not in recovered:
+                            recovered.append(file_id)
+                            type_count += 1
+                    print(f"[sdp] Found {type_count} ingested files in {data_type} table")
+
+            finally:
+                cursor.close()
+                conn.close()
+
+        except Exception as e:
+            print(f"[sdp] Error recovering from StarRocks: {e}")
+            return
+
+        if recovered:
+            self.state["processed"] = recovered
+            self._save_state()
+            print(f"[sdp] Recovered {len(recovered)} processed files from StarRocks")
+        else:
+            print("[sdp] No existing data found in StarRocks, starting fresh")
+            self._save_state()
+
     def get_stats(self) -> dict:
         """Get processing statistics."""
         return {
