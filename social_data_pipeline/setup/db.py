@@ -647,7 +647,7 @@ def generate_starrocks_be_conf(settings):
     storage_paths = settings.get("starrocks_storage_paths")
     if storage_paths:
         container_paths = [
-            f"/data/starrocks/be/storage_{i}" for i in range(len(storage_paths))
+            f"/data/deploy/starrocks/be/storage_{i}" for i in range(len(storage_paths))
         ]
         content = _replace_conf_value(
             content, "storage_root_path", ";".join(container_paths)
@@ -675,7 +675,7 @@ def generate_docker_compose_override(settings):
     sr_storage = settings.get("starrocks_storage_paths", [])
     sr_lines = []
     for i, host_path in enumerate(sr_storage):
-        sr_lines.append(f"      - {host_path}:/data/starrocks/be/storage_{i}")
+        sr_lines.append(f"      - {host_path}:/data/deploy/starrocks/be/storage_{i}")
 
     if not pg_lines and not sr_lines:
         return None

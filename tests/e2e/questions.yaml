@@ -675,6 +675,17 @@ mcp_mongo_write_access:
     When disabled (default), the MCP server blocks write operations.
   default: "no (read-only)"
 
+mcp_sr_enable:
+  prompt: "Enable StarRocks MCP server?"
+  explain: >
+    Starts a Streamable HTTP MCP server for StarRocks access from AI tools.
+  default: "yes"
+
+mcp_sr_port:
+  prompt: "StarRocks MCP port"
+  explain: Host port for the StarRocks MCP server's HTTP endpoint.
+  default: "9000"
+
 mcp_write_files:
   prompt: "Write these files?"
   explain: Confirmation before writing MCP configuration files.

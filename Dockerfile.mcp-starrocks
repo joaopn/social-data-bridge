@@ -1,0 +1,15 @@
+# Social Data Pipeline - StarRocks MCP Server
+# Used for: starrocks_mcp profile
+# Official mcp-server-starrocks package from PyPI
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir mcp-server-starrocks==0.3.0
+
+COPY config/mcp/entrypoint-starrocks.sh /entrypoint.sh
+
+EXPOSE 9000
+
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]

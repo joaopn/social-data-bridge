@@ -6,8 +6,8 @@ Unified entrypoint for database management, source configuration, and pipeline e
 Usage:
     sdp.py db setup                          Configure databases (PostgreSQL, MongoDB)
     sdp.py db setup-mcp                      Configure MCP servers for databases
-    sdp.py db start [service]                Start services (postgres|mongo|postgres-mcp|mongo-mcp|all)
-    sdp.py db stop [service]                 Stop services (postgres|mongo|postgres-mcp|mongo-mcp|all)
+    sdp.py db start [service]                Start services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
+    sdp.py db stop [service]                 Stop services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
     sdp.py db status                         Show database config and health
     sdp.py db unsetup                        Remove database config (and optionally data)
     sdp.py db unsetup-mcp                    Remove MCP configuration
@@ -108,6 +108,8 @@ def _get_configured_mcp_services():
         services.append("postgres_mcp")
     if config.get("mongo", {}).get("enabled"):
         services.append("mongo_mcp")
+    if config.get("starrocks", {}).get("enabled"):
+        services.append("starrocks_mcp")
     return services
 
 
@@ -213,7 +215,8 @@ def cmd_db_unsetup_mcp(args):
     if env_path.exists():
         mcp_keys = {"POSTGRES_MCP_PORT", "POSTGRES_MCP_ACCESS_MODE",
                      "MONGO_MCP_PORT", "MONGO_MCP_READ_ONLY",
-                     "POSTGRES_MCP_USER", "MONGO_MCP_USER"}
+                     "STARROCKS_MCP_PORT",
+                     "POSTGRES_MCP_USER", "MONGO_MCP_USER", "STARROCKS_MCP_USER"}
         lines = env_path.read_text().splitlines()
         new_lines = []
         for line in lines:
@@ -453,7 +456,8 @@ def cmd_db_status(args):
             # Check if RO credentials file exists in any data path
             ro_cred_path = None
             for path_key, default in [("PGDATA_PATH", "./data/database/postgres"),
-                                      ("MONGO_DATA_PATH", "./data/database/mongo")]:
+                                      ("MONGO_DATA_PATH", "./data/database/mongo"),
+                                      ("STARROCKS_DATA_PATH", "./data/database/starrocks")]:
                 dp = Path(env.get(path_key, default))
                 if not dp.is_absolute():
                     dp = ROOT / dp
@@ -465,7 +469,7 @@ def cmd_db_status(args):
                 print(f"    RO user:       {ro_user} (password in {ro_cred_path})")
             else:
                 print(f"    RO user:       {ro_user} (no password)")
-        mcp_user = env.get("POSTGRES_MCP_USER") or env.get("MONGO_MCP_USER")
+        mcp_user = env.get("POSTGRES_MCP_USER") or env.get("MONGO_MCP_USER") or env.get("STARROCKS_MCP_USER")
         if mcp_user:
             print(f"    MCP user:      {mcp_user}")
 
@@ -558,6 +562,15 @@ def cmd_db_status(args):
             print(f"\n  MongoDB MCP:")
             print(f"    Port:      {port}")
             print(f"    Read-only: {read_only}")
+            print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
+            print(f"    Running:   {running}")
+
+        sr_mcp = mcp_config.get("starrocks", {})
+        if sr_mcp.get("enabled"):
+            port = sr_mcp.get("port", 9000)
+            running = "yes" if "starrocks-mcp" in running_services else "no"
+            print(f"\n  StarRocks MCP:")
+            print(f"    Port:      {port}")
             print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
             print(f"    Running:   {running}")
 
@@ -2415,14 +2428,14 @@ def build_parser():
     db_start_p = db_sub.add_parser("start", help="Start database services")
     db_start_p.add_argument("service", nargs="?",
                             choices=["postgres", "mongo", "starrocks",
-                                     "postgres-mcp", "mongo-mcp"],
+                                     "postgres-mcp", "mongo-mcp", "starrocks-mcp"],
                             help="Specific service (default: all configured)")
     db_start_p.set_defaults(func=cmd_db_start)
 
     db_stop_p = db_sub.add_parser("stop", help="Stop database services")
     db_stop_p.add_argument("service", nargs="?",
                            choices=["postgres", "mongo", "starrocks",
-                                    "postgres-mcp", "mongo-mcp"],
+                                    "postgres-mcp", "mongo-mcp", "starrocks-mcp"],
                            help="Specific service (default: all configured)")
     db_stop_p.set_defaults(func=cmd_db_stop)
 
