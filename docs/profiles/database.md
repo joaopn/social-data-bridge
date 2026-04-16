@@ -311,20 +311,33 @@ MCP servers connect using the read-only database user (configured during `sdp db
 
 ## Database Schema
 
-The schema name is set per-source in `config/sources/<name>/platform.yaml`:
+### PostgreSQL
+
+Uses schemas for source namespacing. The schema name is set per-source in `config/sources/<name>/platform.yaml`:
 - Reddit: `reddit` schema
 - Custom: user-defined during `sdp source add`
 
-### Table Naming
+| Table Type | Name Pattern | Example |
+|------------|-------------|---------|
+| Main tables | `{schema}.{data_type}` | `reddit.submissions`, `reddit.comments` |
+| Classifier tables | `{schema}.{data_type}{suffix}` | `reddit.submissions_lingua`, `reddit.comments_toxicity_en` |
+
+### StarRocks
+
+Uses database-per-source namespacing (StarRocks has no schema concept). The database name is the source name.
 
 | Table Type | Name Pattern | Example |
 |------------|-------------|---------|
-| Main tables | `{data_type}` | `reddit.submissions`, `reddit.comments` |
-| Classifier tables | `{data_type}{suffix}` | `reddit.submissions_lingua`, `reddit.comments_toxicity_en` |
+| Main tables | `{database}.{data_type}` | `reddit.submissions`, `reddit.comments` |
+| Classifier tables | `{database}.{data_type}{suffix}` | `reddit.submissions_lingua`, `reddit.comments_toxicity_en` |
+
+### MongoDB
+
+Uses database-per-source with per-data-type databases or explicit naming. See [mongo_ingest](#mongo_ingest-profile) for details.
 
 ### Primary Keys
 
-All tables use composite primary key: `(dataset, id)`
+All PostgreSQL and StarRocks tables use composite primary key: `(dataset, id)`. StarRocks tables are Primary Key tables with `DISTRIBUTED BY HASH(id)` and `enable_persistent_index = true`.
 
 ---
 
@@ -336,6 +349,10 @@ All tables use composite primary key: `(dataset, id)`
 - `{PLATFORM}_postgres_ingest_{data_type}.json` — tracks ingested datasets
 - `{PLATFORM}_postgres_ml_{classifier}_{data_type}.json` — tracks ingested classifier files
 
+**StarRocks**: Each data type has a JSON state file in `$STARROCKS_DATA_PATH/state_tracking/`:
+- `{PLATFORM}_sr_ingest_{data_type}.json` — tracks ingested datasets
+- `{PLATFORM}_sr_ml_{classifier}_{data_type}.json` — tracks ingested classifier files
+
 **MongoDB**: State files in `$MONGO_DATA_PATH/state_tracking/`:
 - `{PLATFORM}_mongo_ingest_{data_type}.json` — tracks ingested files
 
@@ -344,20 +361,35 @@ Additionally, MongoDB stores ingested file IDs in a `_sdp_metadata` collection p
 ### Database Recovery
 
 - **PostgreSQL**: On first run, if no state file exists, `postgres_ingest` queries the database for unique datasets already present.
+- **StarRocks**: On first run, if no state file exists, `sr_ingest` queries the database for unique datasets already present (same approach as PostgreSQL).
 - **MongoDB**: On first run, if no state file exists, `mongo_ingest` queries the `_sdp_metadata` collection to rebuild the list of already-ingested files.
 
 ### Reprocessing
 
+**PostgreSQL:**
 ```bash
 # Reprocess a specific data type (postgres_ingest)
 # 1. Drop the table
 psql -h localhost -U postgres -d datasets -c "DROP TABLE reddit.comments;"
 # 2. Delete the state file
-rm data/database/state_tracking/reddit_postgres_ingest_comments.json
+rm data/database/postgres/state_tracking/reddit_postgres_ingest_comments.json
 
 # Reprocess a classifier table (postgres_ml)
 psql -h localhost -U postgres -d datasets -c "DROP TABLE reddit.comments_toxicity_en;"
-rm data/database/state_tracking/reddit_postgres_ml_toxic_roberta_comments.json
+rm data/database/postgres/state_tracking/reddit_postgres_ml_toxic_roberta_comments.json
+```
+
+**StarRocks:**
+```bash
+# Reprocess a specific data type (sr_ingest)
+# 1. Drop the table
+mysql -h 127.0.0.1 -P 9030 -u root -e "DROP TABLE reddit.comments;"
+# 2. Delete the state file
+rm data/database/starrocks/state_tracking/reddit_sr_ingest_comments.json
+
+# Reprocess a classifier table (sr_ml)
+mysql -h 127.0.0.1 -P 9030 -u root -e "DROP TABLE reddit.comments_toxicity_en;"
+rm data/database/starrocks/state_tracking/reddit_sr_ml_toxic_roberta_comments.json
 ```
 
 ---

@@ -188,11 +188,12 @@ HF Hub → source download → data/dumps/<source>/<config>/<split>/*.parquet (1
                               run parse → data/parsed/<source>/<data_type>/*.parquet (field subset, typed)
                                     ↓
                         run postgres_ingest → PostgreSQL (field subset)
+                        run sr_ingest      → StarRocks  (field subset)
 
 data/extracted/ → run mongo_ingest → MongoDB (all fields, raw parquet → NDJSON → mongoimport)
 ```
 
-The dumps folder preserves the original HF repo structure for inspection and re-organization. PostgreSQL gets the configured field subset (via parse). MongoDB can ingest raw parquet directly from `data/extracted/`, preserving all original HF columns.
+The dumps folder preserves the original HF repo structure for inspection and re-organization. PostgreSQL and StarRocks get the configured field subset (via parse). MongoDB can ingest raw parquet directly from `data/extracted/`, preserving all original HF columns.
 
 ## Limitations
 

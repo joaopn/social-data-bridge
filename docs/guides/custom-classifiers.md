@@ -51,7 +51,7 @@ CLASSIFIER=my_classifier docker compose --profile ml up
 
 ### 4. Configure Database Ingestion (Optional)
 
-Add to `config/postgres_ml/services.yaml`:
+Add to `config/postgres_ml/services.yaml` (PostgreSQL) and/or `config/sr_ml/services.yaml` (StarRocks):
 
 ```yaml
 classifiers:
