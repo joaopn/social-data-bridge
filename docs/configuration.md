@@ -108,9 +108,13 @@ config/
 │   └── entrypoint-wrapper.sh     # Container entrypoint (auth migration)
 ├── starrocks/
 │   ├── fe.conf                   # StarRocks FE config (written by sdp db setup)
-│   └── be.conf                   # StarRocks BE config (written by sdp db setup)
+│   ├── be.conf                   # StarRocks BE config (written by sdp db setup)
+│   └── entrypoint-wrapper.sh     # Container entrypoint (auth: root password + RO user sync)
 ├── sr/
 │   └── pipeline.yaml             # StarRocks ingestion settings
+├── sr_ml/
+│   ├── pipeline.yaml             # StarRocks ML classifier ingestion settings
+│   └── services.yaml             # Classifier table definitions (same format as postgres_ml)
 ├── mcp/
 │   ├── entrypoint-postgres.sh    # PostgreSQL MCP entrypoint
 │   ├── entrypoint-mongo.sh       # MongoDB MCP entrypoint

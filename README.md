@@ -89,17 +89,16 @@ flowchart TB
 
     subgraph Databases
         direction LR
-        PG[(PostgreSQL)]
+        PGSR[("PostgreSQL / StarRocks")]
         MONGO[(MongoDB)]
-        SR[(StarRocks)]
         MCP{{MCP servers}}
-        PG & MONGO & SR -.-> MCP
+        PGSR & MONGO -.-> MCP
     end
 
     RAW -->|parse| PARSED
     RAW -->|mongo_ingest| MONGO
-    PARSED & LINGUA -->|postgres_ingest| PG
-    ML_OUT -->|postgres_ml| PG
+    PARSED & LINGUA -->|"{postgres|sr}_ingest"| PGSR
+    ML_OUT -->|"{postgres|sr}_ml"| PGSR
 ```
 
 ## ◾ Requirements
@@ -144,10 +143,10 @@ The `--source` flag selects the target source (optional when only one is configu
 
 #### 3. Analyze
 
-With an optimized PostgreSQL database running, you can send large-scale analytical queries through:
-- The terminal with [psql](https://www.postgresql.org/docs/current/app-psql.html)
-- A GUI with [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/)
-- AI tools via the built-in MCP servers (see below)
+With your database running, you can query through:
+- **PostgreSQL**: [psql](https://www.postgresql.org/docs/current/app-psql.html) CLI, [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/) GUI
+- **StarRocks**: any MySQL client (`mysql -h 127.0.0.1 -P 9030 -u root`), DBeaver, or [StarRocks Manager](https://docs.starrocks.io/)
+- **AI tools** via the built-in MCP servers (see below)
 
 **MCP servers** (optional) expose your databases to AI tools like Claude Desktop, VS Code, and Cursor:
 
@@ -315,6 +314,24 @@ rm -rf data/output/<source>/ data/parsed/<source>/ data/extracted/<source>/  # F
 </details>
 
 <details>
+<summary><strong>Should I use PostgreSQL or StarRocks?</strong></summary>
+
+Both ingest the same parsed files and support the same pipeline features (classifiers, lingua, MCP servers, authentication). The choice depends on your workload:
+
+| | PostgreSQL | StarRocks |
+|---|---|---|
+| **Best for** | General-purpose queries, joins with external data, extensions (PostGIS, pg_parquet, pgvector) | Large-scale analytical queries (aggregations, scans, GROUP BY over billions of rows) |
+| **Query speed** | Good with proper indexing; row-oriented storage | Much faster for analytics; columnar storage with vectorized execution |
+| **Ecosystem** | Mature, widely supported, connects to nearly everything | MySQL wire protocol — works with any MySQL client, but smaller ecosystem |
+| **Extensibility** | Rich extension system (custom types, FDWs, procedural languages) | Limited — focused on analytics |
+| **Storage model** | Row-oriented, B-tree indexes, tablespaces for multi-disk | Columnar, BITMAP indexes, built-in multi-disk via `storage_root_path` |
+| **Ingestion** | Fast initial load (deferred PK), ON CONFLICT upsert | Single code path — Primary Key tables handle dedup natively |
+
+**Use PostgreSQL** if you need a general-purpose database that integrates with other tools and workflows. **Use StarRocks** if your primary goal is fast analytical queries over large datasets. You can use both — they ingest independently from the same parsed files.
+
+</details>
+
+<details>
 <summary><strong>Why no table partitioning?</strong></summary>
 
 This project targets large-scale, Reddit-wide analysis. For queries not limited to a few months, partitioning would split indexes into 200+ partitions, hurting query performance. It would also interfere with ID deduplication during ingestion.
@@ -328,7 +345,9 @@ This project targets large-scale, Reddit-wide analysis. For queries not limited 
 docker compose logs parse
 docker compose logs lingua
 docker compose logs postgres-ingest
+docker compose logs sr-ingest
 docker compose logs postgres-ml
+docker compose logs sr-ml
 ```
 
 **Database connection issues:**
@@ -336,6 +355,7 @@ docker compose logs postgres-ml
 docker compose ps
 docker compose logs postgres
 docker compose logs mongo
+docker compose --profile starrocks logs starrocks
 ```
 
 **Out of disk space:**
