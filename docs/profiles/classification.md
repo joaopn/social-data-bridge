@@ -51,11 +51,11 @@ Lingua provides fast language detection using a Rust-based library (Rayon parall
 
 ### Output Modes
 
-Lingua has two output modes controlled by `prefer_lingua` in the postgres profile:
+Lingua has two output modes controlled by `prefer_lingua` in the ingestion profile config (postgres or sr_ingest):
 
-- **`prefer_lingua: true`** (default): Lingua output includes all original columns + language columns. The `postgres_ingest` profile ingests these enriched files directly into the main table. No separate lingua table is needed.
+- **`prefer_lingua: true`** (default): Lingua output includes all original columns + language columns. The `postgres_ingest` and `sr_ingest` profiles ingest these enriched files directly into the main table. No separate lingua table is needed.
 
-- **`prefer_lingua: false`**: Lingua additionally generates a minimal `lingua_ingest` file containing only `id, dataset, retrieved_utc` + language columns. The `postgres_ml` profile ingests this as a separate table. Original parsed files (without lingua columns) go to the main table via `postgres_ingest`.
+- **`prefer_lingua: false`**: Lingua additionally generates a minimal `lingua_ingest` file containing only `id, dataset, retrieved_utc` + language columns. The `postgres_ml` / `sr_ml` profile ingests this as a separate table. Original parsed files (without lingua columns) go to the main table via `postgres_ingest` / `sr_ingest`.
 
 ### Configuration
 

@@ -132,6 +132,8 @@ def load_profile_config(
     profile_folders = {
         'postgres_ingest': 'postgres',
         'mongo_ingest': 'mongo',
+        'sr_ingest': 'sr',
+        'sr_ml': 'sr_ml',
     }
     folder_name = profile_folders.get(profile, profile)
     config_path = Path(config_dir) / folder_name
@@ -147,6 +149,8 @@ def load_profile_config(
         'postgres_ingest': ['pipeline.yaml'],
         'postgres_ml': ['pipeline.yaml', 'services.yaml'],
         'mongo_ingest': ['pipeline.yaml'],
+        'sr_ingest': ['pipeline.yaml'],
+        'sr_ml': ['pipeline.yaml', 'services.yaml'],
     }
 
     if profile not in profile_configs:
@@ -160,6 +164,8 @@ def load_profile_config(
         'postgres_ingest': 'postgres.yaml',
         'postgres_ml': 'postgres_ml.yaml',
         'mongo_ingest': 'mongo.yaml',
+        'sr_ingest': 'starrocks.yaml',
+        'sr_ml': 'sr_ml.yaml',
     }
 
     # Try source-specific override first, then fall back to legacy user.yaml
@@ -311,6 +317,25 @@ def validate_mongo_config(config: Dict) -> None:
         if 'database' not in config or key not in config['database']:
             raise ConfigurationError(
                 f"[mongo] Required config missing: database.{key}"
+            )
+
+
+def validate_starrocks_config(config: Dict) -> None:
+    """
+    Validate that required StarRocks config exists for sr_ingest profile.
+
+    Args:
+        config: Configuration dictionary
+
+    Raises:
+        ConfigurationError: If required config is missing
+    """
+    required_keys = ['host', 'port', 'user']
+
+    for key in required_keys:
+        if 'database' not in config or key not in config['database']:
+            raise ConfigurationError(
+                f"[starrocks] Required config missing: database.{key}"
             )
 
 
@@ -469,5 +494,16 @@ def apply_env_overrides(config: Dict, profile: str) -> Dict:
             result['database']['user'] = os.environ['MONGO_ADMIN_USER']
         if os.environ.get('MONGO_ADMIN_PASSWORD'):
             result['database']['password'] = os.environ['MONGO_ADMIN_PASSWORD']
+
+    if profile in ('sr_ingest', 'sr_ml'):
+        if 'database' not in result:
+            result['database'] = {}
+
+        if 'STARROCKS_PORT' in os.environ:
+            result['database']['port'] = int(os.environ['STARROCKS_PORT'])
+        if 'STARROCKS_FE_HTTP_PORT' in os.environ:
+            result['database']['fe_http_port'] = int(os.environ['STARROCKS_FE_HTTP_PORT'])
+        if os.environ.get('STARROCKS_ROOT_PASSWORD'):
+            result['database']['password'] = os.environ['STARROCKS_ROOT_PASSWORD']
 
     return result

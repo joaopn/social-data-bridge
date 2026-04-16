@@ -6,6 +6,7 @@
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![MongoDB 8](https://img.shields.io/badge/MongoDB-8-47A248.svg?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![StarRocks](https://img.shields.io/badge/StarRocks-OLAP-FF6D00.svg?logo=starrocks&logoColor=white)](https://www.starrocks.io/)
 [![CUDA](https://img.shields.io/badge/CUDA-12.x-76B900.svg?logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![ONNX](https://img.shields.io/badge/ONNX-Runtime-005CED.svg?logo=onnx&logoColor=white)](https://onnxruntime.ai/)
 
@@ -18,7 +19,7 @@ A researcher-focused pipeline for processing, classifying, and ingesting large-s
 
 ```bash
 # Configure databases
-python sdp.py db setup                      # Configure PostgreSQL/MongoDB (one-time)
+python sdp.py db setup                      # Configure databases (one-time)
 python sdp.py db start                      # Start database(s)
 
 # Process and ingest data
@@ -26,6 +27,7 @@ python sdp.py source add reddit             # Add a data source (interactive set
 python sdp.py run parse                     # Decompress dumps → parse to cleaned, structured files
 python sdp.py run postgres_ingest           # Ingest parsed files into PostgreSQL
 python sdp.py run mongo_ingest              # Ingest raw data into MongoDB
+python sdp.py run sr_ingest                 # Ingest parsed files into StarRocks
 
 # Optional data-enrichment
 python sdp.py run lingua                    # Adds language detection to parsed files
@@ -63,8 +65,9 @@ python sdp.py source error-logs             # Show error details for failed data
 - **Modular classification** — CPU-based (Lingua) and GPU-based (transformers) with multi-GPU parallelization and language filtering
 - **PostgreSQL ingestion** of parsed files with finetuned settings and duplicate handling
 - **MongoDB ingestion** of raw JSON, CSV, and Parquet directly after extraction, for raw data inspection
+- **StarRocks ingestion** via the StarRocks OLAP engine for high-performance analytical queries
 - **Optional authentication** with admin and read-only database users
-- **MCP servers** for PostgreSQL and MongoDB, exposing read-only databases to AI tools (Claude Desktop, VS Code, Cursor)
+- **MCP servers** for PostgreSQL, MongoDB, and StarRocks, exposing read-only databases to AI tools (Claude Desktop, VS Code, Cursor)
 
 ### Architecture
 
@@ -86,16 +89,16 @@ flowchart TB
 
     subgraph Databases
         direction LR
-        PG[(PostgreSQL)]
+        PGSR[("PostgreSQL / StarRocks")]
         MONGO[(MongoDB)]
         MCP{{MCP servers}}
-        PG & MONGO -.-> MCP
+        PGSR & MONGO -.-> MCP
     end
 
     RAW -->|parse| PARSED
     RAW -->|mongo_ingest| MONGO
-    PARSED & LINGUA -->|postgres_ingest| PG
-    ML_OUT -->|postgres_ml| PG
+    PARSED & LINGUA -->|"{postgres|sr}_ingest"| PGSR
+    ML_OUT -->|"{postgres|sr}_ml"| PGSR
 ```
 
 ## ◾ Requirements
@@ -120,11 +123,11 @@ flowchart TB
 #### 1. Configure
 
 ```bash
-python sdp.py db setup              # Configure databases (PostgreSQL, MongoDB — one-time)
+python sdp.py db setup              # Configure databases (PostgreSQL, MongoDB, StarRocks — one-time)
 python sdp.py source add reddit     # Add a data source (interactive setup)
 ```
 
-`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, and `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
+`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration), and StarRocks `fe.conf`/`be.conf` (with FE/BE memory tuning). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
 
 For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). For manual configuration or to understand what each setting does, see the [Configuration Reference](docs/configuration.md).
 
@@ -140,10 +143,10 @@ The `--source` flag selects the target source (optional when only one is configu
 
 #### 3. Analyze
 
-With an optimized PostgreSQL database running, you can send large-scale analytical queries through:
-- The terminal with [psql](https://www.postgresql.org/docs/current/app-psql.html)
-- A GUI with [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/)
-- AI tools via the built-in MCP servers (see below)
+With your database running, you can query through:
+- **PostgreSQL**: [psql](https://www.postgresql.org/docs/current/app-psql.html) CLI, [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/) GUI
+- **StarRocks**: any MySQL client (`mysql -h 127.0.0.1 -P 9030 -u root`), DBeaver, or [StarRocks Manager](https://docs.starrocks.io/)
+- **AI tools** via the built-in MCP servers (see below)
 
 **MCP servers** (optional) expose your databases to AI tools like Claude Desktop, VS Code, and Cursor:
 
@@ -177,17 +180,17 @@ python sdp.py <db|source|run> [options]
 
 | Command | Description |
 |---------|-------------|
-| `sdp.py db setup` | Configure databases (PostgreSQL, MongoDB, optional auth) — global, one-time |
+| `sdp.py db setup` | Configure databases (PostgreSQL, MongoDB, StarRocks, optional auth) — global, one-time |
 | `sdp.py db setup-mcp` | Configure MCP servers for AI tool access (ports, read-only mode) |
-| `sdp.py db start [service]` | Start services: `postgres\|mongo\|postgres-mcp\|mongo-mcp` (all if unspecified) |
-| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|postgres-mcp\|mongo-mcp` (all if unspecified) |
+| `sdp.py db start [service]` | Start services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp` (all if unspecified) |
+| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp` (all if unspecified) |
 | `sdp.py db status` | Show database config, health, and MCP status |
 | `sdp.py db recover-password` | Reset database admin password (requires auth enabled) |
-| `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes (PostgreSQL and/or MongoDB) |
+| `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes |
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
 | `sdp.py db unsetup-mcp` | Remove MCP configuration and stop MCP containers |
 
-`db setup` generates `.env`, `config/db/*.yaml`, and `config/postgres/postgresql.local.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and MCP credential files. Database deletion in `db unsetup` requires two separate confirmations.
+`db setup` generates `.env`, `config/db/*.yaml`, `config/postgres/postgresql.local.conf`, and `config/starrocks/{fe,be}.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and `.ro_credentials` files in each database data volume. Database deletion in `db unsetup` requires two separate confirmations.
 
 ### Source Management (`sdp.py source`)
 
@@ -214,9 +217,9 @@ python sdp.py <db|source|run> [options]
 | `sdp.py run <profile> --build` | Rebuild the Docker image before running |
 | `sdp.py run <profile> --filter <pattern>` | Only process files matching pattern (fnmatch glob on file ID) |
 
-Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`. `--build` rebuilds the Docker image before running (needed after code or dependency changes). `--filter` (`-f`) restricts processing to files whose ID matches the given pattern (e.g. `--filter "*2024*"` for all 2024 months, `--filter "RS_2024-*"` for 2024 submissions only). The global `--tag` flag (e.g. `python sdp.py --tag db setup`) prefixes each interactive prompt with a `[tag_id]` for automation tools like pexpect.
+Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mongo_ingest`, `sr_ingest`, `sr_ml`. `--build` rebuilds the Docker image before running (needed after code or dependency changes). `--filter` (`-f`) restricts processing to files whose ID matches the given pattern (e.g. `--filter "*2024*"` for all 2024 months, `--filter "RS_2024-*"` for 2024 submissions only). The global `--tag` flag (e.g. `python sdp.py --tag db setup`) prefixes each interactive prompt with a `[tag_id]` for automation tools like pexpect.
 
-`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database. `source error-logs` shows the full error details and relevant mongoimport log output for failed datasets. Use `--profile` to filter by ingestion profile (`postgres_ingest`, `postgres_ml`, `mongo_ingest`).
+`source status` reads pipeline state files to show ingestion progress (datasets processed, in-progress, failed) without querying the database. `source error-logs` shows the full error details and relevant mongoimport log output for failed datasets. Use `--profile` to filter by ingestion profile (`postgres_ingest`, `postgres_ml`, `mongo_ingest`, `sr_ingest`, `sr_ml`).
 
 </details>
 
@@ -232,6 +235,9 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 | `postgres_ml` | Ingest ML outputs into PostgreSQL | Classifier output files | PostgreSQL tables |
 | `mongo` | MongoDB database server | — | — |
 | `mongo_ingest` | Ingest raw data into MongoDB | Extracted JSON/NDJSON/CSV/Parquet | MongoDB collections |
+| `starrocks` | StarRocks OLAP database server | — | — |
+| `sr_ingest` | Ingest parsed files into StarRocks | Parsed files (or Lingua-enriched) | StarRocks tables |
+| `sr_ml` | Ingest ML outputs into StarRocks | Classifier output files | StarRocks tables |
 
 > [!NOTE]
 > GPU profile requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). All profiles track progress and resume automatically — rerun any profile safely without reprocessing completed files.
@@ -239,7 +245,7 @@ Valid profiles: `parse`, `lingua`, `ml`, `postgres_ingest`, `postgres_ml`, `mong
 For detailed configuration and algorithm documentation, see the per-profile docs:
 - [Parse Profile](docs/profiles/parse.md)
 - [Classification Profiles (lingua / ml)](docs/profiles/classification.md)
-- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest)](docs/profiles/database.md)
+- [Database Profiles (postgres / postgres_ingest / postgres_ml / mongo / mongo_ingest / starrocks / sr_ingest / sr_ml)](docs/profiles/database.md)
 
 ## ◾ Platform Support
 
@@ -309,6 +315,24 @@ rm -rf data/output/<source>/ data/parsed/<source>/ data/extracted/<source>/  # F
 </details>
 
 <details>
+<summary><strong>Should I use PostgreSQL or StarRocks?</strong></summary>
+
+Both ingest the same parsed files and support the same pipeline features (classifiers, lingua, MCP servers, authentication). The choice depends on your workload:
+
+| | PostgreSQL | StarRocks |
+|---|---|---|
+| **Best for** | General-purpose queries, joins with external data, extensions (PostGIS, pg_parquet, pgvector) | Large-scale analytical queries (aggregations, scans, GROUP BY over billions of rows) |
+| **Query speed** | Good with proper indexing; row-oriented storage | Much faster for analytics; columnar storage with vectorized execution |
+| **Ecosystem** | Mature, widely supported, connects to nearly everything | MySQL wire protocol — works with any MySQL client, but smaller ecosystem |
+| **Extensibility** | Rich extension system (custom types, FDWs, procedural languages) | Limited — focused on analytics |
+| **Storage model** | Row-oriented, B-tree indexes, tablespaces for multi-disk | Columnar, BITMAP indexes, built-in multi-disk via `storage_root_path` |
+| **Ingestion** | Fast initial load (deferred PK), ON CONFLICT upsert | Single code path — Primary Key tables handle dedup natively |
+
+**Use PostgreSQL** if you need a general-purpose database that integrates with other tools and workflows. **Use StarRocks** if your primary goal is fast analytical queries over large datasets. You can use both — they ingest independently from the same parsed files.
+
+</details>
+
+<details>
 <summary><strong>Why no table partitioning?</strong></summary>
 
 This project targets large-scale, Reddit-wide analysis. For queries not limited to a few months, partitioning would split indexes into 200+ partitions, hurting query performance. It would also interfere with ID deduplication during ingestion.
@@ -322,7 +346,9 @@ This project targets large-scale, Reddit-wide analysis. For queries not limited 
 docker compose logs parse
 docker compose logs lingua
 docker compose logs postgres-ingest
+docker compose logs sr-ingest
 docker compose logs postgres-ml
+docker compose logs sr-ml
 ```
 
 **Database connection issues:**
@@ -330,6 +356,7 @@ docker compose logs postgres-ml
 docker compose ps
 docker compose logs postgres
 docker compose logs mongo
+docker compose --profile starrocks logs starrocks
 ```
 
 **Out of disk space:**

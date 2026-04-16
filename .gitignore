@@ -65,3 +65,5 @@ pgdata/
 .codex/
 .opencode/
 plans/
+plan/
+.mcp.json

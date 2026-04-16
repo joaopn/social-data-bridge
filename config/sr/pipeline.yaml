@@ -1,0 +1,20 @@
+# StarRocks ingestion profile pipeline configuration
+# Host paths configured in .env
+
+database:
+  host: starrocks          # Docker service name
+  port: 9030               # MySQL protocol port, override with STARROCKS_PORT
+  user: root               # Default StarRocks user
+
+processing:
+  data_types: []           # Override in source config or set via platform config
+  check_duplicates: true   # Use merge_condition for conditional upsert
+  create_indexes: true     # Create BITMAP indexes after ingestion
+  cleanup_temp: false      # Delete intermediate files after ingestion
+  watch_interval: 0        # Check for new files every N minutes (0 = run once)
+  prefer_lingua: true      # If true: ingest lingua files instead of original parsed; falls back to original if not found
+
+# StarRocks index configuration (only used if create_indexes is true)
+# Override in source config with platform-specific index fields
+# Default: use same fields as postgres indexes
+sr_indexes: {}

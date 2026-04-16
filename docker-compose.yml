@@ -214,6 +214,84 @@ services:
       retries: 5
 
   # ==========================================================================
+  # Profile: starrocks - StarRocks OLAP database server (FE + BE all-in-one)
+  # ==========================================================================
+  starrocks:
+    profiles: [starrocks]
+    image: starrocks/allin1-ubuntu
+    init: true
+    restart: "no"
+    stop_grace_period: 5m
+    mem_limit: ${STARROCKS_MEM_LIMIT:-0}
+    entrypoint: ["bash", "/etc/starrocks/config/entrypoint-wrapper.sh"]
+    environment:
+      STARROCKS_ROOT_PASSWORD: ${STARROCKS_ROOT_PASSWORD:-}
+      STARROCKS_AUTH_ENABLED: ${STARROCKS_AUTH_ENABLED:-}
+      MYSQL_PWD: ${STARROCKS_ROOT_PASSWORD:-}
+    ports:
+      - "${STARROCKS_PORT:-9030}:9030"          # MySQL protocol
+      - "${STARROCKS_FE_HTTP_PORT:-8030}:8030"   # FE HTTP (admin, Stream Load)
+      - "8040:8040"                               # BE HTTP
+    volumes:
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/starrocks
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}/fe/meta:/data/deploy/starrocks/fe/meta
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}/be/storage:/data/deploy/starrocks/be/storage
+      - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
+      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      - ./config/starrocks/fe.local.conf:/etc/starrocks/config/fe.local.conf:ro
+      - ./config/starrocks/be.local.conf:/etc/starrocks/config/be.local.conf:ro
+      - ./config/starrocks/entrypoint-wrapper.sh:/etc/starrocks/config/entrypoint-wrapper.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "(mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e 'SHOW BACKENDS\\G' 2>/dev/null || mysql -h 127.0.0.1 -P 9030 -u root -p\"$STARROCKS_ROOT_PASSWORD\" -e 'SHOW BACKENDS\\G' 2>/dev/null) | grep -q 'Alive: true'"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 90s
+
+  # ==========================================================================
+  # Profile: sr_ingest - StarRocks base table ingestion
+  # Requires: starrocks profile to be running
+  # ==========================================================================
+  sr-ingest:
+    profiles: [sr_ingest]
+    build:
+      context: .
+      dockerfile: Dockerfile.starrocks
+    command: ["bash", "-c", "umask 0000 && exec python -m social_data_pipeline.orchestrators.sr_ingest"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
+      - STARROCKS_PORT=${STARROCKS_PORT:-9030}
+      - STARROCKS_ROOT_PASSWORD=${STARROCKS_ROOT_PASSWORD:-}
+    volumes:
+      - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
+      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/database
+      - ./config:/app/config:ro
+
+  # ==========================================================================
+  # Profile: sr_ml - StarRocks ML classifier table ingestion
+  # Requires: starrocks profile to be running
+  # ==========================================================================
+  sr-ml:
+    profiles: [sr_ml]
+    build:
+      context: .
+      dockerfile: Dockerfile.starrocks
+    command: ["bash", "-c", "umask 0000 && exec python -m social_data_pipeline.orchestrators.sr_ml"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PLATFORM=${PLATFORM:-reddit}
+      - SOURCE=${SOURCE:-}
+      - STARROCKS_PORT=${STARROCKS_PORT:-9030}
+      - STARROCKS_ROOT_PASSWORD=${STARROCKS_ROOT_PASSWORD:-}
+    volumes:
+      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/database
+      - ./config:/app/config:ro
+
+  # ==========================================================================
   # Profile: postgres_mcp - PostgreSQL MCP server (SSE)
   # RO user is created/synced by the postgres entrypoint, not here.
   # ==========================================================================
@@ -263,6 +341,32 @@ services:
         condition: service_healthy
     # Note: internal port is always 3000 (set via MCP_PORT -> --port in entrypoint).
     # MONGO_MCP_PORT only changes the host-side mapping.
+
+  # ==========================================================================
+  # Profile: starrocks_mcp - StarRocks MCP server (Streamable HTTP)
+  # RO user is created/synced by the starrocks entrypoint, not here.
+  # ==========================================================================
+  starrocks-mcp:
+    profiles: [starrocks_mcp]
+    build:
+      context: .
+      dockerfile: Dockerfile.mcp-starrocks
+    restart: "no"
+    environment:
+      STARROCKS_HOST: starrocks
+      STARROCKS_PORT: "9030"
+      STARROCKS_MYSQL_AUTH_PLUGIN: mysql_clear_password
+      MCP_PORT: "9000"
+      STARROCKS_MCP_USER: ${STARROCKS_MCP_USER:-}
+    volumes:
+      - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/starrocks:ro
+    ports:
+      - "${STARROCKS_MCP_PORT:-9000}:9000"
+    depends_on:
+      starrocks:
+        condition: service_healthy
+    # Note: internal port is always 9000 (set via MCP_PORT -> --port in entrypoint).
+    # STARROCKS_MCP_PORT only changes the host-side mapping.
 
   # ==========================================================================
   # Profile: mongo_ingest - Raw JSON ingestion to MongoDB

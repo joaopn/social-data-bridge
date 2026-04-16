@@ -6,8 +6,8 @@ Unified entrypoint for database management, source configuration, and pipeline e
 Usage:
     sdp.py db setup                          Configure databases (PostgreSQL, MongoDB)
     sdp.py db setup-mcp                      Configure MCP servers for databases
-    sdp.py db start [service]                Start services (postgres|mongo|postgres-mcp|mongo-mcp|all)
-    sdp.py db stop [service]                 Stop services (postgres|mongo|postgres-mcp|mongo-mcp|all)
+    sdp.py db start [service]                Start services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
+    sdp.py db stop [service]                 Stop services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
     sdp.py db status                         Show database config and health
     sdp.py db unsetup                        Remove database config (and optionally data)
     sdp.py db unsetup-mcp                    Remove MCP configuration
@@ -40,7 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 CONFIG_DIR = ROOT / "config"
 
-VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest"]
+VALID_PROFILES = ["parse", "lingua", "ml", "postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest", "sr_ml"]
 
 # Map profile names to docker compose service names (only where they differ)
 PROFILE_SERVICE_MAP = {
@@ -48,6 +48,8 @@ PROFILE_SERVICE_MAP = {
     "postgres_ingest": "postgres-ingest",
     "postgres_ml": "postgres-ml",
     "mongo_ingest": "mongo-ingest",
+    "sr_ingest": "sr-ingest",
+    "sr_ml": "sr-ml",
 }
 
 
@@ -86,6 +88,8 @@ def _get_configured_db_services():
         services.append("postgres")
     if (db_dir / "mongo.yaml").exists():
         services.append("mongo")
+    if (db_dir / "starrocks.yaml").exists():
+        services.append("starrocks")
     return services
 
 
@@ -104,6 +108,8 @@ def _get_configured_mcp_services():
         services.append("postgres_mcp")
     if config.get("mongo", {}).get("enabled"):
         services.append("mongo_mcp")
+    if config.get("starrocks", {}).get("enabled"):
+        services.append("starrocks_mcp")
     return services
 
 
@@ -122,7 +128,9 @@ def _load_mcp_config():
 def _is_auth_enabled():
     """Check if database authentication is enabled via .env."""
     env = load_env()
-    return env.get("POSTGRES_AUTH_ENABLED") == "true" or env.get("MONGO_AUTH_ENABLED") == "true"
+    return (env.get("POSTGRES_AUTH_ENABLED") == "true"
+            or env.get("MONGO_AUTH_ENABLED") == "true"
+            or env.get("STARROCKS_AUTH_ENABLED") == "true")
 
 
 def _load_db_yaml(name):
@@ -153,6 +161,7 @@ def _set_auth_env(password):
     """Set authentication env vars for docker compose subprocess."""
     os.environ["POSTGRES_PASSWORD"] = password
     os.environ["MONGO_ADMIN_PASSWORD"] = password
+    os.environ["STARROCKS_ROOT_PASSWORD"] = password
 
 
 # ============================================================================
@@ -206,7 +215,8 @@ def cmd_db_unsetup_mcp(args):
     if env_path.exists():
         mcp_keys = {"POSTGRES_MCP_PORT", "POSTGRES_MCP_ACCESS_MODE",
                      "MONGO_MCP_PORT", "MONGO_MCP_READ_ONLY",
-                     "POSTGRES_MCP_USER", "MONGO_MCP_USER"}
+                     "STARROCKS_MCP_PORT",
+                     "POSTGRES_MCP_USER", "MONGO_MCP_USER", "STARROCKS_MCP_USER"}
         lines = env_path.read_text().splitlines()
         new_lines = []
         for line in lines:
@@ -424,24 +434,30 @@ def cmd_db_status(args):
         return 0
 
     # Authentication status
-    auth_enabled = env.get("POSTGRES_AUTH_ENABLED") == "true" or env.get("MONGO_AUTH_ENABLED") == "true"
+    auth_enabled = (env.get("POSTGRES_AUTH_ENABLED") == "true"
+                    or env.get("MONGO_AUTH_ENABLED") == "true"
+                    or env.get("STARROCKS_AUTH_ENABLED") == "true")
     print(f"\n  Authentication: {'enabled' if auth_enabled else 'disabled'}")
     if auth_enabled:
         pg_user = env.get("POSTGRES_USER", "postgres") if "postgres" in configured else None
         mongo_user = env.get("MONGO_ADMIN_USER") if "mongo" in configured else None
-        if pg_user or mongo_user:
+        sr_auth = "starrocks" in configured and env.get("STARROCKS_AUTH_ENABLED") == "true"
+        if pg_user or mongo_user or sr_auth:
             rw_parts = []
             if pg_user:
                 rw_parts.append(f"postgres: {pg_user}")
             if mongo_user:
                 rw_parts.append(f"mongo: {mongo_user}")
+            if sr_auth:
+                rw_parts.append("starrocks: root")
             print(f"    RW user:       {', '.join(rw_parts)}")
-        ro_user = env.get("POSTGRES_RO_USER") or env.get("MONGO_RO_USER")
+        ro_user = env.get("POSTGRES_RO_USER") or env.get("MONGO_RO_USER") or env.get("STARROCKS_RO_USER")
         if ro_user:
             # Check if RO credentials file exists in any data path
             ro_cred_path = None
             for path_key, default in [("PGDATA_PATH", "./data/database/postgres"),
-                                      ("MONGO_DATA_PATH", "./data/database/mongo")]:
+                                      ("MONGO_DATA_PATH", "./data/database/mongo"),
+                                      ("STARROCKS_DATA_PATH", "./data/database/starrocks")]:
                 dp = Path(env.get(path_key, default))
                 if not dp.is_absolute():
                     dp = ROOT / dp
@@ -453,7 +469,7 @@ def cmd_db_status(args):
                 print(f"    RO user:       {ro_user} (password in {ro_cred_path})")
             else:
                 print(f"    RO user:       {ro_user} (no password)")
-        mcp_user = env.get("POSTGRES_MCP_USER") or env.get("MONGO_MCP_USER")
+        mcp_user = env.get("POSTGRES_MCP_USER") or env.get("MONGO_MCP_USER") or env.get("STARROCKS_MCP_USER")
         if mcp_user:
             print(f"    MCP user:      {mcp_user}")
 
@@ -504,6 +520,19 @@ def cmd_db_status(args):
         state_dir = mongo_data / "state_tracking"
         _print_ingestion_state(state_dir, "_mongo_", "mongo")
 
+    # StarRocks
+    if "starrocks" in configured:
+        sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+        sr_data = Path(sr_data_path)
+        if not sr_data.is_absolute():
+            sr_data = ROOT / sr_data
+
+        print(f"\n  StarRocks:")
+        print(f"    Path:      {sr_data_path}")
+        print(f"    Port:      {env.get('STARROCKS_PORT', '9030')}")
+        print(f"    FE HTTP:   {env.get('STARROCKS_FE_HTTP_PORT', '8030')}")
+        print(f"    Running:   {'yes' if 'starrocks' in running_services else 'no'}")
+
     # Export path
     export_path = env.get("DB_EXPORT_PATH")
     if export_path:
@@ -533,6 +562,15 @@ def cmd_db_status(args):
             print(f"\n  MongoDB MCP:")
             print(f"    Port:      {port}")
             print(f"    Read-only: {read_only}")
+            print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
+            print(f"    Running:   {running}")
+
+        sr_mcp = mcp_config.get("starrocks", {})
+        if sr_mcp.get("enabled"):
+            port = sr_mcp.get("port", 9000)
+            running = "yes" if "starrocks-mcp" in running_services else "no"
+            print(f"\n  StarRocks MCP:")
+            print(f"    Port:      {port}")
             print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
             print(f"    Running:   {running}")
 
@@ -691,9 +729,12 @@ def _print_ingestion_state(state_dir, label_split, db_type):
 DB_GENERATED_FILES = [
     "config/db/postgres.yaml",
     "config/db/mongo.yaml",
+    "config/db/starrocks.yaml",
     "config/db/mcp.yaml",
     "config/postgres/postgresql.local.conf",
     "config/postgres/pg_hba.local.conf",
+    "config/starrocks/fe.local.conf",
+    "config/starrocks/be.local.conf",
     "docker-compose.override.yml",
     ".env",
 ]
@@ -844,8 +885,45 @@ def cmd_db_unsetup(args):
                 print("  MongoDB data removal skipped.")
             print()
 
+    # --- StarRocks data removal ---
+    sr_data_path = env.get("STARROCKS_DATA_PATH", "")
+    sr_removed = False
+
+    if sr_data_path:
+        sr_data = Path(sr_data_path)
+        if not sr_data.is_absolute():
+            sr_data = ROOT / sr_data
+        if sr_data.exists():
+            print(f"  StarRocks data directory: {sr_data_path}")
+            print()
+            confirm1 = input("  Delete the StarRocks data? This CANNOT be undone [y/N]: ").strip().lower()
+            if confirm1 in ("y", "yes"):
+                confirm2 = input("  Are you SURE? All StarRocks data will be permanently lost [y/N]: ").strip().lower()
+                if confirm2 in ("y", "yes"):
+                    print()
+                    print("  Stopping StarRocks...")
+                    docker_compose("--profile", "starrocks", "down", "--timeout", "30")
+                    print("  Fixing directory permissions...")
+                    sr_parent = sr_data.resolve().parent
+                    uid_gid = f"{os.getuid()}:{os.getgid()}"
+                    subprocess.run(
+                        ["docker", "run", "--rm",
+                         "-v", f"{sr_parent}:/dbparent",
+                         "starrocks/allin1-ubuntu", "chown", "-R", uid_gid, "/dbparent"],
+                        cwd=ROOT,
+                    )
+                    print(f"  Removing {sr_data}...")
+                    shutil.rmtree(sr_data)
+                    sr_removed = True
+                    print("  StarRocks data removed.")
+                else:
+                    print("  StarRocks data removal skipped.")
+            else:
+                print("  StarRocks data removal skipped.")
+            print()
+
     # --- Remove RO credentials from data directories ---
-    for data_path_str in (pgdata_path, mongo_data_path):
+    for data_path_str in (pgdata_path, mongo_data_path, sr_data_path):
         if not data_path_str:
             continue
         dp = Path(data_path_str)
@@ -893,6 +971,12 @@ def cmd_db_unsetup(args):
             mongo_data = ROOT / mongo_data
         if mongo_data.exists():
             data_paths["MongoDB data"] = mongo_data_path
+    if not sr_removed and sr_data_path:
+        sr_data = Path(sr_data_path)
+        if not sr_data.is_absolute():
+            sr_data = ROOT / sr_data
+        if sr_data.exists():
+            data_paths["StarRocks data"] = sr_data_path
 
     if data_paths:
         print()
@@ -1068,6 +1152,88 @@ def cmd_db_recover_password(args):
             os.environ["MONGO_ADMIN_PASSWORD"] = new_password
             docker_compose("--profile", "mongo", "up", "-d")
 
+    # --- StarRocks recovery ---
+    if "starrocks" in configured:
+        sr_config = _load_db_yaml("starrocks")
+        if sr_config.get("auth"):
+            print("\n  Recovering StarRocks password...")
+            print("  This will temporarily restart StarRocks with auth checks disabled,")
+            print("  set a new root password, and restore normal auth.")
+            print()
+
+            # Stop StarRocks
+            print("  Stopping StarRocks...")
+            docker_compose("--profile", "starrocks", "down", "--timeout", "120")
+
+            # Backup fe.local.conf and add enable_auth_check = false
+            fe_conf_path = CONFIG_DIR / "starrocks" / "fe.local.conf"
+            fe_conf_backup = CONFIG_DIR / "starrocks" / "fe.local.conf.recovery_bak"
+
+            if not fe_conf_path.exists():
+                print("  Error: fe.local.conf not found. Is StarRocks configured?")
+                return 1
+
+            shutil.copy2(fe_conf_path, fe_conf_backup)
+            fe_content = fe_conf_path.read_text()
+            fe_content = fe_content.rstrip("\n") + "\n\n# TEMPORARY — auth bypass for password recovery\nenable_auth_check = false\n"
+            fe_conf_path.write_text(fe_content)
+
+            # Start StarRocks with auth disabled
+            print("  Starting StarRocks with auth checks disabled...")
+            docker_compose("--profile", "starrocks", "up", "-d", "--wait")
+
+            # Set new password
+            sr_port = env.get("STARROCKS_PORT", "9030")
+            escaped_pw = new_password.replace("'", "''")
+            alter_cmd = f"ALTER USER root IDENTIFIED BY '{escaped_pw}'"
+            result = subprocess.run(
+                ["docker", "compose", "exec", "starrocks",
+                 "mysql", "-h", "127.0.0.1", "-P", sr_port,
+                 "-u", "root", "--skip-password", "-e", alter_cmd],
+                cwd=ROOT,
+            )
+            if result.returncode != 0:
+                print("  Error: Failed to set new StarRocks password.")
+                # Restore backup
+                shutil.copy2(fe_conf_backup, fe_conf_path)
+                fe_conf_backup.unlink(missing_ok=True)
+                docker_compose("--profile", "starrocks", "down", "--timeout", "120")
+                return 1
+
+            # Sync RO user if credentials exist
+            sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+            ro_creds = Path(sr_data_path) / ".ro_credentials"
+            if not ro_creds.is_absolute():
+                ro_creds = ROOT / ro_creds
+            if ro_creds.exists():
+                creds = ro_creds.read_text().strip()
+                ro_user, ro_pass = creds.split(":", 1)
+                ro_sql = (
+                    f"CREATE USER IF NOT EXISTS '{ro_user}' IDENTIFIED BY '{ro_pass}';"
+                    f"ALTER USER '{ro_user}' IDENTIFIED BY '{ro_pass}';"
+                    "CREATE ROLE IF NOT EXISTS 'sdp_readonly';"
+                    "GRANT SELECT ON ALL TABLES IN ALL DATABASES TO ROLE 'sdp_readonly';"
+                    f"GRANT 'sdp_readonly' TO '{ro_user}';"
+                    f"SET DEFAULT ROLE 'sdp_readonly' TO '{ro_user}';"
+                )
+                subprocess.run(
+                    ["docker", "compose", "exec", "starrocks",
+                     "mysql", "-h", "127.0.0.1", "-P", sr_port,
+                     "-u", "root", "--skip-password", "-e", ro_sql],
+                    cwd=ROOT,
+                )
+
+            # Restore original fe.local.conf
+            shutil.copy2(fe_conf_backup, fe_conf_path)
+            fe_conf_backup.unlink(missing_ok=True)
+
+            # Restart with normal auth
+            print("  Restoring auth checks and restarting...")
+            docker_compose("--profile", "starrocks", "down", "--timeout", "120")
+            os.environ["STARROCKS_ROOT_PASSWORD"] = new_password
+            docker_compose("--profile", "starrocks", "up", "-d")
+            print("  StarRocks password updated successfully.")
+
     print("\n  Password recovery complete.")
     print("  IMPORTANT: Remember your new password — it is not stored anywhere.\n")
     return 0
@@ -1129,6 +1295,124 @@ def _mongosh_eval(port, script, password=None):
     if result.returncode != 0:
         raise RuntimeError(result.stderr.strip())
     return result.stdout.strip()
+
+
+def _sr_query(port, database, query, password=None):
+    """Run a MySQL query against StarRocks via docker compose exec and return rows."""
+    cmd = ["docker", "compose", "exec", "-T", "starrocks",
+           "mysql", "-h", "127.0.0.1", "-P", str(port), "-u", "root",
+           "--skip-column-names", "--batch"]
+    if password:
+        cmd += [f"-p{password}"]
+    if database:
+        cmd += ["-D", database]
+    cmd += ["-e", query]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip())
+    lines = [line for line in result.stdout.strip().splitlines() if line.strip()]
+    return [line.split("\t") for line in lines]
+
+
+def _sr_exec(port, database, statement, password=None):
+    """Execute a MySQL statement against StarRocks. Returns (success, stderr)."""
+    cmd = ["docker", "compose", "exec", "-T", "starrocks",
+           "mysql", "-h", "127.0.0.1", "-P", str(port), "-u", "root",
+           "--batch"]
+    if password:
+        cmd += [f"-p{password}"]
+    if database:
+        cmd += ["-D", database]
+    cmd += ["-e", statement]
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    return result.returncode == 0, result.stderr.strip()
+
+
+def _interactive_sr_indexes(source, platform_config, password):
+    """Interactive StarRocks BITMAP index creation. Returns {table: [new_fields]} for config persistence."""
+    from social_data_pipeline.setup.utils import ask_multi_select, ask_list, section_header
+    import time
+
+    section_header("StarRocks Index Creation")
+
+    sr_yaml = _load_db_yaml("starrocks")
+    port = int(sr_yaml.get("port", 9030))
+    database = source  # database-per-source
+
+    try:
+        rows = _sr_query(port, database,
+            "SELECT table_name FROM information_schema.tables "
+            f"WHERE table_schema = '{database}' AND table_type = 'BASE TABLE' "
+            "ORDER BY table_name",
+            password)
+        tables = [r[0] for r in rows]
+    except Exception as e:
+        print(f"\n  Could not connect to StarRocks: {e}")
+        print("  Is it running? (sdp db start starrocks)\n")
+        return {}
+
+    if not tables:
+        print(f"\n  No tables found in database '{database}'.\n")
+        return {}
+
+    print(f"  Database: {database}")
+    selected_tables = ask_multi_select("Select tables to create indexes on", tables)
+
+    created = {}
+
+    for table in selected_tables:
+        print(f"\n  --- {table} ---")
+
+        # Get columns
+        try:
+            rows = _sr_query(port, database,
+                f"SELECT column_name FROM information_schema.columns "
+                f"WHERE table_schema = '{database}' AND table_name = '{table}' "
+                f"ORDER BY ordinal_position",
+                password)
+            columns = [r[0] for r in rows]
+            if columns:
+                print(f"  Columns: {', '.join(columns)}")
+        except Exception:
+            pass
+
+        # Get existing indexes
+        try:
+            rows = _sr_query(port, database,
+                f"SHOW INDEXES FROM `{database}`.`{table}`",
+                password)
+            existing = [r[2] for r in rows] if rows else []
+            if existing:
+                print(f"  Existing indexes: {', '.join(existing)}")
+            else:
+                print("  Existing indexes: (none)")
+        except Exception:
+            print("  Existing indexes: (could not query)")
+
+        fields = ask_list("New BITMAP indexes (comma-separated field names, empty to skip)", default=[])
+        if not fields:
+            continue
+
+        table_created = []
+        for field in fields:
+            index_name = f"idx_{table}_{field}"
+            print(f"  Creating BITMAP index: {index_name} ...", end=" ", flush=True)
+            t_start = time.time()
+
+            statement = f"CREATE INDEX `{index_name}` ON `{database}`.`{table}` (`{field}`) USING BITMAP"
+            success, stderr = _sr_exec(port, database, statement, password)
+            duration = time.time() - t_start
+
+            if success:
+                print(f"done ({_format_duration(duration)})")
+                table_created.append(field)
+            else:
+                print(f"failed: {stderr}")
+
+        if table_created:
+            created[table] = table_created
+
+    return created
 
 
 def _interactive_pg_indexes(source, platform_config, password):
@@ -1369,7 +1653,7 @@ def _interactive_mongo_indexes(source, platform_config, password):
     return created
 
 
-def _persist_indexes_to_config(source, pg_created, mongo_created):
+def _persist_indexes_to_config(source, pg_created, mongo_created, sr_created=None):
     """Merge newly created indexes into platform.yaml."""
     import yaml
 
@@ -1388,6 +1672,14 @@ def _persist_indexes_to_config(source, pg_created, mongo_created):
         mongo_indexes = config.setdefault("mongo_indexes", {})
         for dt, fields in mongo_created.items():
             existing = mongo_indexes.setdefault(dt, [])
+            for f in fields:
+                if f not in existing:
+                    existing.append(f)
+
+    if sr_created:
+        sr_indexes = config.setdefault("sr_indexes", {})
+        for table, fields in sr_created.items():
+            existing = sr_indexes.setdefault(table, [])
             for f in fields:
                 if f not in existing:
                     existing.append(f)
@@ -1419,6 +1711,8 @@ def cmd_db_create_indexes(args):
         source_dbs.append("postgres")
     if "mongo_ingest" in source_profiles:
         source_dbs.append("mongo")
+    if any(p in source_profiles for p in ("sr_ingest", "sr_ml")):
+        source_dbs.append("starrocks")
     available = [db for db in configured if db in source_dbs]
 
     if not available:
@@ -1426,29 +1720,32 @@ def cmd_db_create_indexes(args):
         return 1
 
     # Determine which DB(s) to target
+    db_labels = {"postgres": "PostgreSQL", "mongo": "MongoDB", "starrocks": "StarRocks"}
     if len(available) == 1:
         targets = available
-        db_label = "PostgreSQL" if "postgres" in available else "MongoDB"
-        print(f"\n  Database: {db_label}")
+        print(f"\n  Database: {db_labels.get(available[0], available[0])}")
     else:
-        choice = ask_choice("Which database?", ["PostgreSQL", "MongoDB", "Both"], default="Both", tag="sdp_idx_database")
-        if choice == "PostgreSQL":
-            targets = ["postgres"]
-        elif choice == "MongoDB":
-            targets = ["mongo"]
-        else:
+        choices = [db_labels[db] for db in available] + ["All"]
+        choice = ask_choice("Which database?", choices, default="All", tag="sdp_idx_database")
+        if choice == "All":
             targets = available
+        else:
+            # Map label back to key
+            label_to_key = {v: k for k, v in db_labels.items()}
+            targets = [label_to_key[choice]]
 
     # Prompt for password if needed
     env = load_env()
     password = None
     needs_pg_auth = "postgres" in targets and env.get("POSTGRES_AUTH_ENABLED") == "true"
     needs_mongo_auth = "mongo" in targets and env.get("MONGO_AUTH_ENABLED") == "true"
-    if needs_pg_auth or needs_mongo_auth:
+    needs_sr_auth = "starrocks" in targets and env.get("STARROCKS_AUTH_ENABLED") == "true"
+    if needs_pg_auth or needs_mongo_auth or needs_sr_auth:
         password = _prompt_db_password(tag="sdp_db_password")
 
     pg_created = {}
     mongo_created = {}
+    sr_created = {}
 
     if "postgres" in targets:
         pg_created = _interactive_pg_indexes(source, platform_config, password)
@@ -1456,8 +1753,13 @@ def cmd_db_create_indexes(args):
     if "mongo" in targets:
         mongo_created = _interactive_mongo_indexes(source, platform_config, password)
 
+    if "starrocks" in targets:
+        sr_created = _interactive_sr_indexes(source, platform_config, password)
+
     # Summary
-    total = sum(len(v) for v in pg_created.values()) + sum(len(v) for v in mongo_created.values())
+    total = (sum(len(v) for v in pg_created.values())
+             + sum(len(v) for v in mongo_created.values())
+             + sum(len(v) for v in sr_created.values()))
     if total == 0:
         print("\n  No new indexes created.\n")
         return 0
@@ -1465,7 +1767,7 @@ def cmd_db_create_indexes(args):
     print(f"\n  Created {total} new index(es).")
 
     if ask_bool("Save new indexes to platform.yaml?", default=False, tag="sdp_idx_save"):
-        _persist_indexes_to_config(source, pg_created, mongo_created)
+        _persist_indexes_to_config(source, pg_created, mongo_created, sr_created)
 
     print()
     return 0
@@ -1729,6 +2031,16 @@ def cmd_source_status(args):
             state_dir = mongo_data / "state_tracking"
             _print_source_ingestion_state(state_dir, source, "mongo")
 
+        has_starrocks = any(p.startswith("sr_") for p in profiles)
+        if has_starrocks:
+            sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+            sr_data = Path(sr_data_path)
+            if not sr_data.is_absolute():
+                sr_data = ROOT / sr_data
+            state_dir = sr_data / "state_tracking"
+            _print_source_ingestion_state(state_dir, source, "sr_ingest")
+            _print_source_ingestion_state(state_dir, source, "sr_ml")
+
     print()
     return 0
 
@@ -1785,7 +2097,7 @@ def _print_source_ingestion_state(state_dir, source, db_type):
 # sdp source error-logs
 # ============================================================================
 
-INGESTION_PROFILES = ["postgres_ingest", "postgres_ml", "mongo_ingest"]
+INGESTION_PROFILES = ["postgres_ingest", "postgres_ml", "mongo_ingest", "sr_ingest", "sr_ml"]
 
 
 def cmd_source_error_logs(args):
@@ -1834,6 +2146,12 @@ def cmd_source_error_logs(args):
                 if not pgdata.is_absolute():
                     pgdata = ROOT / pgdata
                 state_dir = pgdata / "state_tracking"
+            elif profile.startswith("sr_"):
+                sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+                sr_data = Path(sr_data_path)
+                if not sr_data.is_absolute():
+                    sr_data = ROOT / sr_data
+                state_dir = sr_data / "state_tracking"
             else:
                 mongo_data_path = env.get("MONGO_DATA_PATH", "./data/database/mongo")
                 mongo_data = Path(mongo_data_path)
@@ -2032,9 +2350,16 @@ def cmd_run(args):
     else:
         platform = f"custom/{source}"
 
-    # Prompt for admin password if auth enabled and profile accesses a database
-    db_profiles = {"postgres_ingest", "postgres_ml", "mongo_ingest"}
-    if profile in db_profiles and _is_auth_enabled():
+    # Prompt for admin password if auth enabled for the target database
+    _profile_auth = {
+        "postgres_ingest": "POSTGRES_AUTH_ENABLED",
+        "postgres_ml": "POSTGRES_AUTH_ENABLED",
+        "mongo_ingest": "MONGO_AUTH_ENABLED",
+        "sr_ingest": "STARROCKS_AUTH_ENABLED",
+        "sr_ml": "STARROCKS_AUTH_ENABLED",
+    }
+    auth_key = _profile_auth.get(profile)
+    if auth_key and load_env().get(auth_key) == "true":
         password = _prompt_db_password(tag="sdp_db_password")
         _set_auth_env(password)
 
@@ -2102,13 +2427,15 @@ def build_parser():
 
     db_start_p = db_sub.add_parser("start", help="Start database services")
     db_start_p.add_argument("service", nargs="?",
-                            choices=["postgres", "mongo", "postgres-mcp", "mongo-mcp"],
+                            choices=["postgres", "mongo", "starrocks",
+                                     "postgres-mcp", "mongo-mcp", "starrocks-mcp"],
                             help="Specific service (default: all configured)")
     db_start_p.set_defaults(func=cmd_db_start)
 
     db_stop_p = db_sub.add_parser("stop", help="Stop database services")
     db_stop_p.add_argument("service", nargs="?",
-                           choices=["postgres", "mongo", "postgres-mcp", "mongo-mcp"],
+                           choices=["postgres", "mongo", "starrocks",
+                                    "postgres-mcp", "mongo-mcp", "starrocks-mcp"],
                            help="Specific service (default: all configured)")
     db_stop_p.set_defaults(func=cmd_db_stop)
 
