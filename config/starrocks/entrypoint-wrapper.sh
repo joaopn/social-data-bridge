@@ -1,6 +1,20 @@
 #!/bin/bash
 set -e
 
+# --- Apply custom configs before starting StarRocks ---
+# Our configs are mounted at /etc/starrocks/config/ (read-only staging).
+# Copy them over the image defaults so StarRocks reads our jvm_heap_size,
+# mem_limit, and other tuning. The image's entrypoint may append additional
+# settings (e.g. priority_networks) after the copy.
+STAGED_FE="/etc/starrocks/config/fe.local.conf"
+STAGED_BE="/etc/starrocks/config/be.local.conf"
+if [ -f "$STAGED_FE" ]; then
+    cp "$STAGED_FE" /data/deploy/starrocks/fe/conf/fe.conf
+fi
+if [ -f "$STAGED_BE" ]; then
+    cp "$STAGED_BE" /data/deploy/starrocks/be/conf/be.conf
+fi
+
 # --- Start StarRocks (original entrypoint) in background ---
 # The allin1-ubuntu image default: ENTRYPOINT [tini --] CMD [./entrypoint.sh]
 # Since we override entrypoint, docker-compose sets init: true for tini.
@@ -14,12 +28,19 @@ cleanup() {
 }
 trap cleanup TERM INT
 
+# Helper: run mysql command, trying passwordless first then with password.
+# Auth state persists across restarts, so both must be attempted.
+sr_mysql() {
+    mysql -h 127.0.0.1 -P 9030 -u root --skip-password "$@" 2>/dev/null \
+        || mysql -h 127.0.0.1 -P 9030 -u root -p"${STARROCKS_ROOT_PASSWORD}" "$@" 2>/dev/null
+}
+
 # --- Wait for StarRocks FE to be ready ---
 echo "[sdp] Waiting for StarRocks FE to be ready..."
 MAX_RETRIES=60
 RETRY_INTERVAL=5
 for i in $(seq 1 $MAX_RETRIES); do
-    if mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e "SELECT 1" >/dev/null 2>&1; then
+    if sr_mysql -e "SELECT 1" >/dev/null 2>&1; then
         echo "[sdp] StarRocks FE is ready"
         break
     fi
@@ -37,7 +58,7 @@ done
 # --- Wait for StarRocks BE to register ---
 echo "[sdp] Waiting for Backend to register..."
 for i in $(seq 1 $MAX_RETRIES); do
-    if mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e "SHOW BACKENDS\G" 2>/dev/null | grep -q "Alive: true"; then
+    if sr_mysql -e "SHOW BACKENDS\G" 2>/dev/null | grep -q "Alive: true"; then
         echo "[sdp] Backend is registered and alive"
         break
     fi
@@ -54,7 +75,6 @@ done
 
 # --- Set root password if provided ---
 if [ -n "$STARROCKS_ROOT_PASSWORD" ]; then
-    # Escape single quotes in password for SQL
     ESCAPED_PW="${STARROCKS_ROOT_PASSWORD//\'/\'\'}"
 
     if mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e "SELECT 1" >/dev/null 2>&1; then

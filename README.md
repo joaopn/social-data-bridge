@@ -67,7 +67,7 @@ python sdp.py source error-logs             # Show error details for failed data
 - **MongoDB ingestion** of raw JSON, CSV, and Parquet directly after extraction, for raw data inspection
 - **StarRocks ingestion** via the StarRocks OLAP engine for high-performance analytical queries
 - **Optional authentication** with admin and read-only database users
-- **MCP servers** for PostgreSQL and MongoDB, exposing read-only databases to AI tools (Claude Desktop, VS Code, Cursor)
+- **MCP servers** for PostgreSQL, MongoDB, and StarRocks, exposing read-only databases to AI tools (Claude Desktop, VS Code, Cursor)
 
 ### Architecture
 
@@ -183,8 +183,8 @@ python sdp.py <db|source|run> [options]
 |---------|-------------|
 | `sdp.py db setup` | Configure databases (PostgreSQL, MongoDB, StarRocks, optional auth) — global, one-time |
 | `sdp.py db setup-mcp` | Configure MCP servers for AI tool access (ports, read-only mode) |
-| `sdp.py db start [service]` | Start services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp` (all if unspecified) |
-| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp` (all if unspecified) |
+| `sdp.py db start [service]` | Start services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp` (all if unspecified) |
+| `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp` (all if unspecified) |
 | `sdp.py db status` | Show database config, health, and MCP status |
 | `sdp.py db recover-password` | Reset database admin password (requires auth enabled) |
 | `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes |

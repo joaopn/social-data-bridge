@@ -113,7 +113,7 @@ def get_create_table_query(table, database, columns_list, platform_config, pk_co
         f"{columns_sql}\n"
         f") PRIMARY KEY (`{pk_column}`)\n"
         f"DISTRIBUTED BY HASH(`{pk_column}`)\n"
-        f"PROPERTIES(\"enable_persistent_index\" = \"true\")"
+        f"PROPERTIES(\"enable_persistent_index\" = \"true\", \"replication_num\" = \"1\")"
     )
     return query
 
@@ -424,7 +424,7 @@ def get_classifier_create_table_query(table, database, column_list, column_types
             f"{columns_sql}\n"
             f") PRIMARY KEY (`{pk_column}`)\n"
             f"DISTRIBUTED BY HASH(`{pk_column}`)\n"
-            f"PROPERTIES(\"enable_persistent_index\" = \"true\")"
+            f"PROPERTIES(\"enable_persistent_index\" = \"true\", \"replication_num\" = \"1\")"
         )
     else:
         query = (

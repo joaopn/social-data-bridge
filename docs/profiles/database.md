@@ -289,6 +289,7 @@ python sdp.py db start               # Starts databases + MCP servers together
 |------------|----------------------------------|------------------|--------------|----------|
 | PostgreSQL | `crystaldba/postgres-mcp`        | SSE              | 8000         | `/sse`   |
 | MongoDB    | `Dockerfile.mcp-mongo`           | Streamable HTTP  | 3000         | `/mcp`   |
+| StarRocks  | `Dockerfile.mcp-starrocks`       | Streamable HTTP  | 9000         | `/mcp`   |
 
 MCP servers connect using the read-only database user (configured during `sdp db setup`) when auth is enabled, or with default credentials otherwise. The database entrypoint wrappers create/update the RO user on every start, reading credentials from `.ro_credentials` in the data volume. `sdp db setup-mcp` only configures MCP server settings (ports, access mode) — it requires an existing RO user. Read-only mode is the default but can be changed during `sdp db setup-mcp`. Use `sdp db unsetup-mcp` to remove MCP configuration.
 

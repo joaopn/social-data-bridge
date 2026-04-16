@@ -53,6 +53,8 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `MONGO_MCP_PORT` | MongoDB MCP server port | `3000` |
 | `MONGO_MCP_READ_ONLY` | MongoDB MCP read-only flag | `true` |
 | `MCP_MONGODB_USER` | MongoDB MCP connection user | (unset) |
+| `STARROCKS_MCP_PORT` | StarRocks MCP server port | `9000` |
+| `STARROCKS_MCP_USER` | StarRocks MCP connection user | (unset) |
 
 > [!NOTE]
 > - `SOURCE` controls which source config directory is loaded. When running via `sdp.py run`, it is set automatically (auto-selects if only one source configured, or via `--source`).
@@ -111,7 +113,8 @@ config/
 │   └── pipeline.yaml             # StarRocks ingestion settings
 ├── mcp/
 │   ├── entrypoint-postgres.sh    # PostgreSQL MCP entrypoint
-│   └── entrypoint-mongo.sh       # MongoDB MCP entrypoint
+│   ├── entrypoint-mongo.sh       # MongoDB MCP entrypoint
+│   └── entrypoint-starrocks.sh   # StarRocks MCP entrypoint
 └── postgres_ml/
     ├── pipeline.yaml             # ML classifier ingestion settings
     └── services.yaml             # Classifier table definitions
