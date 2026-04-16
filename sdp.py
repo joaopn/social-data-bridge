@@ -431,19 +431,24 @@ def cmd_db_status(args):
         return 0
 
     # Authentication status
-    auth_enabled = env.get("POSTGRES_AUTH_ENABLED") == "true" or env.get("MONGO_AUTH_ENABLED") == "true"
+    auth_enabled = (env.get("POSTGRES_AUTH_ENABLED") == "true"
+                    or env.get("MONGO_AUTH_ENABLED") == "true"
+                    or env.get("STARROCKS_AUTH_ENABLED") == "true")
     print(f"\n  Authentication: {'enabled' if auth_enabled else 'disabled'}")
     if auth_enabled:
         pg_user = env.get("POSTGRES_USER", "postgres") if "postgres" in configured else None
         mongo_user = env.get("MONGO_ADMIN_USER") if "mongo" in configured else None
-        if pg_user or mongo_user:
+        sr_auth = "starrocks" in configured and env.get("STARROCKS_AUTH_ENABLED") == "true"
+        if pg_user or mongo_user or sr_auth:
             rw_parts = []
             if pg_user:
                 rw_parts.append(f"postgres: {pg_user}")
             if mongo_user:
                 rw_parts.append(f"mongo: {mongo_user}")
+            if sr_auth:
+                rw_parts.append("starrocks: root")
             print(f"    RW user:       {', '.join(rw_parts)}")
-        ro_user = env.get("POSTGRES_RO_USER") or env.get("MONGO_RO_USER")
+        ro_user = env.get("POSTGRES_RO_USER") or env.get("MONGO_RO_USER") or env.get("STARROCKS_RO_USER")
         if ro_user:
             # Check if RO credentials file exists in any data path
             ro_cred_path = None
@@ -1133,6 +1138,88 @@ def cmd_db_recover_password(args):
             print("  Restarting MongoDB with auth...")
             os.environ["MONGO_ADMIN_PASSWORD"] = new_password
             docker_compose("--profile", "mongo", "up", "-d")
+
+    # --- StarRocks recovery ---
+    if "starrocks" in configured:
+        sr_config = _load_db_yaml("starrocks")
+        if sr_config.get("auth"):
+            print("\n  Recovering StarRocks password...")
+            print("  This will temporarily restart StarRocks with auth checks disabled,")
+            print("  set a new root password, and restore normal auth.")
+            print()
+
+            # Stop StarRocks
+            print("  Stopping StarRocks...")
+            docker_compose("--profile", "starrocks", "down", "--timeout", "120")
+
+            # Backup fe.local.conf and add enable_auth_check = false
+            fe_conf_path = CONFIG_DIR / "starrocks" / "fe.local.conf"
+            fe_conf_backup = CONFIG_DIR / "starrocks" / "fe.local.conf.recovery_bak"
+
+            if not fe_conf_path.exists():
+                print("  Error: fe.local.conf not found. Is StarRocks configured?")
+                return 1
+
+            shutil.copy2(fe_conf_path, fe_conf_backup)
+            fe_content = fe_conf_path.read_text()
+            fe_content = fe_content.rstrip("\n") + "\n\n# TEMPORARY — auth bypass for password recovery\nenable_auth_check = false\n"
+            fe_conf_path.write_text(fe_content)
+
+            # Start StarRocks with auth disabled
+            print("  Starting StarRocks with auth checks disabled...")
+            docker_compose("--profile", "starrocks", "up", "-d", "--wait")
+
+            # Set new password
+            sr_port = env.get("STARROCKS_PORT", "9030")
+            escaped_pw = new_password.replace("'", "''")
+            alter_cmd = f"ALTER USER root IDENTIFIED BY '{escaped_pw}'"
+            result = subprocess.run(
+                ["docker", "compose", "exec", "starrocks",
+                 "mysql", "-h", "127.0.0.1", "-P", sr_port,
+                 "-u", "root", "--skip-password", "-e", alter_cmd],
+                cwd=ROOT,
+            )
+            if result.returncode != 0:
+                print("  Error: Failed to set new StarRocks password.")
+                # Restore backup
+                shutil.copy2(fe_conf_backup, fe_conf_path)
+                fe_conf_backup.unlink(missing_ok=True)
+                docker_compose("--profile", "starrocks", "down", "--timeout", "120")
+                return 1
+
+            # Sync RO user if credentials exist
+            sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
+            ro_creds = Path(sr_data_path) / ".ro_credentials"
+            if not ro_creds.is_absolute():
+                ro_creds = ROOT / ro_creds
+            if ro_creds.exists():
+                creds = ro_creds.read_text().strip()
+                ro_user, ro_pass = creds.split(":", 1)
+                ro_sql = (
+                    f"CREATE USER IF NOT EXISTS '{ro_user}' IDENTIFIED BY '{ro_pass}';"
+                    f"ALTER USER '{ro_user}' IDENTIFIED BY '{ro_pass}';"
+                    "CREATE ROLE IF NOT EXISTS 'sdp_readonly';"
+                    "GRANT SELECT ON ALL TABLES IN ALL DATABASES TO ROLE 'sdp_readonly';"
+                    f"GRANT 'sdp_readonly' TO '{ro_user}';"
+                    f"SET DEFAULT ROLE 'sdp_readonly' TO '{ro_user}';"
+                )
+                subprocess.run(
+                    ["docker", "compose", "exec", "starrocks",
+                     "mysql", "-h", "127.0.0.1", "-P", sr_port,
+                     "-u", "root", "--skip-password", "-e", ro_sql],
+                    cwd=ROOT,
+                )
+
+            # Restore original fe.local.conf
+            shutil.copy2(fe_conf_backup, fe_conf_path)
+            fe_conf_backup.unlink(missing_ok=True)
+
+            # Restart with normal auth
+            print("  Restoring auth checks and restarting...")
+            docker_compose("--profile", "starrocks", "down", "--timeout", "120")
+            os.environ["STARROCKS_ROOT_PASSWORD"] = new_password
+            docker_compose("--profile", "starrocks", "up", "-d")
+            print("  StarRocks password updated successfully.")
 
     print("\n  Password recovery complete.")
     print("  IMPORTANT: Remember your new password — it is not stored anywhere.\n")

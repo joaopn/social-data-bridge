@@ -264,23 +264,25 @@ Each classifier entry has:
 
 ## Authentication
 
-Database authentication is optional and can be enabled during `sdp db setup`. When enabled, it adds password-based access control to both PostgreSQL and MongoDB.
+Database authentication is optional and can be enabled during `sdp db setup`. When enabled, it adds password-based access control to PostgreSQL, MongoDB, and StarRocks.
 
 ### Users
 
-When auth is enabled, two database users are created:
+When auth is enabled, two database users are created per database:
 
-| User | Password | Role | Purpose |
-|------|----------|------|---------|
-| `admin` (postgres/admin) | Prompted at runtime via `getpass` | Full access | Database administration, ingestion |
-| Read-only user (default `readonly`) | Auto-generated, stored in `.ro_credentials` | Read-only | MCP servers, read-only tools |
+| Database | Admin user | RO user | Password storage |
+|----------|-----------|---------|-----------------|
+| PostgreSQL | `postgres` | `readonly` | Admin: runtime prompt. RO: `.ro_credentials` |
+| MongoDB | `admin` | `readonly` | Admin: runtime prompt. RO: `.ro_credentials` |
+| StarRocks | `root` | `readonly` | Admin: runtime prompt. RO: `.ro_credentials` |
 
-The admin password is **never stored on disk** — it is prompted each time `sdp db start` is run with auth enabled. If forgotten, use `sdp db recover-password` to reset it. The read-only user password is auto-generated during `sdp db setup` and stored in `.ro_credentials` (chmod 600) in the database data volume.
+The admin password is **never stored on disk** — it is prompted each time `sdp db start` is run with auth enabled. If forgotten, use `sdp db recover-password` to reset it. The read-only user password is auto-generated during `sdp db setup` and stored in `.ro_credentials` (chmod 600) in each database data volume.
 
 ### How It Works
 
 - **PostgreSQL**: `pg_hba.local.conf` uses `scram-sha-256` for remote connections and `trust` for local socket. Existing databases are migrated via temporary trust start in the entrypoint.
 - **MongoDB**: Fresh databases use official `docker-entrypoint.sh` delegation. Existing databases use the MongoDB localhost exception to create the initial admin user.
+- **StarRocks**: The entrypoint wrapper starts StarRocks, waits for FE readiness, then sets the root password and creates/syncs the read-only user via SQL. Uses `GRANT SELECT ON ALL TABLES IN ALL DATABASES TO ROLE 'sdp_readonly'` for read-only access. Password recovery uses temporary `enable_auth_check = false` in `fe.conf` (analogous to PostgreSQL's trust-auth swap).
 
 ---
 

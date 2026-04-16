@@ -219,11 +219,14 @@ services:
   starrocks:
     profiles: [starrocks]
     image: starrocks/allin1-ubuntu
+    init: true
     restart: "no"
     stop_grace_period: 5m
     mem_limit: ${STARROCKS_MEM_LIMIT:-0}
+    entrypoint: ["bash", "/etc/starrocks/config/entrypoint-wrapper.sh"]
     environment:
       STARROCKS_ROOT_PASSWORD: ${STARROCKS_ROOT_PASSWORD:-}
+      STARROCKS_AUTH_ENABLED: ${STARROCKS_AUTH_ENABLED:-}
     ports:
       - "${STARROCKS_PORT:-9030}:9030"          # MySQL protocol
       - "${STARROCKS_FE_HTTP_PORT:-8030}:8030"   # FE HTTP (admin, Stream Load)
@@ -234,12 +237,13 @@ services:
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ./config/starrocks/fe.local.conf:/data/starrocks/fe/conf/fe.conf:ro
       - ./config/starrocks/be.local.conf:/data/starrocks/be/conf/be.conf:ro
+      - ./config/starrocks/entrypoint-wrapper.sh:/etc/starrocks/config/entrypoint-wrapper.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e 'SELECT 1' 2>/dev/null || exit 1"]
+      test: ["CMD-SHELL", "(mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e 'SHOW BACKENDS\\G' 2>/dev/null || mysql -h 127.0.0.1 -P 9030 -u root -p\"$STARROCKS_ROOT_PASSWORD\" -e 'SHOW BACKENDS\\G' 2>/dev/null) | grep -q 'Alive: true'"]
       interval: 15s
       timeout: 10s
       retries: 20
-      start_period: 60s
+      start_period: 90s
 
   # ==========================================================================
   # Profile: sr_ingest - StarRocks base table ingestion

@@ -163,6 +163,10 @@ def _load_existing_db_config():
                 existing.setdefault("sr_be_mem_limit", sr["be_mem_limit"])
             if sr.get("storage_paths"):
                 existing["starrocks_storage_paths"] = sr["storage_paths"]
+            if sr.get("auth"):
+                existing["auth_enabled"] = True
+            if sr.get("ro_username"):
+                existing.setdefault("ro_username", sr["ro_username"])
         except (OSError, yaml.YAMLError):
             pass
 
@@ -521,18 +525,27 @@ def generate_env(settings):
         ]
 
     if settings.get("auth_enabled"):
-        lines += [
+        auth_lines = [
             "",
             "# ===== AUTHENTICATION =====",
-            "POSTGRES_AUTH_ENABLED=true",
-            "MONGO_AUTH_ENABLED=true",
-            "MONGO_ADMIN_USER=admin",
         ]
-        if settings.get("ro_username"):
-            lines += [
-                f"POSTGRES_RO_USER={settings['ro_username']}",
-                f"MONGO_RO_USER={settings['ro_username']}",
+        if "pgdata_path" in settings:
+            auth_lines.append("POSTGRES_AUTH_ENABLED=true")
+        if "mongo_data_path" in settings:
+            auth_lines += [
+                "MONGO_AUTH_ENABLED=true",
+                "MONGO_ADMIN_USER=admin",
             ]
+        if "starrocks_data_path" in settings:
+            auth_lines.append("STARROCKS_AUTH_ENABLED=true")
+        if settings.get("ro_username"):
+            if "pgdata_path" in settings:
+                auth_lines.append(f"POSTGRES_RO_USER={settings['ro_username']}")
+            if "mongo_data_path" in settings:
+                auth_lines.append(f"MONGO_RO_USER={settings['ro_username']}")
+            if "starrocks_data_path" in settings:
+                auth_lines.append(f"STARROCKS_RO_USER={settings['ro_username']}")
+        lines += auth_lines
 
     # Preserve existing env vars not managed by this function
     new_content = "\n".join(lines) + "\n"

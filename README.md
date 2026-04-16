@@ -191,7 +191,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
 | `sdp.py db unsetup-mcp` | Remove MCP configuration and stop MCP containers |
 
-`db setup` generates `.env`, `config/db/*.yaml`, `config/postgres/postgresql.local.conf`, and `config/starrocks/{fe,be}.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and MCP credential files. Database deletion in `db unsetup` requires two separate confirmations.
+`db setup` generates `.env`, `config/db/*.yaml`, `config/postgres/postgresql.local.conf`, and `config/starrocks/{fe,be}.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and `.ro_credentials` files in each database data volume. Database deletion in `db unsetup` requires two separate confirmations.
 
 ### Source Management (`sdp.py source`)
 
