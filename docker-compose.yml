@@ -122,8 +122,8 @@ services:
       - "${POSTGRES_PORT:-5432}:${POSTGRES_PORT:-5432}"
     volumes:
       - ${PGDATA_PATH:-./data/database/postgres}/pgdata:/var/lib/postgresql
-      - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
-      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      # Per-source parsed/output mounts are auto-generated in docker-compose.override.yml
+      # by sdp db start (scans config/sources/*/platform.yaml)
       - ${PGDATA_PATH:-./data/database/postgres}:/data/database
       - ${DB_EXPORT_PATH:-./data/export}:/export
       - ./config/postgres:/etc/postgresql/config:ro
