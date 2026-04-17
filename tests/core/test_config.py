@@ -13,6 +13,7 @@ from social_data_pipeline.core.config import (
     validate_processing_config,
     validate_database_config,
     validate_mongo_config,
+    validate_starrocks_config,
     validate_classifier_config,
     load_profile_config,
     load_platform_config,
@@ -180,6 +181,24 @@ class TestValidateMongoConfig:
             validate_mongo_config({"database": db})
 
 
+# ── validate_starrocks_config ──────────────────────────────────────────────
+
+class TestValidateStarrocksConfig:
+    def test_valid(self):
+        validate_starrocks_config({"database": {"host": "h", "port": 9030, "user": "root"}})
+
+    @pytest.mark.parametrize("missing_key", ["host", "port", "user"])
+    def test_missing_key(self, missing_key):
+        db = {"host": "h", "port": 9030, "user": "root"}
+        del db[missing_key]
+        with pytest.raises(ConfigurationError, match=missing_key):
+            validate_starrocks_config({"database": db})
+
+    def test_no_database_section(self):
+        with pytest.raises(ConfigurationError):
+            validate_starrocks_config({})
+
+
 # ── validate_classifier_config ──────────────────────────────────────────────
 
 class TestValidateClassifierConfig:
@@ -312,6 +331,38 @@ class TestApplyEnvOverrides:
         original = {"database": {"name": "olddb"}}
         apply_env_overrides(original, "postgres_ingest")
         assert original["database"]["name"] == "olddb"
+
+    def test_starrocks_port_override(self, monkeypatch):
+        monkeypatch.setenv("STARROCKS_PORT", "9031")
+        result = apply_env_overrides({"database": {}}, "sr_ingest")
+        assert result["database"]["port"] == 9031
+
+    def test_starrocks_fe_http_port_override(self, monkeypatch):
+        monkeypatch.setenv("STARROCKS_FE_HTTP_PORT", "8031")
+        result = apply_env_overrides({"database": {}}, "sr_ingest")
+        assert result["database"]["fe_http_port"] == 8031
+
+    def test_starrocks_password_override(self, monkeypatch):
+        monkeypatch.setenv("STARROCKS_ROOT_PASSWORD", "srpass")
+        result = apply_env_overrides({"database": {}}, "sr_ingest")
+        assert result["database"]["password"] == "srpass"
+
+    def test_starrocks_creates_database_key(self, monkeypatch):
+        monkeypatch.setenv("STARROCKS_PORT", "9030")
+        result = apply_env_overrides({}, "sr_ingest")
+        assert result["database"]["port"] == 9030
+
+    def test_starrocks_sr_ml_profile(self, monkeypatch):
+        monkeypatch.setenv("STARROCKS_PORT", "9031")
+        monkeypatch.setenv("STARROCKS_ROOT_PASSWORD", "secret")
+        result = apply_env_overrides({"database": {}}, "sr_ml")
+        assert result["database"]["port"] == 9031
+        assert result["database"]["password"] == "secret"
+
+    def test_starrocks_env_ignored_for_other_profiles(self, monkeypatch):
+        monkeypatch.setenv("STARROCKS_PORT", "9031")
+        result = apply_env_overrides({"database": {"port": 5432}}, "postgres_ingest")
+        assert result["database"]["port"] == 5432
 
 
 # ── get_platform_fields ────────────────────────────────────────────────────
