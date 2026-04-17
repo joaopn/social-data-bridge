@@ -982,10 +982,19 @@ def main():
     print(f"\n  Done! Database configuration has been generated.")
 
     if settings.get("auth_enabled"):
+        rw_names = {"postgres": "postgres", "mongo": "admin", "starrocks": "root"}
+        print(f"\n  Database users (admin / read-write):")
+        for db in settings["databases"]:
+            if db in rw_names:
+                print(f"    {db:12s} {rw_names[db]}")
+        if settings.get("ro_username"):
+            print(f"\n  Read-only user for all databases: {settings['ro_username']} (auto-generated password)")
+        print(f"\n  The admin password is the same for all databases.")
         print(f"\n  IMPORTANT: Remember your admin password — it is not stored anywhere.")
         print(f"  If lost, recover with: python sdp.py db recover-password")
 
-    print(f"\n  Next step:")
+    print(f"\n  Next steps:")
+    print(f"    python sdp.py db status           # Check database status and info")
     print(f"    python sdp.py source add <name>   # Add a data source")
     print()
 

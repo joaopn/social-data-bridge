@@ -353,7 +353,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             # Count sources
             lingua_count = sum(1 for src in parsed_source_map.values() if src == 'lingua')
             original_count = sum(1 for src in parsed_source_map.values() if src == 'original')
-            print(f"[sdp] Found {lingua_count} lingua files, {original_count} original files (fallback)")
+            print(f"[sdp] Found {lingua_count} lingua files")
         else:
             print("[sdp] Prefer lingua: enabled but lingua config not found, using original parsed files")
             parsed_files = detect_parsed_files(parsed_dir, data_types, file_patterns, file_format=file_format)
@@ -509,7 +509,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         if prefer_lingua and parsed_source_map:
             ingest_from_lingua = sum(1 for p, fid, dt in files_to_ingest if parsed_source_map.get(fid) == 'lingua')
             ingest_from_original = sum(1 for p, fid, dt in files_to_ingest if parsed_source_map.get(fid) == 'original')
-            print(f"[sdp] Sources: {ingest_from_lingua} lingua, {ingest_from_original} original (fallback)")
+            print(f"[sdp] Sources: {ingest_from_lingua} lingua")
         
         t_start = time.time()
         
