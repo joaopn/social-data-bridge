@@ -13,5 +13,6 @@ RUN apt-get update \
  && apt-get purge -y --auto-remove curl gnupg \
  && rm -rf /var/lib/apt/lists/*
 
-# Create pg_parquet extension on first database initialization
+# Run init scripts on first database initialization
 COPY config/postgres/initdb.d/ /docker-entrypoint-initdb.d/
+RUN chmod +x /docker-entrypoint-initdb.d/*.sh 2>/dev/null || true

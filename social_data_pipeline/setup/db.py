@@ -289,6 +289,9 @@ def run_questionnaire(hw):
         print("  For PostgreSQL memory tuning, provide your PGTune output.")
         print("  Generate at: https://pgtune.leopard.in.ua/")
         print(f"    DB Version: 18 | OS: linux | DB Type: dw | Storage: ssd")
+        print()
+        print("  NOTE: PGTune may include 'io_method = io_uring'. If PostgreSQL fails")
+        print("  to start, remove that line — io_uring is blocked on some kernels.")
         if hw["ram_gb"]:
             print(f"    Total Memory: {hw['ram_gb']} GB | CPUs: {hw['cpu_cores']}")
         print()

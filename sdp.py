@@ -749,6 +749,16 @@ def cmd_db_unsetup(args):
     print("  ======================================")
     print()
 
+    # --- Stop and remove all DB + MCP containers ---
+    # Must happen first so containers don't hold stale volume mounts
+    # after config/data is removed. Includes MCP profiles.
+    all_profiles = []
+    for p in ("postgres", "postgres_mcp", "mongo", "mongo_mcp", "starrocks", "starrocks_mcp"):
+        all_profiles += ["--profile", p]
+    print("  Stopping all database containers...")
+    docker_compose(*all_profiles, "down", "--timeout", "30")
+    print()
+
     # --- Find config files to remove ---
     removed = []
     for rel in DB_GENERATED_FILES:
@@ -811,8 +821,6 @@ def cmd_db_unsetup(args):
                 confirm2 = input("  Are you SURE? All database data will be permanently lost [y/N]: ").strip().lower()
                 if confirm2 in ("y", "yes"):
                     print()
-                    print("  Stopping PostgreSQL...")
-                    docker_compose("--profile", "postgres", "down", "--timeout", "30")
                     print("  Fixing directory permissions...")
                     # Mount the parent directory so we can chown both the parent and pgdata
                     db_parent = pgdata.resolve().parent
@@ -864,8 +872,6 @@ def cmd_db_unsetup(args):
                 confirm2 = input("  Are you SURE? All MongoDB data will be permanently lost [y/N]: ").strip().lower()
                 if confirm2 in ("y", "yes"):
                     print()
-                    print("  Stopping MongoDB...")
-                    docker_compose("--profile", "mongo", "down", "--timeout", "30")
                     print("  Fixing directory permissions...")
                     mongo_parent = mongo_data.resolve().parent
                     uid_gid = f"{os.getuid()}:{os.getgid()}"
@@ -901,8 +907,6 @@ def cmd_db_unsetup(args):
                 confirm2 = input("  Are you SURE? All StarRocks data will be permanently lost [y/N]: ").strip().lower()
                 if confirm2 in ("y", "yes"):
                     print()
-                    print("  Stopping StarRocks...")
-                    docker_compose("--profile", "starrocks", "down", "--timeout", "30")
                     print("  Fixing directory permissions...")
                     sr_parent = sr_data.resolve().parent
                     uid_gid = f"{os.getuid()}:{os.getgid()}"

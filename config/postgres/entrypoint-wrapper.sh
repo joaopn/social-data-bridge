@@ -20,6 +20,12 @@ fi
 # --- Export directory permissions ---
 [ -d /export ] && chown -R postgres:postgres /export
 
+# --- RO credentials permissions ---
+# The credentials file is created on the host (chmod 600, host uid).
+# The initdb scripts run as the postgres user and need to read it.
+RO_CRED_FILE="/data/database/.ro_credentials"
+[ -f "$RO_CRED_FILE" ] && chown postgres:postgres "$RO_CRED_FILE"
+
 # --- PostgreSQL 18 PGDATA path ---
 PGDATA=/var/lib/postgresql/18/docker
 

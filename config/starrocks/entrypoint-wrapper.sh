@@ -15,6 +15,16 @@ if [ -f "$STAGED_BE" ]; then
     cp "$STAGED_BE" /data/deploy/starrocks/be/conf/be.conf
 fi
 
+# --- Fresh install detection ---
+# On fresh installs with auth, the allin1 director tries to register BE
+# using MYSQL_PWD. But FE has no password yet, so connecting WITH a password
+# fails ("Password error"). Unset MYSQL_PWD so the director connects
+# passwordlessly. Our entrypoint sets the root password after BE registers.
+# On restarts, FE metadata exists and MYSQL_PWD must stay set.
+if [ -n "$STARROCKS_ROOT_PASSWORD" ] && [ -z "$(ls -A /data/deploy/starrocks/fe/meta 2>/dev/null)" ]; then
+    unset MYSQL_PWD
+fi
+
 # --- Start StarRocks (original entrypoint) in background ---
 # The allin1-ubuntu image default: ENTRYPOINT [tini --] CMD [./entrypoint.sh]
 # Since we override entrypoint, docker-compose sets init: true for tini.
