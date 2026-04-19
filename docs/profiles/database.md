@@ -264,7 +264,7 @@ Each classifier entry has:
 
 ## Authentication
 
-Database authentication is optional and can be enabled during `sdp db setup`. When enabled, it adds password-based access control to PostgreSQL, MongoDB, and StarRocks.
+Database authentication is optional and can be enabled during `sdp db setup`. When adding a database with `sdp db setup --add`, auth is automatically extended if already enabled on existing databases. When enabled, it adds password-based access control to PostgreSQL, MongoDB, and StarRocks.
 
 ### Users
 

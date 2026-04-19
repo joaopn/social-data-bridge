@@ -5,6 +5,7 @@ Unified entrypoint for database management, source configuration, and pipeline e
 
 Usage:
     sdp.py db setup                          Configure databases (PostgreSQL, MongoDB)
+    sdp.py db setup --add <db>               Add a single database to existing setup
     sdp.py db setup-mcp                      Configure MCP servers for databases
     sdp.py db start [service]                Start services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
     sdp.py db stop [service]                 Stop services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
@@ -171,7 +172,12 @@ def _set_auth_env(password):
 def cmd_db_setup(args):
     """Run interactive database configuration."""
     from social_data_pipeline.setup.db import main as db_main
-    db_main()
+    add = getattr(args, "add", None)
+    if add:
+        from social_data_pipeline.setup.db import add_database
+        add_database(add)
+    else:
+        db_main()
     return 0
 
 
@@ -235,64 +241,81 @@ def cmd_db_unsetup_mcp(args):
 # sdp db start / stop
 # ============================================================================
 
-def _resolve_pg_data_mounts():
-    """Add per-source data volume mounts for the PostgreSQL server container.
+def _resolve_server_data_mounts(services):
+    """Add per-source data volume mounts for database server containers.
 
-    The PG server needs to see parsed/output files for all sources.  The ingest
-    container mounts source-specific paths (e.g. /mnt/data/parsed/reddit →
-    /data/parsed), and _pg_server_path() translates to /data/parsed/{source}/...
-    on the server side.
+    Database servers (PostgreSQL, StarRocks) need to see parsed/output files for
+    all sources.  The ingest containers mount source-specific paths (e.g.
+    /mnt/data/parsed/reddit → /data/parsed), and the server-side path
+    translators (_pg_server_path, _sr_server_path) add the source subdirectory.
 
     This function reads all source configs, builds per-source volume mounts
     (e.g. /mnt/data/parsed/reddit:/data/parsed/reddit:ro), and merges them
-    into docker-compose.override.yml alongside any existing tablespace mounts.
+    into docker-compose.override.yml alongside any existing tablespace/storage mounts.
     """
-    from social_data_pipeline.setup.utils import list_sources, load_source_config
+    from social_data_pipeline.setup.utils import list_sources, load_source_config, get_source_profiles
 
     sources = list_sources()
     if not sources:
         return
 
-    # Collect per-source mounts
-    data_mounts = []
+    # Which profiles qualify a source for each server's data mounts
+    service_profiles = {
+        "postgres": {"postgres_ingest", "postgres_ml"},
+        "starrocks": {"sr_ingest", "sr_ml"},
+    }
+
+    # Collect per-source mounts, keyed by service
+    service_mounts = {svc: [] for svc in services}
     for source in sources:
         cfg = load_source_config(source)
         if not cfg:
             continue
+        source_profiles = set(get_source_profiles(source))
         paths = cfg.get("paths", {})
+        mounts = []
         for key, container_base in (("parsed", "/data/parsed"), ("output", "/data/output")):
             host_path = paths.get(key, "")
             if host_path:
-                data_mounts.append(f"      - {host_path}:{container_base}/{source}:ro")
+                mounts.append(f"{host_path}:{container_base}/{source}:ro")
+        if mounts:
+            for svc in services:
+                if source_profiles & service_profiles.get(svc, set()):
+                    service_mounts[svc].extend(mounts)
 
-    if not data_mounts:
+    if not any(service_mounts.values()):
         return
 
-    # Read existing override, preserve tablespace mounts
+    # Read existing override, preserve setup-generated mounts (tablespaces, SR storage)
+    import yaml
     override_path = ROOT / "docker-compose.override.yml"
-    tablespace_lines = []
+    preserved = {"postgres": [], "starrocks": []}
     if override_path.exists():
-        in_volumes = False
-        for line in override_path.read_text().splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- ") and "/data/tablespace/" in stripped:
-                tablespace_lines.append(f"      {stripped}")
-            elif stripped.startswith("- ") and in_volumes:
-                pass  # skip old data mounts (will be regenerated)
-            if "volumes:" in stripped:
-                in_volumes = True
+        try:
+            data = yaml.safe_load(override_path.read_text()) or {}
+            for svc_name in preserved:
+                svc = data.get("services", {}).get(svc_name, {})
+                for vol in svc.get("volumes", []):
+                    # Keep tablespace and SR storage mounts, skip data mounts (regenerated)
+                    if "/data/tablespace/" in vol or "/data/deploy/starrocks/" in vol:
+                        preserved[svc_name].append(vol)
+        except yaml.YAMLError:
+            pass
 
-    all_volumes = tablespace_lines + data_mounts
+    # Build override content
     content = (
-        "# Auto-generated by sdp — volume mounts for PostgreSQL server.\n"
-        "# Tablespace mounts from sdp db setup + per-source data mounts from sdp db start.\n"
+        "# Auto-generated by sdp — volume mounts for database servers.\n"
+        "# Setup mounts (tablespaces, SR storage) + per-source data mounts from sdp db start.\n"
         "\n"
         "services:\n"
-        "  postgres:\n"
-        "    volumes:\n"
-        + "\n".join(all_volumes)
-        + "\n"
     )
+
+    for svc in services:
+        svc_preserved = [f"      - {v}" for v in preserved.get(svc, [])]
+        svc_data = [f"      - {m}" for m in service_mounts[svc]]
+        all_volumes = svc_preserved + svc_data
+        content += f"  {svc}:\n    volumes:\n" + "\n".join(all_volumes) + "\n"
+
     override_path.write_text(content)
 
 
@@ -348,9 +371,10 @@ def cmd_db_start(args):
         if mcp_profile in mcp_services:
             mcp_targets.append(mcp_profile)
 
-    # Resolve data mounts for PostgreSQL server from source configs
-    if "postgres" in targets:
-        _resolve_pg_data_mounts()
+    # Resolve per-source data mounts for database servers that read files directly
+    mount_services = [s for s in ("postgres", "starrocks") if s in targets]
+    if mount_services:
+        _resolve_server_data_mounts(mount_services)
 
     # Start databases first (without MCP), wait for healthchecks
     db_args = []
@@ -1891,6 +1915,8 @@ def cmd_source_configure(args):
                 available += ["postgres_ingest", "postgres_ml"]
             if "mongo" in databases:
                 available += ["mongo_ingest"]
+            if "starrocks" in databases:
+                available += ["sr_ingest"]
             missing = [p for p in available if p not in existing]
             if missing:
                 print(f"\n  Profiles not yet configured: {', '.join(missing)}")
@@ -2424,6 +2450,8 @@ def build_parser():
     db_sub = db_parser.add_subparsers(dest="db_command", help="Database command")
 
     db_setup_p = db_sub.add_parser("setup", help="Configure databases (PostgreSQL, MongoDB)")
+    db_setup_p.add_argument("--add", choices=["postgres", "mongo", "starrocks"],
+                            help="Add a single database to existing setup without reconfiguring others")
     db_setup_p.set_defaults(func=cmd_db_setup)
 
     db_setup_mcp_p = db_sub.add_parser("setup-mcp", help="Configure MCP servers for databases")

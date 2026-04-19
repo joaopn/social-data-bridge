@@ -3,7 +3,7 @@
 This document is the master configuration reference for Social Data Pipeline. It covers every environment variable, configuration file, and tunable setting across all profiles.
 
 > [!TIP]
-> Run `python sdp.py db setup` to configure databases, then `python sdp.py source add <name>` to add sources. The scripts auto-detect your hardware, walk you through every setting with sensible defaults, and generate `.env`, `config/db/*.yaml`, per-source config in `config/sources/<name>/`, and `postgresql.local.conf`. The reference below documents what each setting does.
+> Run `python sdp.py db setup` to configure databases, then `python sdp.py source add <name>` to add sources. The scripts auto-detect your hardware, walk you through every setting with sensible defaults, and generate `.env`, `config/db/*.yaml`, per-source config in `config/sources/<name>/`, and `postgresql.local.conf`. To add a database later without reconfiguring existing ones, use `python sdp.py db setup --add <db>`. The reference below documents what each setting does.
 
 For profile-specific usage and workflows, see:
 - [Parse Profile](profiles/parse.md)

@@ -47,13 +47,13 @@ class TestYamlTypeToSrSql:
         assert yaml_type_to_sr_sql('float') == 'FLOAT'
 
     def test_text(self):
-        assert yaml_type_to_sr_sql('text') == 'STRING'
+        assert yaml_type_to_sr_sql('text') == 'VARCHAR(1048576)'
 
-    def test_unknown_type_defaults_to_string(self):
-        assert yaml_type_to_sr_sql('blob') == 'STRING'
+    def test_unknown_type_defaults_to_varchar_max(self):
+        assert yaml_type_to_sr_sql('blob') == 'VARCHAR(1048576)'
 
-    def test_unknown_list_type_defaults_to_string(self):
-        assert yaml_type_to_sr_sql(['unknown', 10]) == 'STRING'
+    def test_unknown_list_type_defaults_to_varchar_max(self):
+        assert yaml_type_to_sr_sql(['unknown', 10]) == 'VARCHAR(1048576)'
 
 
 # ── _arrow_type_to_sr_sql ────────────────────────────────────────────────────
@@ -235,7 +235,7 @@ class TestGetCreateTableQuery:
     def test_non_pk_columns_nullable(self):
         query = get_create_table_query('submissions', 'reddit', self.COLUMNS, self.PLATFORM, 'id')
         # title should not have NOT NULL
-        assert '`title` STRING\n' in query or '`title` STRING,' in query
+        assert '`title` VARCHAR(1048576)\n' in query or '`title` VARCHAR(1048576),' in query
 
     def test_distributed_by_hash(self):
         query = get_create_table_query('submissions', 'reddit', self.COLUMNS, self.PLATFORM, 'id')
@@ -261,13 +261,13 @@ class TestGetCreateTableQuery:
         query = get_create_table_query('submissions', 'reddit', self.COLUMNS, self.PLATFORM, 'id')
         assert 'CHAR(7)' in query  # id and dataset
         assert 'INT' in query       # retrieved_utc, score
-        assert 'STRING' in query    # title (text → STRING)
+        assert 'VARCHAR(1048576)' in query  # title (text → VARCHAR 1 MB)
 
-    def test_unknown_field_type_defaults_to_string(self):
+    def test_unknown_field_type_defaults_to_varchar_max(self):
         cols = ['id', 'mystery_field']
         platform = {'field_types': {'id': ['char', 7]}}
         query = get_create_table_query('tbl', 'db', cols, platform, 'id')
-        assert '`mystery_field` STRING' in query
+        assert '`mystery_field` VARCHAR(1048576)' in query
 
 
 # ── get_ingest_query ──────────────────────────────────────────────────────────

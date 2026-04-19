@@ -236,8 +236,8 @@ services:
       - ${STARROCKS_DATA_PATH:-./data/database/starrocks}:/data/starrocks
       - ${STARROCKS_DATA_PATH:-./data/database/starrocks}/fe/meta:/data/deploy/starrocks/fe/meta
       - ${STARROCKS_DATA_PATH:-./data/database/starrocks}/be/storage:/data/deploy/starrocks/be/storage
-      - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
-      - ${OUTPUT_PATH:-./data/output}:/data/output:ro
+      # Per-source data mounts (parsed, output) are added by sdp db start
+      # in docker-compose.override.yml — same pattern as PostgreSQL.
       - ./config/starrocks/fe.local.conf:/etc/starrocks/config/fe.local.conf:ro
       - ./config/starrocks/be.local.conf:/etc/starrocks/config/be.local.conf:ro
       - ./config/starrocks/entrypoint-wrapper.sh:/etc/starrocks/config/entrypoint-wrapper.sh:ro

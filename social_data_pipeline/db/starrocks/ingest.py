@@ -45,6 +45,8 @@ def _connect(host, port, user, password=None, database=None):
 
 def yaml_type_to_sr_sql(type_def) -> str:
     """Map YAML type definitions to StarRocks column types."""
+    # StarRocks STRING caps at 65,533 bytes; VARCHAR(1048576) is the 1 MB max.
+    # Real-world dumps (e.g. Reddit selftext) exceed 65 KB, so use VARCHAR(1 MB).
     if isinstance(type_def, list):
         type_name, length = type_def[0], type_def[1]
         if type_name == 'char':
@@ -60,9 +62,8 @@ def yaml_type_to_sr_sql(type_def) -> str:
     elif type_def == 'float':
         return 'FLOAT'
     elif type_def == 'text':
-        return 'STRING'
-    # Default to STRING for unknown types
-    return 'STRING'
+        return 'VARCHAR(1048576)'
+    return 'VARCHAR(1048576)'
 
 
 def get_column_list(data_type: str, platform_config: Dict, file: str = None) -> List[str]:
