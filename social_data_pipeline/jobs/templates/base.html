@@ -72,6 +72,13 @@
         <li><a href="/pending" class="{% if tab == 'pending' %}active{% endif %}">Pending <span class="muted">({{ counts.pending }})</span></a></li>
         <li><a href="/running" class="{% if tab == 'running' %}active{% endif %}">Running <span class="muted">({{ counts.running }})</span></a></li>
         <li><a href="/history" class="{% if tab == 'history' %}active{% endif %}">History</a></li>
+        {% if auth_enabled %}
+        <li>
+          <form method="post" action="/logout" style="display:inline; margin:0;">
+            <button type="submit" class="secondary outline" style="font-size: 0.75rem; padding: 0.2rem 0.6rem; margin:0;">Log out</button>
+          </form>
+        </li>
+        {% endif %}
       </ul>
     </nav>
     {% block content %}{% endblock %}

@@ -32,6 +32,11 @@ class JobsConfig:
     # 0 and is capped at 259200 (72h). See timeout_for().
     default_timeouts: dict[str, int]
     history_retention: int
+    # Require the DB admin password to access the web UI. When False the UI
+    # is open (default — fine for solo deployments). When True the container
+    # reads the admin password from its process env and HMAC-authenticates
+    # sessions; startup fails if no password is set.
+    auth_enabled: bool = False
     targets: dict[str, Target] = field(default_factory=dict)
 
     def targets_for(self, backend: Backend) -> list[Target]:
@@ -107,6 +112,7 @@ def load_config(path: Path | str = "/app/config/jobs/config.yaml") -> JobsConfig
         max_concurrent=int(raw.get("max_concurrent", 1)),
         default_timeouts=default_timeouts,
         history_retention=int(raw.get("history_retention", 500)),
+        auth_enabled=bool(raw.get("auth", False)),
         targets=targets,
     )
 

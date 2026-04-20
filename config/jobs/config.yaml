@@ -6,6 +6,7 @@ default_timeouts:
   starrocks: 259200
   mongodb: 0
 history_retention: 500
+auth: true
 targets:
   pg_main:
     backend: postgres

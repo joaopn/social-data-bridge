@@ -151,6 +151,18 @@ def _load_jobs_config():
         return {}
 
 
+def _is_jobs_auth_enabled() -> bool:
+    """True when the jobs scheduler has `auth: true` in its config."""
+    return bool(_load_jobs_config().get("auth", False))
+
+
+def _needs_admin_password() -> bool:
+    """True when a DB admin password must be prompted before starting any
+    service: either a DB has auth on, or the jobs UI has auth on (which
+    reuses the same admin password from the process env)."""
+    return _is_auth_enabled() or _is_jobs_auth_enabled()
+
+
 def _load_db_yaml(name):
     """Load a config/db/<name>.yaml file. Returns dict or empty."""
     path = CONFIG_DIR / "db" / f"{name}.yaml"
@@ -450,7 +462,7 @@ def cmd_db_start(args):
         if not _is_jobs_configured():
             print("  Error: 'jobs' is not configured. Run: python sdp.py db setup-jobs")
             return 1
-        if _is_auth_enabled():
+        if _needs_admin_password():
             password = _prompt_db_password(tag="sdp_db_password")
             _set_auth_env(password)
         # Scope the jobs profile and rebuild its image (jobs contains SDP
@@ -467,9 +479,11 @@ def cmd_db_start(args):
     else:
         targets = configured
 
-    # Prompt for admin password if auth is enabled
+    # Prompt for admin password if either DB auth or jobs UI auth is
+    # enabled. DB containers use it for their admin role; jobs UI uses it
+    # to authenticate web UI logins. Single prompt covers both.
     password = None
-    if _is_auth_enabled():
+    if _needs_admin_password():
         password = _prompt_db_password(tag="sdp_db_password")
         _set_auth_env(password)
 

@@ -7,10 +7,11 @@ import time
 from pathlib import Path
 
 import sqlparse
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
+from . import auth
 from .config import JobsConfig
 from .runner import Runner
 from .store import Store
@@ -33,8 +34,57 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
     templates.env.globals["job_body"] = _job_body
     templates.env.globals["job_body_lang"] = _job_body_lang
     templates.env.globals["host_path"] = _make_host_path_translator(cfg)
+    templates.env.globals["auth_enabled"] = cfg.auth_enabled
 
+    require_auth = auth.require_auth_dep(cfg.auth_enabled)
+
+    # Two routers: the public one serves /login, /logout, /static (mounted at
+    # app level). The protected one gets require_auth applied at router level
+    # so we don't have to thread it through every UI handler.
     router = APIRouter()
+    protected = APIRouter(dependencies=[Depends(require_auth)])
+
+    # --- Login / logout (always public) -----------------------------------
+
+    @router.get("/login", response_class=HTMLResponse)
+    async def login_page(request: Request, error: str | None = None):
+        if not cfg.auth_enabled:
+            return RedirectResponse(url="/pending", status_code=302)
+        if auth.is_authenticated(request):
+            return RedirectResponse(url="/pending", status_code=302)
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"error": error},
+        )
+
+    @router.post("/login")
+    async def login_submit(request: Request, password: str = Form(default="")):
+        if not cfg.auth_enabled:
+            return RedirectResponse(url="/pending", status_code=303)
+        if auth.check_password(password):
+            resp = RedirectResponse(url="/pending", status_code=303)
+            auth.set_auth_cookie(resp)
+            log.info("login succeeded from %s", request.client.host if request.client else "?")
+            return resp
+        log.warning(
+            "login failed from %s",
+            request.client.host if request.client else "?",
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={"error": "Invalid password."},
+            status_code=401,
+        )
+
+    @router.post("/logout")
+    async def logout():
+        resp = RedirectResponse(url="/login", status_code=303)
+        auth.clear_auth_cookie(resp)
+        return resp
+
+    # --- Protected UI routes ----------------------------------------------
 
     def _counts() -> dict[str, int]:
         return {
@@ -43,11 +93,11 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             "running": len(list(store.running.glob("*.json"))),
         }
 
-    @router.get("/", response_class=HTMLResponse)
+    @protected.get("/", response_class=HTMLResponse)
     async def root():
         return RedirectResponse(url="/pending", status_code=302)
 
-    @router.get("/pending", response_class=HTMLResponse)
+    @protected.get("/pending", response_class=HTMLResponse)
     async def pending(request: Request):
         jobs = store.list_phase("pending")
         return templates.TemplateResponse(
@@ -60,7 +110,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             },
         )
 
-    @router.get("/running", response_class=HTMLResponse)
+    @protected.get("/running", response_class=HTMLResponse)
     async def running(request: Request):
         return templates.TemplateResponse(
             request=request,
@@ -74,7 +124,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             },
         )
 
-    @router.get("/fragments/running", response_class=HTMLResponse)
+    @protected.get("/fragments/running", response_class=HTMLResponse)
     async def running_fragment(request: Request):
         return templates.TemplateResponse(
             request=request,
@@ -86,7 +136,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             },
         )
 
-    @router.get("/history", response_class=HTMLResponse)
+    @protected.get("/history", response_class=HTMLResponse)
     async def history(request: Request):
         jobs = store.iter_history(limit=cfg.history_retention)
         return templates.TemplateResponse(
@@ -100,7 +150,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             },
         )
 
-    @router.post("/actions/approve/{job_id}")
+    @protected.post("/actions/approve/{job_id}")
     async def approve(job_id: str):
         try:
             store.approve(job_id)
@@ -109,7 +159,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             log.warning("approve: %s not pending", job_id)
         return RedirectResponse(url="/pending", status_code=303)
 
-    @router.post("/actions/reject/{job_id}")
+    @protected.post("/actions/reject/{job_id}")
     async def reject(job_id: str, reason: str = Form(default="")):
         try:
             store.reject(job_id, reason=(reason.strip() or None))
@@ -118,14 +168,14 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             log.warning("reject: %s not pending", job_id)
         return RedirectResponse(url="/pending", status_code=303)
 
-    @router.post("/actions/kill/{job_id}")
+    @protected.post("/actions/kill/{job_id}")
     async def kill(job_id: str):
         ok = runner.request_cancel(job_id)
         if not ok:
             log.warning("kill: %s not currently running", job_id)
         return RedirectResponse(url="/running", status_code=303)
 
-    @router.get("/actions/explain/{job_id}", response_class=HTMLResponse)
+    @protected.get("/actions/explain/{job_id}", response_class=HTMLResponse)
     async def explain(request: Request, job_id: str):
         try:
             plan = runner.explain(job_id)
@@ -141,7 +191,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
                 context={"plan": None, "error": f"{type(e).__name__}: {e}"},
             )
 
-    @router.get("/actions/preview/{job_id}", response_class=HTMLResponse)
+    @protected.get("/actions/preview/{job_id}", response_class=HTMLResponse)
     async def preview(request: Request, job_id: str):
         located = store.find(job_id)
         if not located:
@@ -165,6 +215,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
                 context={"columns": None, "rows": None, "error": f"{type(e).__name__}: {e}"},
             )
 
+    router.include_router(protected)
     return router
 
 

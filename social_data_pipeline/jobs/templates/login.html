@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Login — SDP Jobs</title>
+  <link rel="stylesheet" href="/static/pico.min.css">
+  <style>
+    main.container { max-width: 28rem; margin-top: 6rem; }
+    .error-box { background: var(--pico-color-red-50); color: var(--pico-color-red-800); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 1rem; }
+    .muted { color: var(--pico-muted-color); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h3>SDP Jobs</h3>
+    <p class="muted">Enter the database admin password to access the scheduler UI.</p>
+    {% if error %}
+      <div class="error-box">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login">
+      <input type="password" name="password" placeholder="Admin password" autofocus required>
+      <button type="submit">Log in</button>
+    </form>
+  </main>
+</body>
+</html>

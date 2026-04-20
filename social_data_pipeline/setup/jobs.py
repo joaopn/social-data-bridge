@@ -220,6 +220,35 @@ def run_questionnaire(db_setup: dict) -> dict:
         timeouts["mongodb"] = max(0, int(mg_hours)) * 3600
 
     settings["default_timeouts"] = timeouts
+
+    # Optional web UI password gate. Off by default. When on, the jobs
+    # container compares login attempts against the DB admin password in
+    # its process env (`sdp db start` prompts for it and passes it through).
+    print()
+    print("  The web UI is open by default — anyone reaching the jobs port")
+    print("  can approve/reject/kill queries. Enable to require the DB admin")
+    print("  password (same one used by `sdp db setup`) before the UI is")
+    print("  reachable.")
+    settings["auth_enabled"] = ask_bool(
+        "Require admin password for web UI access?",
+        bool(existing.get("auth", False)),
+        tag="jobs_ui_auth_enable",
+    )
+    if settings["auth_enabled"]:
+        db_setup_local = db_setup or {}
+        any_db_auth = (
+            db_setup_local.get("postgres_auth")
+            or db_setup_local.get("mongo_auth")
+            or db_setup_local.get("starrocks_auth")
+        )
+        if not any_db_auth:
+            print()
+            print("    Warning: no database has authentication enabled. The")
+            print("    jobs container will refuse to start with UI auth on")
+            print("    unless `sdp db setup` enables auth on at least one DB,")
+            print("    so the admin password can flow into the container at")
+            print("    `sdp db start` time.")
+
     settings["targets"] = targets
     settings["_backends"] = backends_seen
     return settings
@@ -254,6 +283,7 @@ def generate_jobs_yaml(settings: dict) -> str:
         "max_concurrent": settings["max_concurrent"],
         "default_timeouts": settings["default_timeouts"],
         "history_retention": settings["history_retention"],
+        "auth": bool(settings.get("auth_enabled", False)),
         "targets": settings["targets"],
     }
     return yaml.dump(out, default_flow_style=False, sort_keys=False)
@@ -338,6 +368,7 @@ def print_summary(settings, files_to_write, services_with_mount, sr_fe_applicabl
     print(f"  Result root:      {settings['result_root']}")
     print(f"  Max concurrent:   {settings['max_concurrent']}")
     print(f"  History limit:    {settings['history_retention']}")
+    print(f"  Web UI auth:      {'enabled (DB admin password)' if settings.get('auth_enabled') else 'disabled (UI is open)'}")
     print(f"  Timeouts:")
     for backend in ("postgres", "starrocks", "mongodb"):
         if backend in settings.get("default_timeouts", {}):

@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from . import auth
 from .config import JobsConfig, load_config
 from .mcp_tools import build_mcp
 from .runner import Runner
@@ -25,6 +26,10 @@ STATIC_DIR = Path(__file__).parent / "static"
 def build_app(cfg: JobsConfig | None = None) -> FastAPI:
     if cfg is None:
         cfg = load_config()
+
+    # Fail fast if auth is enabled but no password is available — better
+    # than silently serving an always-rejecting login page.
+    auth.validate_startup(cfg.auth_enabled)
 
     store = Store(cfg.jobs_dir)
     runner = Runner(cfg, store)
