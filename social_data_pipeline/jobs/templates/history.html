@@ -42,7 +42,7 @@
     </tr>
     <tr class="row-details">
       <td colspan="9">
-        <pre>{{ job.sql }}</pre>
+        <pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre>
         {% if job.error %}<div class="error-box" style="margin-top: 0.4rem;">{{ job.error }}</div>{% endif %}
         {% if job.reject_reason %}<div class="muted" style="margin-top: 0.4rem;">Rejected: {{ job.reject_reason }}</div>{% endif %}
       </td>

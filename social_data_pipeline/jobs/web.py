@@ -6,6 +6,7 @@ import logging
 import time
 from pathlib import Path
 
+import sqlparse
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -28,6 +29,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
     templates.env.globals["duration"] = _duration
     templates.env.globals["human_bytes"] = _human_bytes
     templates.env.globals["sql_preview"] = _sql_preview
+    templates.env.globals["format_sql"] = _format_sql
     templates.env.globals["host_path"] = _make_host_path_translator(cfg)
 
     router = APIRouter()
@@ -176,6 +178,20 @@ def _sql_preview(sql: str, width: int = 90) -> str:
     if len(flat) <= width:
         return flat
     return flat[: width - 1] + "…"
+
+
+def _format_sql(sql: str | None) -> str:
+    if not sql:
+        return ""
+    try:
+        return sqlparse.format(
+            sql,
+            reindent=True,
+            keyword_case="upper",
+            use_space_around_operators=True,
+        )
+    except Exception:
+        return sql
 
 
 def _make_host_path_translator(cfg: JobsConfig):

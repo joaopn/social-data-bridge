@@ -19,7 +19,13 @@ RUN mkdir -p /app/social_data_pipeline/jobs/static \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/pico.min.css \
          https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/htmx.min.js \
-         https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js
+         https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js \
+    && curl -sSL -o /app/social_data_pipeline/jobs/static/prism.min.css \
+         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css \
+    && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-core.min.js \
+         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js \
+    && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-sql.min.js \
+         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-sql.min.js
 
 RUN mkdir -p /data/jobs
 

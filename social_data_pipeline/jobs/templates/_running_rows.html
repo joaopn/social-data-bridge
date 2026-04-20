@@ -31,7 +31,7 @@
       <td class="description">{{ job.description }}</td>
     </tr>
     <tr class="row-details">
-      <td colspan="8"><pre>{{ job.sql }}</pre></td>
+      <td colspan="8"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></td>
     </tr>
     {% endfor %}
     {% for job in approved %}
@@ -45,7 +45,7 @@
       <td class="description">{{ job.description }}</td>
     </tr>
     <tr class="row-details">
-      <td colspan="8"><pre>{{ job.sql }}</pre></td>
+      <td colspan="8"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></td>
     </tr>
     {% endfor %}
   </tbody>
