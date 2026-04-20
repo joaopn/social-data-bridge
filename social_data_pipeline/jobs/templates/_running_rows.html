@@ -1,0 +1,53 @@
+{% if not (running or approved) %}
+  <p class="empty-state">No jobs running.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th style="width: 1.5em;"></th>
+      <th>Started</th>
+      <th>Elapsed</th>
+      <th>Job</th>
+      <th>Target</th>
+      <th>Output</th>
+      <th>Actions</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in running %}
+    <tr class="row-expandable">
+      <td><span class="caret">▸</span></td>
+      <td>{{ absolute_time(job.started_at) }}</td>
+      <td>{{ duration(now - job.started_at) if job.started_at else '—' }}</td>
+      <td><code>{{ job.job_id }}</code></td>
+      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}</span></td>
+      <td><code>{{ job.output_filename }}</code></td>
+      <td class="row-actions">
+        <form method="post" action="/actions/kill/{{ job.job_id }}" onsubmit="return confirm('Kill job {{ job.job_id }}?');">
+          <button type="submit" class="contrast outline">Kill</button>
+        </form>
+      </td>
+      <td class="description">{{ job.description }}</td>
+    </tr>
+    <tr class="row-details">
+      <td colspan="8"><pre>{{ job.sql }}</pre></td>
+    </tr>
+    {% endfor %}
+    {% for job in approved %}
+    <tr class="row-expandable">
+      <td><span class="caret">▸</span></td>
+      <td colspan="2"><span class="muted">queued (approved)</span></td>
+      <td><code>{{ job.job_id }}</code></td>
+      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}</span></td>
+      <td><code>{{ job.output_filename }}</code></td>
+      <td></td>
+      <td class="description">{{ job.description }}</td>
+    </tr>
+    <tr class="row-details">
+      <td colspan="8"><pre>{{ job.sql }}</pre></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}

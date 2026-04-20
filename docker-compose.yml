@@ -369,6 +369,40 @@ services:
     # STARROCKS_MCP_PORT only changes the host-side mapping.
 
   # ==========================================================================
+  # Profile: jobs - Query scheduler (web UI + MCP + runner)
+  # Single-container service. Admin credentials flow from the parent
+  # `sdp db start` via POSTGRES_PASSWORD / STARROCKS_ROOT_PASSWORD —
+  # never stored on disk. Web UI binds to 127.0.0.1 by default.
+  # ==========================================================================
+  jobs:
+    profiles: [jobs]
+    build:
+      context: .
+      dockerfile: Dockerfile.jobs
+    restart: "no"
+    entrypoint: ["sh", "/etc/jobs-config/entrypoint.sh"]
+    environment:
+      - PYTHONUNBUFFERED=1
+      - JOBS_PORT=${JOBS_PORT:-8050}
+      - JOBS_DIR=/data/jobs
+      - JOBS_RESULT_ROOT=${JOBS_RESULT_ROOT:-./data/jobs/results}
+      - POSTGRES_PORT=${POSTGRES_PORT:-5432}
+      - STARROCKS_PORT=${STARROCKS_PORT:-9030}
+      - POSTGRES_AUTH_ENABLED=${POSTGRES_AUTH_ENABLED:-}
+      - STARROCKS_AUTH_ENABLED=${STARROCKS_AUTH_ENABLED:-}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+      - STARROCKS_ROOT_PASSWORD=${STARROCKS_ROOT_PASSWORD:-}
+    volumes:
+      - ./data/jobs:/data/jobs
+      - ${JOBS_RESULT_ROOT:-./data/jobs/results}:/data/jobs/results
+      - ./config:/app/config:ro
+      - ./config/jobs/entrypoint.sh:/etc/jobs-config/entrypoint.sh:ro
+    ports:
+      - "${JOBS_PORT:-8050}:${JOBS_PORT:-8050}"
+    # Depends_on intentionally omitted: ordering is handled by `sdp db start`,
+    # which brings DBs up with --wait before starting the jobs profile.
+
+  # ==========================================================================
   # Profile: mongo_ingest - Raw JSON ingestion to MongoDB
   # Requires: mongo profile to be running
   # ==========================================================================

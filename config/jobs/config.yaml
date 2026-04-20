@@ -1,0 +1,12 @@
+port: 8050
+result_root: ./data/jobs/results
+max_concurrent: 5
+default_timeout_seconds: 255600
+history_retention: 500
+targets:
+  pg_main:
+    backend: postgres
+    database: datasets
+  sr_main:
+    backend: starrocks
+    database: ''

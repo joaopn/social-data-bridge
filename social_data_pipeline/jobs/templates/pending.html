@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Pending — SDP Jobs{% endblock %}
+{% block content %}
+<h2>Pending approval</h2>
+{% if not jobs %}
+  <p class="empty-state">No jobs awaiting approval.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th style="width: 1.5em;"></th>
+      <th>Submitted</th>
+      <th>Job</th>
+      <th>Target</th>
+      <th>Output</th>
+      <th>Actions</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr class="row-expandable">
+      <td><span class="caret">▸</span></td>
+      <td>{{ relative_time(job.submitted_at) }}<br><span class="muted">{{ absolute_time(job.submitted_at) }}</span></td>
+      <td><code>{{ job.job_id }}</code></td>
+      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}</span></td>
+      <td><code>{{ job.output_filename }}</code>{% if job.overwrite %} <span class="muted">[overwrite]</span>{% endif %}</td>
+      <td class="row-actions">
+        <form method="post" action="/actions/approve/{{ job.job_id }}">
+          <button type="submit" class="primary">Approve</button>
+        </form>
+        <form method="post" action="/actions/reject/{{ job.job_id }}" style="display:inline-flex; gap:0.3rem; align-items:center;">
+          <input type="text" name="reason" placeholder="reason (optional)" style="min-width: 10rem; margin-bottom: 0; font-size: 0.8rem; padding: 0.2rem 0.4rem;">
+          <button type="submit" class="secondary outline">Reject</button>
+        </form>
+      </td>
+      <td class="description">{{ job.description }}</td>
+    </tr>
+    <tr class="row-details">
+      <td colspan="7"><pre>{{ job.sql }}</pre></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}History — SDP Jobs{% endblock %}
+{% block content %}
+<h2>History</h2>
+<div class="summary-bar">
+  <span>Showing last {{ jobs|length }} of {{ retention }}</span>
+</div>
+{% if not jobs %}
+  <p class="empty-state">No jobs in history.</p>
+{% else %}
+<table>
+  <thead>
+    <tr>
+      <th style="width: 1.5em;"></th>
+      <th>Submitted</th>
+      <th>Status</th>
+      <th>Duration</th>
+      <th>Job</th>
+      <th>Target</th>
+      <th>Rows / Size</th>
+      <th>Result</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for job in jobs %}
+    <tr class="row-expandable">
+      <td><span class="caret">▸</span></td>
+      <td>{{ absolute_time(job.submitted_at) }}</td>
+      <td><span class="status-{{ job.status }}">{{ job.status }}</span></td>
+      <td>{{ duration((job.finished_at or 0) - (job.started_at or job.submitted_at or 0)) if job.finished_at else '—' }}</td>
+      <td><code>{{ job.job_id }}</code></td>
+      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}</span></td>
+      <td>
+        {% if job.rows is not none %}{{ "{:,}".format(job.rows) }} rows<br>{% endif %}
+        {% if job.size_bytes is not none %}<span class="muted">{{ human_bytes(job.size_bytes) }}</span>{% endif %}
+      </td>
+      <td>
+        {% if job.result_path %}<code class="copyable muted" title="Click to copy">{{ host_path(job.result_path) }}</code>{% else %}—{% endif %}
+      </td>
+      <td class="description">{{ job.description }}</td>
+    </tr>
+    <tr class="row-details">
+      <td colspan="9">
+        <pre>{{ job.sql }}</pre>
+        {% if job.error %}<div class="error-box" style="margin-top: 0.4rem;">{{ job.error }}</div>{% endif %}
+        {% if job.reject_reason %}<div class="muted" style="margin-top: 0.4rem;">Rejected: {{ job.reject_reason }}</div>{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

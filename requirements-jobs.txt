@@ -1,0 +1,15 @@
+# Social Data Pipeline - Query Scheduler (jobs profile)
+# Used by: jobs profile
+
+# Web / MCP server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+jinja2>=3.1.0
+mcp>=1.2.0
+
+# Config
+pyyaml>=6.0
+
+# Database clients (PostgreSQL + StarRocks)
+psycopg[binary]>=3.1.0
+mysql-connector-python>=9.0.0

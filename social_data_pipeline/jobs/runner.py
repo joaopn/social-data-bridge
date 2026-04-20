@@ -1,0 +1,230 @@
+"""Background runner: drains approved/ into running/ and executes jobs."""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import threading
+import time
+from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
+
+from .backends import Backend, BackendError, ExecutionHandle, PostgresBackend, StarrocksBackend
+from .config import JobsConfig, Target
+from .store import Job, Store
+
+
+log = logging.getLogger(__name__)
+
+
+class Runner:
+    """Single background worker pool. Polls approved/ and executes jobs.
+
+    One ``Runner`` instance per process. Thread-safe: the MCP/web handlers call
+    ``request_cancel(job_id)`` from their own threads.
+    """
+
+    POLL_INTERVAL_SECONDS = 1.0
+
+    def __init__(self, cfg: JobsConfig, store: Store):
+        self.cfg = cfg
+        self.store = store
+        self._stop = threading.Event()
+        self._pool = ThreadPoolExecutor(max_workers=max(1, cfg.max_concurrent))
+        self._poller: threading.Thread | None = None
+        self._lock = threading.Lock()
+        # job_id -> (Future, cancel_requested_flag)
+        self._active: dict[str, tuple[Future, threading.Event]] = {}
+        self._backends: dict[str, Backend] = self._build_backends()
+
+    # ------------------------------------------------------------------
+
+    def _build_backends(self) -> dict[str, Backend]:
+        backends: dict[str, Backend] = {}
+        if self.cfg.has_backend("postgres"):
+            # Multiple PG databases share one adapter class; target name drives
+            # the database attr so we build one backend instance per target.
+            for t in self.cfg.targets_for("postgres"):
+                backends[f"postgres:{t.name}"] = PostgresBackend(
+                    result_root=self.cfg.result_root, database=t.database
+                )
+        if self.cfg.has_backend("starrocks"):
+            for t in self.cfg.targets_for("starrocks"):
+                backends[f"starrocks:{t.name}"] = StarrocksBackend(
+                    result_root=self.cfg.result_root, database=t.database
+                )
+        return backends
+
+    def _backend_for(self, job: Job) -> Backend:
+        key = f"{job.backend}:{job.target}"
+        b = self._backends.get(key)
+        if b is None:
+            raise BackendError(
+                f"no backend registered for target={job.target!r} backend={job.backend!r}"
+            )
+        return b
+
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        self._recover_orphans()
+        self._poller = threading.Thread(target=self._poll_loop, name="jobs-poller", daemon=True)
+        self._poller.start()
+        log.info("runner started (max_concurrent=%d)", self.cfg.max_concurrent)
+
+    def stop(self, timeout: float | None = 5.0) -> None:
+        self._stop.set()
+        if self._poller:
+            self._poller.join(timeout=timeout)
+        self._pool.shutdown(wait=True, cancel_futures=True)
+
+    # ------------------------------------------------------------------
+
+    def _recover_orphans(self) -> None:
+        orphans = self.store.orphaned_running()
+        for job in orphans:
+            log.warning("cleaning up orphaned running job %s", job.job_id)
+            self._cleanup_result_folder(job.job_id)
+            self.store.fail(job, error="runner restarted; job aborted")
+
+    def _poll_loop(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._drain_once()
+            except Exception:
+                log.exception("runner poll error")
+            self._stop.wait(self.POLL_INTERVAL_SECONDS)
+
+    def _drain_once(self) -> None:
+        while True:
+            with self._lock:
+                if len(self._active) >= self.cfg.max_concurrent:
+                    return
+            job = self.store.claim_approved()
+            if job is None:
+                return
+            cancel_flag = threading.Event()
+            fut = self._pool.submit(self._run_job, job, cancel_flag)
+            with self._lock:
+                self._active[job.job_id] = (fut, cancel_flag)
+            fut.add_done_callback(lambda _f, jid=job.job_id: self._deregister(jid))
+
+    def _deregister(self, job_id: str) -> None:
+        with self._lock:
+            self._active.pop(job_id, None)
+
+    # ------------------------------------------------------------------
+
+    def _run_job(self, job: Job, cancel_flag: threading.Event) -> None:
+        log.info("starting job %s target=%s backend=%s", job.job_id, job.target, job.backend)
+        try:
+            backend = self._backend_for(job)
+
+            def on_handle(handle: ExecutionHandle) -> None:
+                job.backend_pid = handle.backend_pid
+                job.connection_id = handle.connection_id
+                self.store.update_running(job)
+
+            result = backend.execute(
+                job=job,
+                timeout_seconds=self.cfg.default_timeout_seconds,
+                on_handle=on_handle,
+            )
+
+            if cancel_flag.is_set():
+                # Cancellation won the race: execute returned normally but we
+                # already flagged — treat as cancelled and remove partial output.
+                self._cleanup_result_folder(job.job_id)
+                self.store.mark_cancelled(job)
+                log.info("job %s cancelled (raced with completion)", job.job_id)
+                return
+
+            self._normalize_result_permissions(job.job_id)
+            job.rows = result.rows
+            job.size_bytes = result.size_bytes
+            job.result_path = result.result_path
+            self.store.complete(job)
+            log.info("job %s done (rows=%s size=%s)", job.job_id, job.rows, job.size_bytes)
+        except BackendError as e:
+            if cancel_flag.is_set():
+                self._cleanup_result_folder(job.job_id)
+                self.store.mark_cancelled(job)
+                log.info("job %s cancelled", job.job_id)
+            else:
+                self._cleanup_result_folder(job.job_id)
+                self.store.fail(job, error=str(e))
+                log.warning("job %s failed: %s", job.job_id, e)
+        except Exception as e:
+            log.exception("job %s crashed", job.job_id)
+            self._cleanup_result_folder(job.job_id)
+            self.store.fail(job, error=f"{type(e).__name__}: {e}")
+
+    def _cleanup_result_folder(self, job_id: str) -> None:
+        job_dir: Path = self.store.job_result_dir(job_id)
+        if job_dir.exists():
+            try:
+                shutil.rmtree(job_dir, ignore_errors=True)
+            except Exception:
+                log.exception("failed to rmtree %s", job_dir)
+
+    def _normalize_result_permissions(self, job_id: str) -> None:
+        """Make result files readable by the host user.
+
+        PG/SR write files as their container user with restrictive umasks
+        (postgres uses 0077 → files 0600). The jobs runner, running as root
+        inside its container, can chmod these after-the-fact so the user
+        on the host (typically uid 1000) can read what landed.
+        """
+        job_dir: Path = self.store.job_result_dir(job_id)
+        if not job_dir.exists():
+            return
+        try:
+            os.chmod(job_dir, 0o755)
+            for root, dirs, files in os.walk(job_dir):
+                for d in dirs:
+                    try:
+                        os.chmod(os.path.join(root, d), 0o755)
+                    except OSError:
+                        pass
+                for f in files:
+                    try:
+                        os.chmod(os.path.join(root, f), 0o644)
+                    except OSError:
+                        pass
+        except OSError:
+            log.exception("chmod normalize failed on %s", job_dir)
+
+    # ------------------------------------------------------------------
+    # Cancel API (called from web handlers)
+
+    def request_cancel(self, job_id: str) -> bool:
+        """Signal cancellation of a currently-running job.
+
+        Opens a separate admin connection and terminates the backend query, so
+        the execute() call in the worker thread raises and the runner marks
+        the job cancelled. Returns True if the job was running.
+        """
+        with self._lock:
+            active = self._active.get(job_id)
+        if not active:
+            return False
+        _fut, flag = active
+
+        located = self.store.find(job_id)
+        if not located:
+            return False
+        _phase, job = located
+
+        flag.set()
+        try:
+            backend = self._backend_for(job)
+            handle = ExecutionHandle(backend_pid=job.backend_pid, connection_id=job.connection_id)
+            backend.cancel(handle)
+        except Exception:
+            log.exception("cancel call failed for %s", job_id)
+        return True
+
+    def active_job_ids(self) -> list[str]:
+        with self._lock:
+            return list(self._active.keys())
