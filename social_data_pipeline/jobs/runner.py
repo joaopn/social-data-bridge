@@ -228,3 +228,17 @@ class Runner:
     def active_job_ids(self) -> list[str]:
         with self._lock:
             return list(self._active.keys())
+
+    def explain(self, job_id: str) -> str:
+        """Run EXPLAIN for a stored job's SQL against its target.
+
+        Resolves the job through the store (any phase) and dispatches to the
+        backend's own explain() — PG/SR accept a plain ``EXPLAIN <sql>``
+        which plans but does not execute the query.
+        """
+        located = self.store.find(job_id)
+        if not located:
+            raise KeyError(job_id)
+        _phase, job = located
+        backend = self._backend_for(job)
+        return backend.explain(job.sql)

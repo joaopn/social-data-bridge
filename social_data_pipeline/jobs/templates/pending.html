@@ -37,7 +37,27 @@
       <td class="description">{{ job.description }}</td>
     </tr>
     <tr class="row-details">
-      <td colspan="7"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></td>
+      <td colspan="7">
+        <div class="row-details-split">
+          <div class="detail-panel">
+            <div class="panel-label">SQL</div>
+            <div class="panel-content"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></div>
+          </div>
+          <div class="detail-panel">
+            <div class="panel-actions">
+              <button type="button"
+                      class="outline secondary"
+                      hx-get="/actions/explain/{{ job.job_id }}"
+                      hx-target="#explain-{{ job.job_id }}"
+                      hx-swap="innerHTML"
+                      hx-indicator="#explain-{{ job.job_id }}">EXPLAIN</button>
+            </div>
+            <div id="explain-{{ job.job_id }}" class="panel-content">
+              <span class="muted">Click EXPLAIN to run the planner against <code>{{ job.target }}</code> (does not execute the query).</span>
+            </div>
+          </div>
+        </div>
+      </td>
     </tr>
     {% endfor %}
   </tbody>

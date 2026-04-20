@@ -1,0 +1,20 @@
+{% if error %}
+  <div class="error-box">{{ error }}</div>
+{% elif columns is none %}
+  <span class="muted">No preview available.</span>
+{% elif not rows %}
+  <table class="preview-table"><thead><tr>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr></thead></table>
+  <div class="muted" style="margin-top: 0.3rem;">(0 rows)</div>
+{% else %}
+  <table class="preview-table">
+    <thead>
+      <tr>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>{% for v in row %}<td>{{ v if v is not none else '' }}</td>{% endfor %}</tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="muted" style="margin-top: 0.3rem;">First {{ rows|length }} rows.</div>
+{% endif %}

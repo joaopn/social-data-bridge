@@ -127,6 +127,25 @@ class PostgresBackend:
             except Exception:
                 pass
 
+    def explain(self, sql: str) -> str:
+        inner = strip_trailing_semicolon(sql)
+        conn = self._connect()
+        try:
+            conn.autocommit = True
+            with conn.cursor() as cur:
+                cur.execute("SET statement_timeout = 10000")
+                try:
+                    cur.execute(f"EXPLAIN {inner}")
+                except psycopg.Error as e:
+                    raise BackendError(str(e)) from e
+                rows = cur.fetchall()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "\n".join(r[0] for r in rows)
+
     # ------------------------------------------------------------------
 
     def _connect(self) -> psycopg.Connection:

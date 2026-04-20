@@ -1,0 +1,7 @@
+{% if error %}
+  <div class="error-box">{{ error }}</div>
+{% elif plan %}
+  <pre><code>{{ plan }}</code></pre>
+{% else %}
+  <span class="muted">(empty plan)</span>
+{% endif %}

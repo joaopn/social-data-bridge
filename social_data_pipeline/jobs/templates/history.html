@@ -42,9 +42,35 @@
     </tr>
     <tr class="row-details">
       <td colspan="9">
-        <pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre>
-        {% if job.error %}<div class="error-box" style="margin-top: 0.4rem;">{{ job.error }}</div>{% endif %}
-        {% if job.reject_reason %}<div class="muted" style="margin-top: 0.4rem;">Rejected: {{ job.reject_reason }}</div>{% endif %}
+        <div class="row-details-split">
+          <div class="detail-panel">
+            <div class="panel-label">SQL</div>
+            <div class="panel-content"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></div>
+          </div>
+          <div class="detail-panel">
+            {% if job.status == 'done' and job.result_path %}
+              <div class="panel-actions">
+                <button type="button"
+                        class="outline secondary"
+                        hx-get="/actions/preview/{{ job.job_id }}"
+                        hx-target="#preview-{{ job.job_id }}"
+                        hx-swap="innerHTML"
+                        hx-indicator="#preview-{{ job.job_id }}">Preview</button>
+              </div>
+              <div id="preview-{{ job.job_id }}" class="panel-content">
+                <span class="muted">Click Preview to show the first 20 rows of the result.</span>
+              </div>
+            {% elif job.error %}
+              <div class="panel-label">Error</div>
+              <div class="panel-content"><div class="error-box" style="margin: 0;">{{ job.error }}</div></div>
+            {% elif job.reject_reason %}
+              <div class="panel-label">Rejected</div>
+              <div class="panel-content"><span class="muted">{{ job.reject_reason }}</span></div>
+            {% else %}
+              <div class="panel-content"><span class="muted">No preview available for this job.</span></div>
+            {% endif %}
+          </div>
+        </div>
       </td>
     </tr>
     {% endfor %}

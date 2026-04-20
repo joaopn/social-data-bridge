@@ -47,6 +47,16 @@
     tr.row-details > td { border-top: none; padding: 0 0.6rem 0.8rem 0.6rem; background: var(--pico-code-background-color); }
     tr.row-details pre { margin: 0; padding: 0.6rem; background: var(--pico-background-color); border-radius: 4px; overflow-x: auto; white-space: pre-wrap; font-size: 0.82rem; }
     tr.row-details pre code { background: transparent; padding: 0; font-size: inherit; text-shadow: none; }
+    .row-details-split { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; align-items: start; }
+    .detail-panel { min-width: 0; }
+    .detail-panel .panel-label { color: var(--pico-muted-color); font-size: 0.78rem; margin-bottom: 0.2rem; text-transform: uppercase; letter-spacing: 0.05em; }
+    .detail-panel .panel-content { max-height: 24rem; overflow: auto; background: var(--pico-background-color); border-radius: 4px; padding: 0.5rem; font-size: 0.82rem; }
+    .detail-panel .panel-content pre { margin: 0; padding: 0; background: transparent; white-space: pre-wrap; word-break: break-word; }
+    .detail-panel .panel-actions { display: flex; gap: 0.4rem; margin-bottom: 0.3rem; }
+    .detail-panel .panel-actions button { margin: 0; font-size: 0.75rem; padding: 0.2rem 0.5rem; }
+    table.preview-table { font-size: 0.78rem; border-collapse: collapse; width: auto; margin: 0; }
+    table.preview-table th, table.preview-table td { border: 1px solid var(--pico-muted-border-color); padding: 0.2rem 0.4rem; vertical-align: top; max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    table.preview-table th { background: var(--pico-code-background-color); }
     td.description { max-width: 22em; font-size: 0.85rem; line-height: 1.3; }
     td.description:empty::before { content: "—"; color: var(--pico-muted-color); }
   </style>

@@ -156,6 +156,30 @@ class StarrocksBackend:
             result_path=str(job_dir),
         )
 
+    def explain(self, sql: str) -> str:
+        inner = strip_trailing_semicolon(sql)
+        conn = self._connect()
+        try:
+            cur = conn.cursor()
+            try:
+                cur.execute("SET query_timeout = 10")
+                try:
+                    cur.execute(f"EXPLAIN {inner}")
+                    rows = cur.fetchall()
+                except MySQLError as e:
+                    raise BackendError(str(e)) from e
+            finally:
+                try:
+                    cur.close()
+                except Exception:
+                    pass
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        return "\n".join(str(r[0]) for r in rows)
+
     def cancel(self, handle: ExecutionHandle) -> None:
         if not handle.connection_id:
             return

@@ -123,6 +123,46 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
             log.warning("kill: %s not currently running", job_id)
         return RedirectResponse(url="/running", status_code=303)
 
+    @router.get("/actions/explain/{job_id}", response_class=HTMLResponse)
+    async def explain(request: Request, job_id: str):
+        try:
+            plan = runner.explain(job_id)
+            return templates.TemplateResponse(
+                request=request,
+                name="_explain_result.html",
+                context={"plan": plan, "error": None},
+            )
+        except Exception as e:
+            return templates.TemplateResponse(
+                request=request,
+                name="_explain_result.html",
+                context={"plan": None, "error": f"{type(e).__name__}: {e}"},
+            )
+
+    @router.get("/actions/preview/{job_id}", response_class=HTMLResponse)
+    async def preview(request: Request, job_id: str):
+        located = store.find(job_id)
+        if not located:
+            return templates.TemplateResponse(
+                request=request,
+                name="_preview_result.html",
+                context={"columns": None, "rows": None, "error": "job not found"},
+            )
+        _phase, job = located
+        try:
+            columns, rows = _read_preview(job.result_path, limit=20)
+            return templates.TemplateResponse(
+                request=request,
+                name="_preview_result.html",
+                context={"columns": columns, "rows": rows, "error": None},
+            )
+        except Exception as e:
+            return templates.TemplateResponse(
+                request=request,
+                name="_preview_result.html",
+                context={"columns": None, "rows": None, "error": f"{type(e).__name__}: {e}"},
+            )
+
     return router
 
 
@@ -192,6 +232,53 @@ def _format_sql(sql: str | None) -> str:
         )
     except Exception:
         return sql
+
+
+def _read_preview(result_path: str | None, limit: int = 20) -> tuple[list[str], list[list]]:
+    """Return (columns, rows) from the first part of a job's result folder.
+
+    Supports parquet (via pyarrow row-group iteration, bounded memory) and CSV
+    (stdlib csv, first N data rows). Raises on missing folder / no readable
+    parts / unsupported extension.
+    """
+    if not result_path:
+        raise RuntimeError("job has no result path")
+    folder = Path(result_path)
+    if not folder.exists():
+        raise FileNotFoundError(f"result folder missing: {folder}")
+
+    parquet_parts = sorted(folder.glob("*.parquet"))
+    csv_parts = sorted(folder.glob("*.csv"))
+    if parquet_parts:
+        import pyarrow.parquet as pq
+
+        pf = pq.ParquetFile(parquet_parts[0])
+        batch = next(pf.iter_batches(batch_size=limit), None)
+        if batch is None:
+            return list(pf.schema_arrow.names), []
+        table = batch.to_pydict()
+        columns = list(table.keys())
+        n = min(limit, batch.num_rows)
+        rows = [[table[c][i] for c in columns] for i in range(n)]
+        return columns, rows
+
+    if csv_parts:
+        import csv as _csv
+
+        with open(csv_parts[0], newline="") as f:
+            reader = _csv.reader(f)
+            try:
+                header = next(reader)
+            except StopIteration:
+                return [], []
+            rows = []
+            for i, row in enumerate(reader):
+                if i >= limit:
+                    break
+                rows.append(list(row))
+            return list(header), rows
+
+    raise RuntimeError(f"no .parquet or .csv parts found in {folder}")
 
 
 def _make_host_path_translator(cfg: JobsConfig):
