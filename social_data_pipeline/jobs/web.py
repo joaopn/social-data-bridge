@@ -6,6 +6,10 @@ import logging
 import time
 from pathlib import Path
 
+import os
+import shutil
+import threading
+
 import sqlparse
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -35,6 +39,7 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
     templates.env.globals["job_body_lang"] = _job_body_lang
     templates.env.globals["host_path"] = _make_host_path_translator(cfg)
     templates.env.globals["auth_enabled"] = cfg.auth_enabled
+    templates.env.globals["disk_stat"] = lambda: _disk_stat(cfg)
 
     require_auth = auth.require_auth_dep(cfg.auth_enabled)
 
@@ -385,6 +390,59 @@ def _read_preview(result_path: str | None, limit: int = 20) -> tuple[list[str], 
             return list(header), rows
 
     raise RuntimeError(f"no .parquet / .csv / .ndjson parts found in {folder}")
+
+
+_DISK_CACHE_TTL_SECONDS = 10.0
+_disk_cache: dict = {"ts": 0.0, "value": None}
+_disk_cache_lock = threading.Lock()
+
+
+def _disk_stat(cfg: JobsConfig) -> dict | None:
+    """Return ``{"results_bytes": int, "free_bytes": int}`` for the results
+    folder: bytes taken by existing job outputs and bytes free on the
+    filesystem that holds them.
+
+    Cached for ~10s so the scan cost doesn't bite the Running tab's 2s
+    poll even when many job folders are present.
+    """
+    now = time.time()
+    with _disk_cache_lock:
+        if _disk_cache["value"] is not None and now - _disk_cache["ts"] < _DISK_CACHE_TTL_SECONDS:
+            return _disk_cache["value"]
+
+    try:
+        usage = shutil.disk_usage(str(cfg.result_root))
+    except OSError:
+        return None
+
+    results_bytes = _sum_tree_bytes(cfg.result_root)
+    value = {"results_bytes": results_bytes, "free_bytes": usage.free}
+
+    with _disk_cache_lock:
+        _disk_cache["ts"] = now
+        _disk_cache["value"] = value
+    return value
+
+
+def _sum_tree_bytes(root) -> int:
+    """Sum file sizes under ``root``. Fast in the common layout
+    (<job_id>/<file> two levels deep); safe-ish against concurrent writes
+    via per-file try/except on stat."""
+    total = 0
+    try:
+        it = os.scandir(root)
+    except OSError:
+        return 0
+    with it:
+        for entry in it:
+            try:
+                if entry.is_file(follow_symlinks=False):
+                    total += entry.stat(follow_symlinks=False).st_size
+                elif entry.is_dir(follow_symlinks=False):
+                    total += _sum_tree_bytes(entry.path)
+            except OSError:
+                continue
+    return total
 
 
 def _make_host_path_translator(cfg: JobsConfig):

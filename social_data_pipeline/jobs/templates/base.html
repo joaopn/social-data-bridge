@@ -17,6 +17,7 @@
     nav.topnav ul { padding: 0.5rem 0; }
     nav.topnav a { text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 4px; }
     nav.topnav a.active { background: var(--pico-primary-background); color: var(--pico-primary-inverse); }
+    nav.topnav .nav-stat { color: var(--pico-muted-color); padding: 0.25rem 0.5rem; }
     table { font-size: 0.9rem; }
     table td, table th { vertical-align: top; padding: 0.5rem 0.6rem; }
     td.sql, td.sqlprev { font-family: var(--pico-font-family-monospace); font-size: 0.82rem; color: var(--pico-color-slate-700); }
@@ -69,6 +70,10 @@
         <li><strong>SDP Jobs</strong></li>
       </ul>
       <ul>
+        {% set d = disk_stat() %}
+        {% if d %}
+        <li class="nav-stat" title="Size of stored job results · free space on the results volume">{{ human_bytes(d.results_bytes) }} used · {{ human_bytes(d.free_bytes) }} free</li>
+        {% endif %}
         <li><a href="/pending" class="{% if tab == 'pending' %}active{% endif %}">Pending <span class="muted">({{ counts.pending }})</span></a></li>
         <li><a href="/running" class="{% if tab == 'running' %}active{% endif %}">Running <span class="muted">({{ counts.running }})</span></a></li>
         <li><a href="/history" class="{% if tab == 'history' %}active{% endif %}">History</a></li>
