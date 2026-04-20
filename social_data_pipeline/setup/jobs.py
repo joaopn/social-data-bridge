@@ -1,7 +1,7 @@
 """Query scheduler (jobs) configuration for Social Data Pipeline.
 
 Interactive setup-jobs questionnaire. Writes:
-- config/jobs/config.yaml
+- config/jobs/config.local.yaml (user overrides; config.yaml is the default template)
 - .env additions (JOBS_PORT, JOBS_RESULT_ROOT)
 - docker-compose.override.yml additions (/jobs_export mount on postgres/starrocks)
 - config/starrocks/fe.local.conf (enable_outfile_to_local=true, if SR target)
@@ -40,11 +40,14 @@ DEFAULT_RESULT_ROOT = "./data/jobs/results"
 # Load existing
 
 def _load_existing_jobs_config() -> dict:
-    jobs_yaml = CONFIG_DIR / "jobs" / "config.yaml"
-    if not jobs_yaml.exists():
+    """Read the user's local config (config.local.yaml) for re-run
+    defaults. The committed config.yaml is the default template and is
+    not re-read here — the runtime loader merges them at start time."""
+    jobs_local = CONFIG_DIR / "jobs" / "config.local.yaml"
+    if not jobs_local.exists():
         return {}
     try:
-        return yaml.safe_load(jobs_yaml.read_text()) or {}
+        return yaml.safe_load(jobs_local.read_text()) or {}
     except (OSError, yaml.YAMLError):
         return {}
 
@@ -410,7 +413,7 @@ def main():
 
     settings = run_questionnaire(db_setup)
 
-    files_to_write = [(CONFIG_DIR / "jobs" / "config.yaml", generate_jobs_yaml(settings))]
+    files_to_write = [(CONFIG_DIR / "jobs" / "config.local.yaml", generate_jobs_yaml(settings))]
     override_content, services_with_mount = compute_override_update(settings)
     sr_fe_applicable = (
         "starrocks" in settings["_backends"]

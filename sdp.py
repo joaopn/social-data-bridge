@@ -75,7 +75,14 @@ def load_env():
 
 
 def docker_compose(*args):
-    """Run docker compose with the given arguments."""
+    """Run docker compose with the given arguments.
+
+    Ensures the password env vars exist (empty when auth is disabled) so
+    Compose doesn't emit `WARN[0000] The "X" variable is not set` for
+    `${POSTGRES_PASSWORD:-}` style references in the compose file.
+    """
+    for var in ("POSTGRES_PASSWORD", "MONGO_ADMIN_PASSWORD", "STARROCKS_ROOT_PASSWORD"):
+        os.environ.setdefault(var, "")
     cmd = ["docker", "compose"] + list(args)
     print(f"  $ {' '.join(cmd)}")
     return subprocess.run(cmd, cwd=ROOT)
@@ -135,20 +142,31 @@ def _is_auth_enabled():
 
 
 def _is_jobs_configured():
-    """Check if the query scheduler (jobs profile) is configured."""
-    return (CONFIG_DIR / "jobs" / "config.yaml").exists()
+    """Check if the query scheduler (jobs profile) is configured.
+
+    Keyed on the existence of the user's local config. The default
+    config.yaml is a committed template and its presence alone doesn't
+    indicate that the user has run `sdp db setup-jobs`.
+    """
+    return (CONFIG_DIR / "jobs" / "config.local.yaml").exists()
 
 
 def _load_jobs_config():
-    """Load config/jobs/config.yaml, or empty dict."""
-    jobs_yaml = CONFIG_DIR / "jobs" / "config.yaml"
-    if not jobs_yaml.exists():
-        return {}
-    try:
-        import yaml
-        return yaml.safe_load(jobs_yaml.read_text()) or {}
-    except Exception:
-        return {}
+    """Return the merged (default + local) jobs config, or empty dict."""
+    import yaml
+    from social_data_pipeline.core.config import deep_merge
+    default_path = CONFIG_DIR / "jobs" / "config.yaml"
+    local_path = CONFIG_DIR / "jobs" / "config.local.yaml"
+    merged: dict = {}
+    for path in (default_path, local_path):
+        if not path.exists():
+            continue
+        try:
+            data = yaml.safe_load(path.read_text()) or {}
+        except Exception:
+            continue
+        merged = deep_merge(merged, data)
+    return merged
 
 
 def _is_jobs_auth_enabled() -> bool:
@@ -230,16 +248,16 @@ def cmd_db_setup_jobs(args):
 
 def cmd_db_unsetup_jobs(args):
     """Remove jobs scheduler configuration and stop its container."""
-    jobs_yaml = CONFIG_DIR / "jobs" / "config.yaml"
-    if not jobs_yaml.exists():
+    jobs_local = CONFIG_DIR / "jobs" / "config.local.yaml"
+    if not jobs_local.exists():
         print("\n  No jobs configuration found.\n")
         return 0
 
     print("  Stopping jobs container...")
     docker_compose("--profile", "jobs", "down")
 
-    jobs_yaml.unlink()
-    print(f"  Removed:   config/jobs/config.yaml")
+    jobs_local.unlink()
+    print(f"  Removed:   config/jobs/config.local.yaml")
 
     # Remove JOBS_* env vars from .env
     env_path = ROOT / ".env"

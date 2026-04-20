@@ -9,6 +9,8 @@ from typing import Literal
 
 import yaml
 
+from ..core.config import deep_merge
+
 
 Backend = Literal["postgres", "starrocks", "mongodb"]
 
@@ -50,11 +52,30 @@ class JobsConfig:
         return int(self.default_timeouts.get(backend, 0))
 
 
-def load_config(path: Path | str = "/app/config/jobs/config.yaml") -> JobsConfig:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"jobs config missing: {p}")
-    raw = yaml.safe_load(p.read_text()) or {}
+def load_config(path: Path | str | None = None) -> JobsConfig:
+    """Merge the committed default (`config.yaml`) with the user's
+    `config.local.yaml` and return a validated ``JobsConfig``.
+
+    If ``path`` is passed explicitly it is treated as the default file;
+    the sibling ``config.local.yaml`` is always merged on top if present.
+    This mirrors SDP's postgres / starrocks ``*.conf`` + ``*.local.conf``
+    pattern where the committed file holds defaults and the ``.local``
+    file holds per-deployment overrides.
+    """
+    default_path = Path(path) if path else Path("/app/config/jobs/config.yaml")
+    local_path = default_path.parent / "config.local.yaml"
+
+    if not default_path.exists() and not local_path.exists():
+        raise FileNotFoundError(
+            f"jobs config missing: neither {default_path} nor {local_path} exists"
+        )
+
+    raw: dict = {}
+    if default_path.exists():
+        raw = yaml.safe_load(default_path.read_text()) or {}
+    if local_path.exists():
+        local = yaml.safe_load(local_path.read_text()) or {}
+        raw = deep_merge(raw, local)
 
     targets_raw = raw.get("targets") or {}
     targets: dict[str, Target] = {}
