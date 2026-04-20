@@ -49,6 +49,11 @@ class Job:
     overwrite: bool
     submitted_at: float
     description: str = ""
+    # Mongo jobs: collection + resolved database (from submit or target default).
+    # For PG/SR these stay None. Mongo jobs store the pipeline (JSON array)
+    # pretty-printed in `sql`.
+    collection: str | None = None
+    database: str | None = None
     status: Status = "pending"
     approved_at: float | None = None
     started_at: float | None = None
@@ -97,11 +102,11 @@ class Store:
     def new_job_id(backend: str = "job") -> str:
         """Generate a job id prefixed by the backend short name.
 
-        Backend → prefix mapping: postgres→pg, starrocks→sr. Unknown
-        backends fall back to "job". Prefix makes job ids recognizable
-        at a glance in the UI and in result paths.
+        Backend → prefix mapping: postgres→pg, starrocks→sr, mongodb→mg.
+        Unknown backends fall back to "job". Prefix makes job ids
+        recognizable at a glance in the UI and in result paths.
         """
-        prefix = {"postgres": "pg", "starrocks": "sr"}.get(backend, "job")
+        prefix = {"postgres": "pg", "starrocks": "sr", "mongodb": "mg"}.get(backend, "job")
         return f"{prefix}_{secrets.token_hex(4)}"
 
     def submit(self, job: Job) -> None:

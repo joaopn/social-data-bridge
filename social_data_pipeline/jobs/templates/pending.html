@@ -23,7 +23,7 @@
       <td><span class="caret">▸</span></td>
       <td>{{ relative_time(job.submitted_at) }}<br><span class="muted">{{ absolute_time(job.submitted_at) }}</span></td>
       <td><code>{{ job.job_id }}</code></td>
-      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}</span></td>
+      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}{% if job.database %} / {{ job.database }}{% endif %}{% if job.collection %} / {{ job.collection }}{% endif %}</span></td>
       <td><code>{{ job.output_filename }}</code>{% if job.overwrite %} <span class="muted">[overwrite]</span>{% endif %}</td>
       <td class="row-actions">
         <form method="post" action="/actions/approve/{{ job.job_id }}">
@@ -40,8 +40,8 @@
       <td colspan="7">
         <div class="row-details-split">
           <div class="detail-panel">
-            <div class="panel-label">SQL</div>
-            <div class="panel-content"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></div>
+            <div class="panel-label">{% if job.backend == 'mongodb' %}Pipeline{% else %}SQL{% endif %}</div>
+            <div class="panel-content"><pre><code class="{{ job_body_lang(job) }}">{{ job_body(job) }}</code></pre></div>
           </div>
           <div class="detail-panel">
             <div class="panel-actions">

@@ -28,7 +28,7 @@ def build_app(cfg: JobsConfig | None = None) -> FastAPI:
 
     store = Store(cfg.jobs_dir)
     runner = Runner(cfg, store)
-    mcp = build_mcp(cfg, store)
+    mcp = build_mcp(cfg, store, runner)
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI):

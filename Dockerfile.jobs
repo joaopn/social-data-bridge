@@ -25,7 +25,9 @@ RUN mkdir -p /app/social_data_pipeline/jobs/static \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-core.min.js \
          https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-sql.min.js \
-         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-sql.min.js
+         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-sql.min.js \
+    && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-json.min.js \
+         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-json.min.js
 
 RUN mkdir -p /data/jobs
 

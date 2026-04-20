@@ -521,14 +521,19 @@ def cmd_db_start(args):
 
 
 def _jobs_backend_profiles() -> list[str]:
-    """Which DB profiles the jobs container depends on, based on its targets."""
+    """Which DB profiles the jobs container depends on, based on its targets.
+
+    Maps the scheduler's backend names to docker-compose profile names:
+    `mongodb` backend → `mongo` profile (the DB service in compose).
+    """
     cfg = _load_jobs_config()
     backends = set()
     for spec in (cfg.get("targets") or {}).values():
-        if (spec or {}).get("backend") in ("postgres", "starrocks"):
-            backends.add(spec["backend"])
-    # Deterministic order
-    return [b for b in ("postgres", "starrocks") if b in backends]
+        backend = (spec or {}).get("backend")
+        if backend in ("postgres", "starrocks", "mongodb"):
+            backends.add(backend)
+    order = {"postgres": "postgres", "starrocks": "starrocks", "mongodb": "mongo"}
+    return [order[b] for b in ("postgres", "starrocks", "mongodb") if b in backends]
 
 
 def cmd_db_stop(args):

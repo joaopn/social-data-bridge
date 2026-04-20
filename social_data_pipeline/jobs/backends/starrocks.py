@@ -180,7 +180,7 @@ class StarrocksBackend:
                 pass
         return "\n".join(str(r[0]) for r in rows)
 
-    def cancel(self, handle: ExecutionHandle) -> None:
+    def cancel(self, handle: ExecutionHandle, job: Job | None = None) -> None:
         if not handle.connection_id:
             return
         conn = self._connect()

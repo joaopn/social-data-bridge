@@ -113,7 +113,7 @@ class PostgresBackend:
             result_path=str(job_dir),
         )
 
-    def cancel(self, handle: ExecutionHandle) -> None:
+    def cancel(self, handle: ExecutionHandle, job: Job | None = None) -> None:
         if not handle.backend_pid:
             return
         conn = self._connect()

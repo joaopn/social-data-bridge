@@ -3,6 +3,7 @@ unconfigured backends' tools don't appear in discovery."""
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from typing import Any
@@ -15,13 +16,14 @@ except ImportError:  # older mcp SDK
     TransportSecuritySettings = None  # type: ignore[assignment]
 
 from .config import JobsConfig
+from .runner import Runner
 from .store import Job, Store
 
 
 log = logging.getLogger(__name__)
 
 
-def build_mcp(cfg: JobsConfig, store: Store) -> FastMCP:
+def build_mcp(cfg: JobsConfig, store: Store, runner: Runner) -> FastMCP:
     """Assemble the FastMCP app for this process.
 
     Submit tools are only registered for backends with at least one configured
@@ -69,11 +71,15 @@ def build_mcp(cfg: JobsConfig, store: Store) -> FastMCP:
 
     pg_targets = [t.name for t in cfg.targets_for("postgres")]
     sr_targets = [t.name for t in cfg.targets_for("starrocks")]
+    mongo_targets = [t.name for t in cfg.targets_for("mongodb")]
 
     if pg_targets:
         _register_submit_postgres(mcp, cfg, store, pg_targets)
     if sr_targets:
         _register_submit_starrocks(mcp, cfg, store, sr_targets)
+    if mongo_targets:
+        _register_submit_mongo(mcp, cfg, store, mongo_targets)
+        _register_list_mongo_databases(mcp, cfg, runner, mongo_targets)
 
     _register_status_tool(mcp, store)
     _register_cancel_tool(mcp, store)
@@ -170,6 +176,93 @@ def _register_submit_starrocks(
 
 
 # ----------------------------------------------------------------------------
+# submit_mongo_query
+
+def _register_submit_mongo(
+    mcp: FastMCP, cfg: JobsConfig, store: Store, targets: list[str]
+) -> None:
+    targets_csv = ", ".join(repr(t) for t in targets)
+
+    @mcp.tool(
+        name="submit_mongo_query",
+        description=(
+            "Queue a MongoDB aggregation for execution against a MongoDB "
+            "target. A target is a Mongo node (not a single database) — "
+            "agents always pass an explicit `database` on every submission. "
+            "Call `list_mongo_databases(target)` first to discover what "
+            "databases are available. "
+            "`pipeline` is a JSON array of aggregation stages (a plain "
+            "`find()` is expressed as a single `$match`, optionally followed "
+            "by `$project` / `$sort` / `$limit`). "
+            "`collection` is the collection within the chosen database. "
+            "The runner streams the cursor output into "
+            "`/data/jobs/results/<job_id>/<output_filename>`. Format is "
+            "chosen by the output_filename extension: `.ndjson` (safe "
+            "default; lossless) or `.csv` (requires a terminal `$project` "
+            "producing flat scalars — fails fast otherwise). "
+            "Include a short `description` (1-2 sentences) explaining what "
+            "the query is for — the human approver reads it to decide. "
+            "Queries must be approved by a human in the web UI before they "
+            "execute.\n\n"
+            f"Configured targets: {targets_csv}."
+        ),
+    )
+    def submit_mongo_query(
+        target: str,
+        database: str,
+        collection: str,
+        pipeline: list[dict],
+        output_filename: str,
+        description: str = "",
+        overwrite: bool = False,
+    ) -> dict[str, Any]:
+        return _submit_mongo(
+            store=store,
+            cfg=cfg,
+            target=target,
+            collection=collection,
+            pipeline=pipeline,
+            output_filename=output_filename,
+            database=database,
+            description=description,
+            overwrite=overwrite,
+        )
+
+
+# ----------------------------------------------------------------------------
+# list_mongo_databases
+
+def _register_list_mongo_databases(
+    mcp: FastMCP, cfg: JobsConfig, runner: Runner, targets: list[str]
+) -> None:
+    targets_csv = ", ".join(repr(t) for t in targets)
+
+    @mcp.tool(
+        name="list_mongo_databases",
+        description=(
+            "List the databases visible to a MongoDB target. Use this to "
+            "discover which database to pass as `database=` on "
+            "`submit_mongo_query`. Internal databases (admin, config, "
+            "local) are filtered out. Requires admin read access.\n\n"
+            f"Configured targets: {targets_csv}."
+        ),
+    )
+    def list_mongo_databases(target: str) -> dict[str, Any]:
+        tgt = cfg.targets.get(target)
+        if tgt is None or tgt.backend != "mongodb":
+            return {
+                "error": (
+                    f"{target!r} is not a configured mongodb target; "
+                    f"configured: {targets}"
+                )
+            }
+        try:
+            return {"databases": runner.list_mongo_databases(target)}
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+
+# ----------------------------------------------------------------------------
 # query_status
 
 def _register_status_tool(mcp: FastMCP, store: Store) -> None:
@@ -263,6 +356,84 @@ def _submit(
     except OSError as e:
         return {"error": f"failed to queue job: {e}"}
     log.info("submitted job %s target=%s backend=%s", job.job_id, target, backend)
+    return {"job_id": job.job_id, "status": "pending"}
+
+
+def _submit_mongo(
+    *,
+    store: Store,
+    cfg: JobsConfig,
+    target: str,
+    collection: str,
+    pipeline: list[dict],
+    output_filename: str,
+    overwrite: bool,
+    database: str = "",
+    description: str = "",
+) -> dict[str, Any]:
+    tgt = cfg.targets.get(target)
+    if tgt is None:
+        return {
+            "error": (
+                f"unknown target {target!r}; "
+                f"configured: {sorted(cfg.targets)}"
+            )
+        }
+    if tgt.backend != "mongodb":
+        return {
+            "error": (
+                f"target {target!r} is backend={tgt.backend!r}, not 'mongodb'; "
+                "use the matching submit tool"
+            )
+        }
+    if not isinstance(pipeline, list):
+        return {"error": "pipeline must be a JSON array of aggregation stages"}
+    if not collection or not isinstance(collection, str):
+        return {"error": "collection must be a non-empty string"}
+
+    resolved_db = (database or "").strip()
+    if not resolved_db:
+        return {
+            "error": (
+                "database is required for Mongo submissions; call "
+                "list_mongo_databases(target) to see what's available."
+            )
+        }
+
+    # Store the aggregation as pretty-printed JSON in `sql` so the UI can
+    # render it and the backend can decode it. `collection` and `database`
+    # are also set on the job record for display + execution.
+    payload = json.dumps(
+        {
+            "collection": collection,
+            "database": resolved_db,
+            "pipeline": pipeline,
+        },
+        indent=2,
+        default=str,
+    )
+
+    job = Job(
+        job_id=store.new_job_id("mongodb"),
+        target=target,
+        backend="mongodb",
+        sql=payload,
+        output_filename=output_filename,
+        overwrite=bool(overwrite),
+        submitted_at=time.time(),
+        description=(description or "").strip(),
+        collection=collection,
+        database=resolved_db,
+        status="pending",
+    )
+    try:
+        store.submit(job)
+    except OSError as e:
+        return {"error": f"failed to queue job: {e}"}
+    log.info(
+        "submitted mongo job %s target=%s db=%s collection=%s",
+        job.job_id, target, resolved_db, collection,
+    )
     return {"job_id": job.job_id, "status": "pending"}
 
 

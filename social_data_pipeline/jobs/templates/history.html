@@ -30,7 +30,7 @@
       <td><span class="status-{{ job.status }}">{{ job.status }}</span></td>
       <td>{{ duration((job.finished_at or 0) - (job.started_at or job.submitted_at or 0)) if job.finished_at else '—' }}</td>
       <td><code>{{ job.job_id }}</code></td>
-      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}</span></td>
+      <td>{{ job.target }}<br><span class="muted">{{ job.backend }}{% if job.database %} / {{ job.database }}{% endif %}{% if job.collection %} / {{ job.collection }}{% endif %}</span></td>
       <td>
         {% if job.rows is not none %}{{ "{:,}".format(job.rows) }} rows<br>{% endif %}
         {% if job.size_bytes is not none %}<span class="muted">{{ human_bytes(job.size_bytes) }}</span>{% endif %}
@@ -44,8 +44,8 @@
       <td colspan="9">
         <div class="row-details-split">
           <div class="detail-panel">
-            <div class="panel-label">SQL</div>
-            <div class="panel-content"><pre><code class="language-sql">{{ format_sql(job.sql) }}</code></pre></div>
+            <div class="panel-label">{% if job.backend == 'mongodb' %}Pipeline{% else %}SQL{% endif %}</div>
+            <div class="panel-content"><pre><code class="{{ job_body_lang(job) }}">{{ job_body(job) }}</code></pre></div>
           </div>
           <div class="detail-panel">
             {% if job.status == 'done' and job.result_path %}

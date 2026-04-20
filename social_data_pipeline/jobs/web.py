@@ -30,6 +30,8 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
     templates.env.globals["human_bytes"] = _human_bytes
     templates.env.globals["sql_preview"] = _sql_preview
     templates.env.globals["format_sql"] = _format_sql
+    templates.env.globals["job_body"] = _job_body
+    templates.env.globals["job_body_lang"] = _job_body_lang
     templates.env.globals["host_path"] = _make_host_path_translator(cfg)
 
     router = APIRouter()
@@ -234,6 +236,22 @@ def _format_sql(sql: str | None) -> str:
         return sql
 
 
+def _job_body(job) -> str:
+    """Body text shown in the expanded SQL/pipeline panel.
+
+    For PG/SR this pretty-prints the SQL. For Mongo jobs, the stored
+    payload is already JSON; return it as-is so Prism's language-json
+    picks it up without sqlparse mangling JSON punctuation.
+    """
+    if getattr(job, "backend", None) == "mongodb":
+        return job.sql or ""
+    return _format_sql(job.sql)
+
+
+def _job_body_lang(job) -> str:
+    return "language-json" if getattr(job, "backend", None) == "mongodb" else "language-sql"
+
+
 def _read_preview(result_path: str | None, limit: int = 20) -> tuple[list[str], list[list]]:
     """Return (columns, rows) from the first part of a job's result folder.
 
@@ -249,6 +267,43 @@ def _read_preview(result_path: str | None, limit: int = 20) -> tuple[list[str], 
 
     parquet_parts = sorted(folder.glob("*.parquet"))
     csv_parts = sorted(folder.glob("*.csv"))
+    ndjson_parts = sorted(folder.glob("*.ndjson"))
+    if ndjson_parts:
+        import json as _json
+
+        columns: list[str] = []
+        rows: list[list] = []
+        with open(ndjson_parts[0]) as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                if i >= limit:
+                    break
+                try:
+                    doc = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if not isinstance(doc, dict):
+                    continue
+                for k in doc.keys():
+                    if k not in columns:
+                        columns.append(k)
+                rows.append(doc)
+        # Normalize: each row aligned to columns order. Nested values
+        # serialized to JSON string for display (NDJSON is lossless, but the
+        # preview table is flat).
+        aligned: list[list] = []
+        for doc in rows:
+            out = []
+            for k in columns:
+                v = doc.get(k)
+                if isinstance(v, (dict, list)):
+                    v = _json.dumps(v, default=str)
+                out.append(v)
+            aligned.append(out)
+        return columns, aligned
+
     if parquet_parts:
         import pyarrow.parquet as pq
 
@@ -278,7 +333,7 @@ def _read_preview(result_path: str | None, limit: int = 20) -> tuple[list[str], 
                 rows.append(list(row))
             return list(header), rows
 
-    raise RuntimeError(f"no .parquet or .csv parts found in {folder}")
+    raise RuntimeError(f"no .parquet / .csv / .ndjson parts found in {folder}")
 
 
 def _make_host_path_translator(cfg: JobsConfig):

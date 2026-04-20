@@ -61,9 +61,9 @@ def _existing_targets_for(existing: dict, backend: str) -> dict:
 def run_questionnaire(db_setup: dict) -> dict:
     existing = _load_existing_jobs_config()
     databases = set(db_setup.get("databases", []))
-    eligible = databases & {"postgres", "starrocks"}
+    eligible = databases & {"postgres", "starrocks", "mongo"}
     if not eligible:
-        print("  Error: jobs scheduler requires postgres and/or starrocks configured.")
+        print("  Error: jobs scheduler requires postgres, starrocks, or mongo configured.")
         print("  Run `python sdp.py db setup` first.\n")
         sys.exit(1)
 
@@ -88,24 +88,6 @@ def run_questionnaire(db_setup: dict) -> dict:
         existing.get("max_concurrent", 5),
         tag="jobs_max_concurrent",
     )
-    # StarRocks caps query_timeout at 259200 s (72 h); the setup enforces
-    # that limit for every backend so the configured value is always
-    # accepted by every adapter.
-    existing_hours = int(existing.get("default_timeout_seconds", 72 * 3600)) // 3600 or 72
-    while True:
-        timeout_hours = ask_int(
-            "Default query timeout (hours, max 72 — StarRocks limit)",
-            existing_hours,
-            tag="jobs_timeout_hours",
-        )
-        if 1 <= timeout_hours <= 72:
-            break
-        print(
-            f"    Error: timeout must be between 1 and 72 hours "
-            f"(StarRocks caps query_timeout at 72h). Got {timeout_hours}."
-        )
-        existing_hours = 72
-    settings["default_timeout_seconds"] = int(timeout_hours) * 3600
     settings["history_retention"] = ask_int(
         "History retention (keep last N jobs in UI)",
         existing.get("history_retention", 500),
@@ -168,13 +150,98 @@ def run_questionnaire(db_setup: dict) -> dict:
             # the target to a single source.
             targets[name] = {"backend": "starrocks", "database": ""}
 
+    if "mongo" in eligible:
+        existing_mg = _existing_targets_for(existing, "mongodb")
+        default_name = next(iter(existing_mg), "mongo_main")
+        want_mg = ask_bool(
+            "Add a MongoDB target?",
+            bool(existing_mg) or True,
+            tag="jobs_mg_target_enable",
+        )
+        if want_mg:
+            name = ask(
+                "  Target label (agents pass this as target=<name>)",
+                default_name,
+                tag="jobs_mg_target_name",
+            ).strip()
+            # No default database — agents always pass `database=` to
+            # submit_mongo_query, discovering candidates via
+            # list_mongo_databases(target). Matches the SR pattern of
+            # "target = node, scope chosen per query".
+            targets[name] = {"backend": "mongodb", "database": ""}
+
     if not targets:
         print("\n  Error: at least one target must be configured.\n")
         sys.exit(1)
 
+    backends_seen = sorted({t["backend"] for t in targets.values()})
+
+    # Per-backend default timeouts. Only prompt for backends that have at
+    # least one target configured. PG/Mongo allow 0 (no limit); SR rejects 0
+    # and caps at 72 hours.
+    print()
+    print("  Default query timeout per backend (applied at execution time).")
+    print()
+
+    timeouts: dict[str, int] = {}
+
+    if "postgres" in backends_seen:
+        pg_hours = ask_int(
+            "Default PostgreSQL query timeout (hours, 0 = no limit)",
+            _existing_timeout_seconds(existing, "postgres", 0) // 3600,
+            tag="jobs_pg_timeout_hours",
+        )
+        timeouts["postgres"] = max(0, int(pg_hours)) * 3600
+
+    if "starrocks" in backends_seen:
+        sr_default = (_existing_timeout_seconds(existing, "starrocks", 72 * 3600) // 3600) or 72
+        sr_default = max(1, min(sr_default, 72))
+        while True:
+            sr_hours = ask_int(
+                "Default StarRocks query timeout (hours, max 72 — StarRocks limit)",
+                sr_default,
+                tag="jobs_sr_timeout_hours",
+            )
+            if 1 <= sr_hours <= 72:
+                break
+            print(
+                f"    Error: SR timeout must be between 1 and 72 hours "
+                f"(StarRocks caps query_timeout at 72h). Got {sr_hours}."
+            )
+            sr_default = 72
+        timeouts["starrocks"] = int(sr_hours) * 3600
+
+    if "mongodb" in backends_seen:
+        mg_hours = ask_int(
+            "Default MongoDB query timeout (hours, 0 = no limit)",
+            _existing_timeout_seconds(existing, "mongodb", 0) // 3600,
+            tag="jobs_mg_timeout_hours",
+        )
+        timeouts["mongodb"] = max(0, int(mg_hours)) * 3600
+
+    settings["default_timeouts"] = timeouts
     settings["targets"] = targets
-    settings["_backends"] = sorted({t["backend"] for t in targets.values()})
+    settings["_backends"] = backends_seen
     return settings
+
+
+def _existing_timeout_seconds(existing: dict, backend: str, fallback: int) -> int:
+    """Default shown in the setup prompt.
+
+    If the user already ran setup with per-backend values, reuse them.
+    Otherwise return the per-backend fallback (0 for PG/Mongo = no limit,
+    SR max for StarRocks) — we intentionally do NOT inherit from the
+    legacy ``default_timeout_seconds`` single-value field here so that
+    first runs default to the best value for each backend rather than
+    the historical cap.
+    """
+    timeouts = existing.get("default_timeouts") or {}
+    if isinstance(timeouts, dict) and backend in timeouts:
+        try:
+            return int(timeouts[backend])
+        except (TypeError, ValueError):
+            pass
+    return fallback
 
 
 # ============================================================================
@@ -185,7 +252,7 @@ def generate_jobs_yaml(settings: dict) -> str:
         "port": settings["port"],
         "result_root": settings["result_root"],
         "max_concurrent": settings["max_concurrent"],
-        "default_timeout_seconds": settings["default_timeout_seconds"],
+        "default_timeouts": settings["default_timeouts"],
         "history_retention": settings["history_retention"],
         "targets": settings["targets"],
     }
@@ -207,6 +274,9 @@ def compute_override_update(settings: dict) -> tuple[str, list[str]]:
             data = {}
     data.setdefault("services", {})
 
+    # Only postgres/starrocks need the /jobs_export mount — those backends
+    # write files server-side. Mongo writes from the runner, so no mount is
+    # added on the mongo service.
     svc_map = {"postgres": "postgres", "starrocks": "starrocks"}
     for backend in settings["_backends"]:
         svc = svc_map.get(backend)
@@ -267,8 +337,14 @@ def print_summary(settings, files_to_write, services_with_mount, sr_fe_applicabl
     print(f"  Port:             {settings['port']}")
     print(f"  Result root:      {settings['result_root']}")
     print(f"  Max concurrent:   {settings['max_concurrent']}")
-    print(f"  Timeout:          {settings['default_timeout_seconds'] // 3600} hour(s)")
     print(f"  History limit:    {settings['history_retention']}")
+    print(f"  Timeouts:")
+    for backend in ("postgres", "starrocks", "mongodb"):
+        if backend in settings.get("default_timeouts", {}):
+            secs = settings["default_timeouts"][backend]
+            hours = secs // 3600
+            label = f"{hours} hour(s)" if hours else "no limit"
+            print(f"    {backend:9s}    {label}")
     print("  Targets:")
     for name, spec in settings["targets"].items():
         print(f"    - {name}: backend={spec['backend']} database={spec['database']}")

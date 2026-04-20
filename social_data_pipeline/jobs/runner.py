@@ -10,7 +10,14 @@ import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
-from .backends import Backend, BackendError, ExecutionHandle, PostgresBackend, StarrocksBackend
+from .backends import (
+    Backend,
+    BackendError,
+    ExecutionHandle,
+    MongoBackend,
+    PostgresBackend,
+    StarrocksBackend,
+)
 from .config import JobsConfig, Target
 from .store import Job, Store
 
@@ -53,6 +60,14 @@ class Runner:
             for t in self.cfg.targets_for("starrocks"):
                 backends[f"starrocks:{t.name}"] = StarrocksBackend(
                     result_root=self.cfg.result_root, database=t.database
+                )
+        if self.cfg.has_backend("mongodb"):
+            # Mongo target = Mongo node. The database is supplied per-query
+            # by the agent (via submit_mongo_query), matching how SR targets
+            # expect fully-qualified references.
+            for t in self.cfg.targets_for("mongodb"):
+                backends[f"mongodb:{t.name}"] = MongoBackend(
+                    result_root=self.cfg.result_root,
                 )
         return backends
 
@@ -128,7 +143,7 @@ class Runner:
 
             result = backend.execute(
                 job=job,
-                timeout_seconds=self.cfg.default_timeout_seconds,
+                timeout_seconds=self.cfg.timeout_for(job.backend),
                 on_handle=on_handle,
             )
 
@@ -220,7 +235,7 @@ class Runner:
         try:
             backend = self._backend_for(job)
             handle = ExecutionHandle(backend_pid=job.backend_pid, connection_id=job.connection_id)
-            backend.cancel(handle)
+            backend.cancel(handle, job)
         except Exception:
             log.exception("cancel call failed for %s", job_id)
         return True
@@ -234,11 +249,25 @@ class Runner:
 
         Resolves the job through the store (any phase) and dispatches to the
         backend's own explain() — PG/SR accept a plain ``EXPLAIN <sql>``
-        which plans but does not execute the query.
+        which plans but does not execute the query. Mongo uses
+        ``db.command({explain: ..., verbosity: queryPlanner})`` and needs
+        the job for database resolution.
         """
         located = self.store.find(job_id)
         if not located:
             raise KeyError(job_id)
         _phase, job = located
         backend = self._backend_for(job)
-        return backend.explain(job.sql)
+        # Mongo's explain accepts an optional job argument for db resolution;
+        # PG/SR ignore it but accept the kwarg.
+        try:
+            return backend.explain(job.sql, job=job)
+        except TypeError:
+            return backend.explain(job.sql)
+
+    def list_mongo_databases(self, target: str) -> list[dict]:
+        """Enumerate databases on the Mongo node reached by the target."""
+        b = self._backends.get(f"mongodb:{target}")
+        if b is None:
+            raise KeyError(f"no mongodb target named {target!r}")
+        return b.list_databases()

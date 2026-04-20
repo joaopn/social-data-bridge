@@ -60,9 +60,11 @@ class Backend(Protocol):
         path has something to target."""
         ...
 
-    def cancel(self, handle: ExecutionHandle) -> None:
-        """Terminate a running query identified by the handle. Opens its own
-        admin connection — must not share state with execute()."""
+    def cancel(self, handle: ExecutionHandle, job: "Job | None" = None) -> None:
+        """Terminate a running query identified by the handle (plus the job
+        for backends that need more context, like Mongo's comment-based
+        lookup). Opens its own admin connection — must not share state with
+        execute()."""
         ...
 
 
