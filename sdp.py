@@ -435,10 +435,15 @@ def _resolve_server_data_mounts(services):
         "services:\n"
     )
 
-    for svc in services:
+    # Emit every service that has either preserved mounts or freshly-regenerated
+    # data mounts. Iterating only `services` would drop the other service's
+    # preserved entries when the user runs `sdp db start <single-service>`.
+    for svc in sorted(set(preserved) | set(service_mounts)):
         svc_preserved = [f"      - {v}" for v in preserved.get(svc, [])]
-        svc_data = [f"      - {m}" for m in service_mounts[svc]]
+        svc_data = [f"      - {m}" for m in service_mounts.get(svc, [])]
         all_volumes = svc_preserved + svc_data
+        if not all_volumes:
+            continue
         content += f"  {svc}:\n    volumes:\n" + "\n".join(all_volumes) + "\n"
 
     override_path.write_text(content)

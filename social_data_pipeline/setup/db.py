@@ -1403,7 +1403,7 @@ def main():
         ))
 
     # docker-compose.override.yml (tablespace volumes / SR multi-disk)
-    if "tablespaces" in settings:
+    if "tablespaces" in settings or settings.get("starrocks_storage_paths"):
         override_content = generate_docker_compose_override(settings)
         if override_content:
             files_to_write.append((
