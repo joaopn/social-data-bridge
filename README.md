@@ -189,9 +189,10 @@ python sdp.py <db|source|run> [options]
 | `sdp.py db recover-password` | Reset database admin password (requires auth enabled) |
 | `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes |
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
+| `sdp.py db unsetup --db <postgres\|mongo\|starrocks>` | Fully remove one database (config, containers, and data) without touching the others |
 | `sdp.py db unsetup-mcp` | Remove MCP configuration and stop MCP containers |
 
-`db setup` generates `.env`, `config/db/*.yaml`, `config/postgres/postgresql.local.conf`, and `config/starrocks/{fe,be}.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and `.ro_credentials` files in each database data volume. `db setup --add <db>` adds or reconfigures a single database — it asks only that database's questions and merges into the existing `.env` without touching other databases' configuration. Database deletion in `db unsetup` requires two separate confirmations.
+`db setup` generates `.env`, `config/db/*.yaml`, `config/postgres/postgresql.local.conf`, and `config/starrocks/{fe,be}.conf`. When authentication is enabled, it also generates `pg_hba.local.conf` and `.ro_credentials` files in each database data volume. `db setup --add <db>` adds or reconfigures a single database — it asks only that database's questions and merges into the existing `.env` without touching other databases' configuration. Database deletion in `db unsetup` requires two separate confirmations. `db unsetup --db <db>` is the inverse of `db setup --add` — it deletes exactly one database (containers, config files, data directory, and the DB's entries in `.env`, `docker-compose.override.yml`, and `config/db/mcp.yaml`) while leaving the other databases running. Data deletion is always included; to reconfigure a database in place without losing data, re-run `db setup --add <db>`.
 
 ### Source Management (`sdp.py source`)
 

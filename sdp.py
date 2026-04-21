@@ -976,9 +976,269 @@ DB_GENERATED_FILES = [
 ]
 
 
+def _unsetup_single_db(db_name, env):
+    """Remove a single database entirely: containers, config, data, and shared-file entries.
+
+    Containers, config, and data are always removed together — this is not a reconfigure path.
+    Use 'sdp db setup --add <db>' to reconfigure a DB in place without losing data.
+    """
+    import yaml
+
+    if db_name not in _get_configured_db_services():
+        print(f"\n  No {db_name} configuration found.\n")
+        return 0
+
+    db_label = {"postgres": "PostgreSQL", "mongo": "MongoDB", "starrocks": "StarRocks"}[db_name]
+
+    config_files_map = {
+        "postgres": [
+            "config/db/postgres.yaml",
+            "config/postgres/postgresql.local.conf",
+            "config/postgres/pg_hba.local.conf",
+        ],
+        "mongo": [
+            "config/db/mongo.yaml",
+        ],
+        "starrocks": [
+            "config/db/starrocks.yaml",
+            "config/starrocks/fe.local.conf",
+            "config/starrocks/be.local.conf",
+        ],
+    }
+    data_env_var = {
+        "postgres": "PGDATA_PATH",
+        "mongo": "MONGO_DATA_PATH",
+        "starrocks": "STARROCKS_DATA_PATH",
+    }[db_name]
+    chown_image = {
+        "postgres": "postgres:18",
+        "mongo": "mongo:8",
+        "starrocks": "starrocks/allin1-ubuntu",
+    }[db_name]
+    env_keys_map = {
+        "postgres": {"PGDATA_PATH", "DB_NAME", "POSTGRES_PORT", "POSTGRES_MEM_LIMIT",
+                     "POSTGRES_AUTH_ENABLED", "POSTGRES_RO_USER",
+                     "POSTGRES_MCP_PORT", "POSTGRES_MCP_ACCESS_MODE", "POSTGRES_MCP_USER"},
+        "mongo": {"MONGO_DATA_PATH", "MONGO_PORT", "MONGO_CACHE_SIZE_GB", "MONGO_MEM_LIMIT",
+                  "MONGO_AUTH_ENABLED", "MONGO_ADMIN_USER", "MONGO_RO_USER",
+                  "MONGO_MCP_PORT", "MONGO_MCP_READ_ONLY", "MONGO_MCP_USER"},
+        "starrocks": {"STARROCKS_DATA_PATH", "STARROCKS_PORT", "STARROCKS_FE_HTTP_PORT",
+                      "STARROCKS_MEM_LIMIT", "STARROCKS_AUTH_ENABLED", "STARROCKS_RO_USER",
+                      "STARROCKS_MCP_PORT", "STARROCKS_MCP_USER"},
+    }
+    env_keys = env_keys_map[db_name]
+
+    print()
+    header_text = f"Social Data Pipeline - Remove {db_label}"
+    print(f"  {header_text}")
+    print(f"  {'=' * len(header_text)}")
+    print()
+
+    # Read tablespaces (PG only) before configs are removed.
+    tablespace_paths = {}
+    if db_name == "postgres":
+        for cfg_name in ("pipeline.yaml", "user.yaml"):
+            cfg_file = CONFIG_DIR / "postgres" / cfg_name
+            if cfg_file.exists():
+                try:
+                    cfg = yaml.safe_load(cfg_file.read_text()) or {}
+                    ts = cfg.get("tablespaces") or cfg.get("pipeline", {}).get("tablespaces")
+                    if ts and isinstance(ts, dict):
+                        tablespace_paths.update(ts)
+                except Exception:
+                    pass
+        pg_db_config = CONFIG_DIR / "db" / "postgres.yaml"
+        if pg_db_config.exists():
+            try:
+                cfg = yaml.safe_load(pg_db_config.read_text()) or {}
+                ts = cfg.get("tablespaces")
+                if ts and isinstance(ts, dict):
+                    tablespace_paths.update(ts)
+            except Exception:
+                pass
+
+    # --- Inventory ---
+    print(f"  This will remove {db_label} completely:")
+    print()
+
+    existing_configs = [rel for rel in config_files_map[db_name] if (ROOT / rel).exists()]
+    existing_baks = [rel + ".bak" for rel in config_files_map[db_name] if (ROOT / (rel + ".bak")).exists()]
+    if existing_configs or existing_baks:
+        print("  Config files:")
+        for rel in existing_configs + existing_baks:
+            print(f"    {rel}")
+        print()
+
+    data_path_str = env.get(data_env_var, "")
+    data_path = None
+    if data_path_str:
+        dp = Path(data_path_str)
+        if not dp.is_absolute():
+            dp = ROOT / dp
+        if dp.exists():
+            data_path = dp
+            print(f"  Data directory: {data_path_str}")
+            if tablespace_paths:
+                print(f"  Tablespace directories:")
+                for ts_name, ts_path in tablespace_paths.items():
+                    print(f"    {ts_name}: {ts_path}")
+            print()
+
+    # --- Double confirmation ---
+    confirm1 = input(
+        f"  Delete {db_label} entirely? Config, containers, and data will be removed. "
+        f"This CANNOT be undone [y/N]: "
+    ).strip().lower()
+    if confirm1 not in ("y", "yes"):
+        print("\n  Aborted — nothing was changed.\n")
+        return 0
+    confirm2 = input(
+        f"  Are you SURE? All {db_label} data will be permanently lost [y/N]: "
+    ).strip().lower()
+    if confirm2 not in ("y", "yes"):
+        print("\n  Aborted — nothing was changed.\n")
+        return 0
+    print()
+
+    # --- Stop containers ---
+    print(f"  Stopping {db_label} containers...")
+    docker_compose("--profile", db_name, "--profile", f"{db_name}_mcp",
+                   "down", "--timeout", "30")
+    print()
+
+    # --- Delete data directory (+ tablespaces for PG) ---
+    if data_path and data_path.exists():
+        print("  Fixing directory permissions...")
+        parent = data_path.resolve().parent
+        volume_args = ["-v", f"{parent}:/dbparent"]
+        # Recursive: make everything user-owned so shutil.rmtree can clean contents.
+        recursive = ["/dbparent"]
+        # Non-recursive: make tablespace PARENTS user-owned so we can unlink the
+        # tablespace directory itself. Can't be recursive because a parent may
+        # contain sibling DB dirs (e.g. a starrocks dir) we must not touch.
+        non_recursive = []
+        ts_mounts = []  # for the rmtree pass
+        if db_name == "postgres":
+            for ts_name, ts_path in tablespace_paths.items():
+                ts_dir = Path(ts_path)
+                if not ts_dir.is_absolute():
+                    ts_dir = ROOT / ts_dir
+                if ts_dir.exists():
+                    volume_args += ["-v", f"{ts_dir.resolve()}:/tablespace/{ts_name}"]
+                    recursive.append(f"/tablespace/{ts_name}")
+                    ts_parent = ts_dir.resolve().parent
+                    ts_parent_mount = f"/tsparent_{ts_name}"
+                    volume_args += ["-v", f"{ts_parent}:{ts_parent_mount}"]
+                    non_recursive.append(ts_parent_mount)
+                    ts_mounts.append((ts_name, ts_dir))
+        uid_gid = f"{os.getuid()}:{os.getgid()}"
+        chown_cmd = f"chown -R {uid_gid} {' '.join(recursive)}"
+        if non_recursive:
+            chown_cmd += f" && chown {uid_gid} {' '.join(non_recursive)}"
+        subprocess.run(
+            ["docker", "run", "--rm"] + volume_args +
+            [chown_image, "sh", "-c", chown_cmd],
+            cwd=ROOT,
+        )
+        print(f"  Removing {data_path}...")
+        shutil.rmtree(data_path)
+        for ts_name, ts_dir in ts_mounts:
+            if ts_dir.exists():
+                print(f"  Removing tablespace '{ts_name}' at {ts_dir}...")
+                shutil.rmtree(ts_dir)
+        print(f"  {db_label} data removed.")
+        print()
+
+    # --- Remove .ro_credentials if still present ---
+    if data_path_str:
+        dp = Path(data_path_str)
+        if not dp.is_absolute():
+            dp = ROOT / dp
+        cred_file = dp / ".ro_credentials"
+        if cred_file.exists():
+            try:
+                cred_file.unlink()
+                print(f"  Removed {cred_file}")
+            except PermissionError:
+                subprocess.run(
+                    ["docker", "run", "--rm",
+                     "-v", f"{cred_file.resolve().parent}:/data",
+                     "alpine", "rm", "-f", "/data/.ro_credentials"],
+                    cwd=ROOT, capture_output=True,
+                )
+
+    # --- Remove config files + .bak ---
+    for rel in existing_configs + existing_baks:
+        p = ROOT / rel
+        if p.exists():
+            p.unlink()
+    if existing_configs or existing_baks:
+        print(f"  Removed {len(existing_configs) + len(existing_baks)} config file(s).")
+
+    # --- Strip DB keys from .env ---
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        lines = env_path.read_text().splitlines()
+        new_lines = []
+        for line in lines:
+            stripped = line.lstrip("# ").strip()
+            key = stripped.split("=", 1)[0] if "=" in stripped else stripped
+            if key not in env_keys:
+                new_lines.append(line)
+        env_path.write_text("\n".join(new_lines) + "\n")
+        print(f"  Updated:   .env")
+
+    # --- Strip DB services block from docker-compose.override.yml ---
+    override_path = ROOT / "docker-compose.override.yml"
+    if override_path.exists():
+        try:
+            data = yaml.safe_load(override_path.read_text()) or {}
+        except yaml.YAMLError:
+            data = {}
+        services = data.get("services") or {}
+        if db_name in services:
+            services.pop(db_name)
+            if services:
+                data["services"] = services
+                header = (
+                    "# Auto-generated by sdp — volume mounts for database servers.\n"
+                    "# Setup mounts (tablespaces, SR storage) + per-source data mounts from sdp db start.\n"
+                    "\n"
+                )
+                body = yaml.dump(data, default_flow_style=False, sort_keys=False)
+                override_path.write_text(header + body)
+                print(f"  Updated:   docker-compose.override.yml")
+            else:
+                override_path.unlink()
+                print(f"  Removed:   docker-compose.override.yml")
+
+    # --- Strip DB subtree from config/db/mcp.yaml ---
+    mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
+    if mcp_path.exists():
+        try:
+            mcp_cfg = yaml.safe_load(mcp_path.read_text()) or {}
+        except yaml.YAMLError:
+            mcp_cfg = {}
+        if db_name in mcp_cfg:
+            mcp_cfg.pop(db_name)
+            if mcp_cfg:
+                mcp_path.write_text(yaml.dump(mcp_cfg, default_flow_style=False, sort_keys=False))
+                print(f"  Updated:   config/db/mcp.yaml")
+            else:
+                mcp_path.unlink()
+                print(f"  Removed:   config/db/mcp.yaml")
+
+    print()
+    print(f"  {db_label} removed. Other databases are not affected.\n")
+    return 0
+
+
 def cmd_db_unsetup(args):
     """Remove database configuration and optionally database data."""
     env = load_env()
+
+    if getattr(args, "db", None):
+        return _unsetup_single_db(args.db, env)
 
     print()
     print("  Social Data Pipeline - Database Unsetup")
@@ -1058,29 +1318,37 @@ def cmd_db_unsetup(args):
                 if confirm2 in ("y", "yes"):
                     print()
                     print("  Fixing directory permissions...")
-                    # Mount the parent directory so we can chown both the parent and pgdata
                     db_parent = pgdata.resolve().parent
                     volume_args = ["-v", f"{db_parent}:/dbparent"]
-                    chown_paths = ["/dbparent"]
+                    recursive = ["/dbparent"]
+                    # Tablespace parents need non-recursive chown so we can unlink
+                    # the tablespace dir itself — can't recurse, they may contain
+                    # sibling DB dirs we must not touch.
+                    non_recursive = []
+                    ts_mounts = []
                     for ts_name, ts_path in tablespace_paths.items():
                         ts_dir = Path(ts_path)
                         if not ts_dir.is_absolute():
                             ts_dir = ROOT / ts_dir
                         if ts_dir.exists():
                             volume_args += ["-v", f"{ts_dir.resolve()}:/tablespace/{ts_name}"]
-                            chown_paths.append(f"/tablespace/{ts_name}")
+                            recursive.append(f"/tablespace/{ts_name}")
+                            ts_parent_mount = f"/tsparent_{ts_name}"
+                            volume_args += ["-v", f"{ts_dir.resolve().parent}:{ts_parent_mount}"]
+                            non_recursive.append(ts_parent_mount)
+                            ts_mounts.append((ts_name, ts_dir))
                     uid_gid = f"{os.getuid()}:{os.getgid()}"
+                    chown_cmd = f"chown -R {uid_gid} {' '.join(recursive)}"
+                    if non_recursive:
+                        chown_cmd += f" && chown {uid_gid} {' '.join(non_recursive)}"
                     subprocess.run(
                         ["docker", "run", "--rm"] + volume_args +
-                        ["postgres:18", "chown", "-R", uid_gid] + chown_paths,
+                        ["postgres:18", "sh", "-c", chown_cmd],
                         cwd=ROOT,
                     )
                     print(f"  Removing {pgdata}...")
                     shutil.rmtree(pgdata)
-                    for ts_name, ts_path in tablespace_paths.items():
-                        ts_dir = Path(ts_path)
-                        if not ts_dir.is_absolute():
-                            ts_dir = ROOT / ts_dir
+                    for ts_name, ts_dir in ts_mounts:
                         if ts_dir.exists():
                             print(f"  Removing tablespace '{ts_name}' at {ts_dir}...")
                             shutil.rmtree(ts_dir)
@@ -2695,6 +2963,8 @@ def build_parser():
     db_status_p.set_defaults(func=cmd_db_status)
 
     db_unsetup_p = db_sub.add_parser("unsetup", help="Remove database configuration")
+    db_unsetup_p.add_argument("--db", choices=["postgres", "mongo", "starrocks"],
+                               help="Remove a single database (config, containers, and data) without affecting others")
     db_unsetup_p.set_defaults(func=cmd_db_unsetup)
 
     db_unsetup_mcp_p = db_sub.add_parser("unsetup-mcp", help="Remove MCP configuration")
