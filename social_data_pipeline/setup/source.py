@@ -225,8 +225,14 @@ def _load_existing_source_config(source_name):
             existing["custom_indexes"] = pc["indexes"]
         if pc.get("mongo_indexes"):
             existing["custom_mongo_indexes"] = pc["mongo_indexes"]
+        if pc.get("sr_indexes"):
+            existing["custom_sr_indexes"] = pc["sr_indexes"]
         if pc.get("file_patterns"):
             existing["file_patterns"] = pc["file_patterns"]
+        if pc.get("primary_key"):
+            existing["primary_key"] = pc["primary_key"]
+        if pc.get("sr_buckets") is not None:
+            existing["sr_buckets"] = pc["sr_buckets"]
 
     # Load parse.yaml
     parse_path = source_dir / "parse.yaml"
@@ -518,6 +524,46 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                     if idx:
                         settings["custom_sr_indexes"][dt] = idx
 
+        # Primary key (custom platforms only — Reddit has `id` hardcoded in its template).
+        # Needed whenever a DB profile performs PK-based upsert/dedup.
+        if has_postgres or has_starrocks:
+            section_header("Primary Key")
+            print("  Column used as the table's primary key. Required for")
+            print("  duplicate detection and upsert behavior.")
+            print()
+            # Default: "id" if present anywhere in configured fields, else first field
+            configured_fields = settings.get("custom_fields") or {}
+            all_field_names = sorted({f for flist in configured_fields.values() for f in (flist or [])})
+            if existing.get("primary_key"):
+                default_pk = existing["primary_key"]
+            elif "id" in all_field_names:
+                default_pk = "id"
+            elif all_field_names:
+                default_pk = all_field_names[0]
+            else:
+                default_pk = "id"
+            settings["primary_key"] = ask("Primary key column", default_pk, tag="src_primary_key")
+
+    # ---- StarRocks table sizing (single knob per source) ----
+    if has_starrocks:
+        section_header("StarRocks Table Sizing")
+        cores = hw["cpu_cores"] or 4
+        default_buckets = cores * 8
+        print("  Splits each StarRocks table into tablets — the physical storage")
+        print("  units that govern compaction granularity, disk distribution,")
+        print("  and scan scheduling on the BE. Compute parallelism is set")
+        print("  separately by the BE's pipeline_dop (bucket count does not cap")
+        print("  it, thanks to morsel-driven sub-tablet parallelism). Target is")
+        print(f"  roughly 1–10 GB per tablet; default = {cores} × 8 = {default_buckets}")
+        print("  covers datasets in the 100 GB – 10 TB range. Raise for larger")
+        print("  datasets, drop for very small sources (<10 GB).")
+        print()
+        settings["sr_buckets"] = ask_int(
+            "Number of buckets per table",
+            existing.get("sr_buckets", default_buckets),
+            tag="src_sr_buckets",
+        )
+
     return settings
 
 
@@ -569,6 +615,12 @@ def generate_platform_yaml(settings):
 
     if settings.get("custom_sr_indexes"):
         config["sr_indexes"] = settings["custom_sr_indexes"]
+
+    if settings.get("primary_key"):
+        config["primary_key"] = settings["primary_key"]
+
+    if settings.get("sr_buckets") is not None:
+        config["sr_buckets"] = settings["sr_buckets"]
 
     # Field types: use HF-derived types if available, otherwise generic defaults
     if settings.get("custom_field_types"):
@@ -630,6 +682,8 @@ def generate_reddit_platform_yaml(settings):
         "parsed": settings["parsed_path"],
         "output": settings["output_path"],
     }
+    if settings.get("sr_buckets") is not None:
+        base_config["sr_buckets"] = settings["sr_buckets"]
     return yaml.dump(base_config, default_flow_style=False, sort_keys=False)
 
 

@@ -19,6 +19,7 @@ from social_data_pipeline.db.starrocks.ingest import (
     get_classifier_create_table_query,
     get_ingest_query,
     infer_classifier_schema,
+    compute_bucket_count,
     _sr_server_path,
     _arrow_type_to_sr_sql,
     _infer_sr_type,
@@ -492,3 +493,74 @@ class TestInferClassifierSchema:
         pq.write_table(table, str(f))
         columns, types, nullable = infer_classifier_schema(str(f))
         assert types['flag'] == 'BOOLEAN'
+
+
+# ── BUCKETS clause (get_create_table_query / get_classifier_create_table_query) ──
+
+class TestBucketsClause:
+    PLATFORM = {'field_types': {'id': ['char', 7]}}
+
+    def test_create_table_no_buckets_when_not_passed(self):
+        q = get_create_table_query('t', 'db', ['id'], self.PLATFORM, 'id')
+        assert 'BUCKETS' not in q
+
+    def test_create_table_buckets_emitted(self):
+        q = get_create_table_query('t', 'db', ['id'], self.PLATFORM, 'id', buckets=128)
+        assert 'DISTRIBUTED BY HASH(`id`) BUCKETS 128' in q
+
+    def test_create_table_buckets_coerced_to_int(self):
+        q = get_create_table_query('t', 'db', ['id'], self.PLATFORM, 'id', buckets='64')
+        assert 'BUCKETS 64' in q
+
+    def test_classifier_create_with_pk_buckets(self):
+        q = get_classifier_create_table_query(
+            't', 'db', ['id', 'score'],
+            {'id': 'CHAR(7)', 'score': 'FLOAT'},
+            pk_column='id', buckets=32,
+        )
+        assert 'DISTRIBUTED BY HASH(`id`) BUCKETS 32' in q
+
+    def test_classifier_create_without_pk_buckets(self):
+        q = get_classifier_create_table_query(
+            't', 'db', ['score'], {'score': 'FLOAT'},
+            buckets=16,
+        )
+        assert 'DISTRIBUTED BY RANDOM BUCKETS 16' in q
+
+    def test_classifier_create_without_pk_no_buckets(self):
+        q = get_classifier_create_table_query(
+            't', 'db', ['score'], {'score': 'FLOAT'},
+        )
+        assert 'DISTRIBUTED BY RANDOM' in q
+        assert 'BUCKETS' not in q
+
+
+# ── compute_bucket_count ─────────────────────────────────────────────────────
+
+class TestComputeBucketCount:
+    def test_int_value_uniform_across_data_types(self):
+        platform = {'sr_buckets': 256}
+        assert compute_bucket_count(platform, 'submissions') == 256
+        assert compute_bucket_count(platform, 'comments') == 256
+
+    def test_dict_value_per_data_type(self):
+        platform = {'sr_buckets': {'submissions': 128, 'comments': 512}}
+        assert compute_bucket_count(platform, 'submissions') == 128
+        assert compute_bucket_count(platform, 'comments') == 512
+
+    def test_dict_unknown_data_type_returns_none(self):
+        platform = {'sr_buckets': {'submissions': 128}}
+        assert compute_bucket_count(platform, 'comments') is None
+
+    def test_missing_key_returns_none(self):
+        assert compute_bucket_count({}, 'submissions') is None
+
+    def test_zero_clamps_to_one(self):
+        assert compute_bucket_count({'sr_buckets': 0}, 'anything') == 1
+
+    def test_negative_clamps_to_one(self):
+        assert compute_bucket_count({'sr_buckets': -5}, 'anything') == 1
+
+    def test_string_numeric_is_coerced(self):
+        # YAML can parse numerics as strings depending on quoting
+        assert compute_bucket_count({'sr_buckets': '64'}, 'anything') == 64

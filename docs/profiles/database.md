@@ -536,6 +536,30 @@ $STARROCKS_DATA_PATH/be/storage  →  /data/deploy/starrocks/be/storage    prima
 
 The primary mount is declared in `docker-compose.yml`; extra disks are added to `docker-compose.override.yml` and listed in `storage_root_path` in `config/starrocks/be.local.conf`, with the primary path always first.
 
+### Bucketing (tablet count per table)
+
+StarRocks splits each table into **tablets** (one bucket = one tablet with `replication_num=1`). Tablets are the physical storage unit — they govern compaction granularity, disk distribution, and scan-task scheduling. Compute parallelism for a query is set separately by the BE's `pipeline_dop` and is **not** capped by bucket count: if tablets < pipeline_dop, StarRocks uses morsel-driven execution to split individual tablets into finer work units and keep all compute threads busy.
+
+Set per source during `sdp source add`, stored in `config/sources/<name>/platform.yaml`:
+
+```yaml
+# Uniform — all tables in this source get 256 buckets (the common case)
+sr_buckets: 256
+
+# Per-data-type override (hand-edit only; not prompted)
+sr_buckets:
+  submissions: 128
+  comments: 512
+```
+
+The default during setup is `logical_cpu_count × 8`, which targets roughly 1–10 GB per tablet for datasets in the 100 GB – 10 TB range. Rules of thumb:
+
+- **< 10 GB source**: drop to `logical_cpus` or `logical_cpus × 2` to avoid wastefully small tablets (< 128 MB).
+- **100 GB – 10 TB source**: default is fine.
+- **> 10 TB source**: raise proportionally. Target tablet size is 1–10 GB; tolerable up to ~100 GB on append-only workloads (base compaction is slow on large tablets).
+
+Tables created before an `sr_buckets` change keep their original bucket count — StarRocks doesn't reshard unpartitioned tables in place.
+
 ### Connecting
 
 StarRocks uses the MySQL wire protocol. Connect with any MySQL client:

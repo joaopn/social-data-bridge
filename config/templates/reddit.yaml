@@ -59,6 +59,11 @@ mongo_indexes:
     - subreddit
     - link_id
 
+# StarRocks tablets per table. Applied uniformly to submissions and comments.
+# Override at 'sdp source add'. May also be a dict {data_type: N} for per-type
+# overrides, but the default is a single int applied to all tables in the source.
+sr_buckets: 256
+
 # Mandatory fields: always prepended to column list (before fields listed per data_type)
 mandatory_fields:
   - dataset

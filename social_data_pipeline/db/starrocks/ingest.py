@@ -43,6 +43,31 @@ def _connect(host, port, user, password=None, database=None):
     return mysql.connector.connect(**params)
 
 
+def compute_bucket_count(platform_config, data_type):
+    """Resolve the BUCKETS value for a data_type from platform_config.
+
+    Reads `sr_buckets` from the source's platform.yaml, accepting either form:
+        sr_buckets: 256             # uniform — all tables get 256
+        sr_buckets:                 # per-data-type override
+            submissions: 128
+            comments: 512
+
+    Returns None if no value is configured (caller leaves out the BUCKETS
+    clause, letting SR fall back to its auto-bucketing default).
+    """
+    value = platform_config.get('sr_buckets')
+    if value is None:
+        return None
+
+    if isinstance(value, dict):
+        resolved = value.get(data_type)
+        if resolved is None:
+            return None
+        return max(1, int(resolved))
+
+    return max(1, int(value))
+
+
 def yaml_type_to_sr_sql(type_def) -> str:
     """Map YAML type definitions to StarRocks column types."""
     # StarRocks STRING caps at 65,533 bytes; VARCHAR(1048576) is the 1 MB max.
@@ -90,11 +115,16 @@ def get_column_list(data_type: str, platform_config: Dict, file: str = None) -> 
     return columns
 
 
-def get_create_table_query(table, database, columns_list, platform_config, pk_column):
+def get_create_table_query(table, database, columns_list, platform_config, pk_column, buckets=None):
     """Build StarRocks CREATE TABLE statement with Primary Key model.
 
     Primary Key tables provide native upsert/dedup on duplicate keys.
     DISTRIBUTED BY HASH is required for PK tables.
+
+    Args:
+        buckets: Explicit bucket count for DISTRIBUTED BY HASH. If None, SR's
+            auto-bucketing default is used (typically too low for single-BE
+            clusters at TB scale — callers should pass an explicit value).
     """
     field_types = platform_config.get('field_types', {})
 
@@ -109,11 +139,15 @@ def get_create_table_query(table, database, columns_list, platform_config, pk_co
 
     columns_sql = ",\n".join(col_defs)
 
+    distribute_clause = f"DISTRIBUTED BY HASH(`{pk_column}`)"
+    if buckets is not None:
+        distribute_clause += f" BUCKETS {int(buckets)}"
+
     query = (
         f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (\n"
         f"{columns_sql}\n"
         f") PRIMARY KEY (`{pk_column}`)\n"
-        f"DISTRIBUTED BY HASH(`{pk_column}`)\n"
+        f"{distribute_clause}\n"
         f"PROPERTIES(\"enable_persistent_index\" = \"true\", \"replication_num\" = \"1\")"
     )
     return query
@@ -399,12 +433,16 @@ def infer_classifier_schema(file_path, n_rows=1000, column_overrides=None):
     return all_cols, column_types, nullable_cols
 
 
-def get_classifier_create_table_query(table, database, column_list, column_types, pk_column=None):
+def get_classifier_create_table_query(table, database, column_list, column_types, pk_column=None, buckets=None):
     """Build CREATE TABLE for a classifier output table.
 
     Uses pre-inferred column types (from infer_classifier_schema) rather than
     platform_config field_types. No foreign key constraint (SR FKs are
     non-enforced optimizer hints only).
+
+    Args:
+        buckets: Explicit bucket count. If None, falls back to SR's
+            auto-bucketing (same caveat as get_create_table_query).
     """
     if pk_column:
         ordered_cols = [pk_column] + [c for c in column_list if c != pk_column]
@@ -420,17 +458,23 @@ def get_classifier_create_table_query(table, database, column_list, column_types
     columns_sql = ",\n".join(col_defs)
 
     if pk_column:
+        distribute_clause = f"DISTRIBUTED BY HASH(`{pk_column}`)"
+        if buckets is not None:
+            distribute_clause += f" BUCKETS {int(buckets)}"
         query = (
             f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (\n"
             f"{columns_sql}\n"
             f") PRIMARY KEY (`{pk_column}`)\n"
-            f"DISTRIBUTED BY HASH(`{pk_column}`)\n"
+            f"{distribute_clause}\n"
             f"PROPERTIES(\"enable_persistent_index\" = \"true\", \"replication_num\" = \"1\")"
         )
     else:
+        distribute_clause = "DISTRIBUTED BY RANDOM"
+        if buckets is not None:
+            distribute_clause += f" BUCKETS {int(buckets)}"
         query = (
             f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (\n"
             f"{columns_sql}\n"
-            f") DISTRIBUTED BY RANDOM"
+            f") {distribute_clause}"
         )
     return query

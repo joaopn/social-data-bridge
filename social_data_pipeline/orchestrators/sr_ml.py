@@ -24,6 +24,7 @@ from ..core.config import (
     ConfigurationError,
 )
 from ..db.starrocks.ingest import (
+    compute_bucket_count,
     ensure_database_exists,
     table_exists,
     ingest_file,
@@ -251,13 +252,16 @@ def run_pipeline(config_dir: str = "/app/config"):
                 user=db_config['user'],
                 password=password,
             ):
-                print(f"[sdp] Creating table {database}.{table_name}")
+                buckets = compute_bucket_count(platform_config, dt)
+                buckets_label = buckets if buckets is not None else "auto"
+                print(f"[sdp] Creating table {database}.{table_name} (BUCKETS {buckets_label})")
                 create_query = get_classifier_create_table_query(
                     table=table_name,
                     database=database,
                     column_list=column_list,
                     column_types=column_types,
                     pk_column=pk_column,
+                    buckets=buckets,
                 )
                 execute_query(
                     create_query,
