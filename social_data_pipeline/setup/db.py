@@ -414,25 +414,31 @@ def run_questionnaire(hw):
             tag="db_sr_be_mem",
         )
 
-        # Multi-disk storage
-        if ask_bool("Use multiple disks for StarRocks storage?", bool(existing.get("starrocks_storage_paths")), tag="db_sr_multidisk"):
+        # Multi-disk storage — the primary data path above is always used as
+        # storage; these are additional disks on top of it.
+        print()
+        print("  StarRocks' storage engine can spread tablets across multiple disks.")
+        print(f"  The primary data path ({settings['starrocks_data_path']}) is always used.")
+        print("  Add extra disks here to increase total capacity and IO parallelism.")
+        print()
+        if ask_bool("Add extra disks for StarRocks storage?", bool(existing.get("starrocks_storage_paths")), tag="db_sr_multidisk"):
             existing_paths = existing.get("starrocks_storage_paths", [])
             if existing_paths:
                 print()
-                print("  Current storage paths:")
+                print("  Current extra storage paths:")
                 for p in existing_paths:
                     print(f"    {p}")
                 print()
-                if ask_bool("Keep existing storage paths?", True, tag="db_sr_keep_paths"):
+                if ask_bool("Keep existing extra storage paths?", True, tag="db_sr_keep_paths"):
                     settings["starrocks_storage_paths"] = list(existing_paths)
 
             if "starrocks_storage_paths" not in settings:
                 storage_paths = []
                 while True:
-                    sp = ask("Host path for StarRocks storage (e.g. /mnt/nvme1/starrocks)", tag="db_sr_storage_path")
+                    sp = ask("Extra host path for StarRocks storage (e.g. /mnt/nvme1/starrocks)", tag="db_sr_storage_path")
                     if sp:
                         storage_paths.append(sp)
-                    if not ask_bool("Add another storage path?", False, tag="db_sr_more_paths"):
+                    if not ask_bool("Add another extra storage path?", False, tag="db_sr_more_paths"):
                         break
                 if storage_paths:
                     settings["starrocks_storage_paths"] = storage_paths
@@ -646,10 +652,13 @@ def generate_starrocks_be_conf(settings):
     base_path = CONFIG_DIR / "starrocks" / "be.conf"
     content = base_path.read_text()
 
-    # Multi-disk storage paths
+    # Multi-disk storage paths. The primary data path (STARROCKS_DATA_PATH) is
+    # always mounted at /data/deploy/starrocks/be/storage by docker-compose.yml
+    # and must be the first entry in storage_root_path; extras follow as
+    # storage_0..N from docker-compose.override.yml.
     storage_paths = settings.get("starrocks_storage_paths")
     if storage_paths:
-        container_paths = [
+        container_paths = ["/data/deploy/starrocks/be/storage"] + [
             f"/data/deploy/starrocks/be/storage_{i}" for i in range(len(storage_paths))
         ]
         content = _replace_conf_value(
@@ -817,7 +826,7 @@ def print_summary(settings, files_to_write):
         print(f"    BE memory limit:     {settings.get('sr_be_mem_limit', 8)} GB")
         print(f"    Data path:           {settings.get('starrocks_data_path', './data/database/starrocks')}")
         if settings.get("starrocks_storage_paths"):
-            print(f"    Storage paths:")
+            print(f"    Extra storage paths:")
             for sp in settings["starrocks_storage_paths"]:
                 print(f"      {sp}")
         if settings.get("starrocks_mem_limit"):
@@ -1147,23 +1156,28 @@ def add_database(db_name):
         )
 
         existing_sr_paths = existing.get("starrocks_storage_paths", [])
-        if ask_bool("Use multiple disks for StarRocks storage?", bool(existing_sr_paths), tag="db_sr_multidisk"):
+        print()
+        print("  StarRocks' storage engine can spread tablets across multiple disks.")
+        print(f"  The primary data path ({settings['starrocks_data_path']}) is always used.")
+        print("  Add extra disks here to increase total capacity and IO parallelism.")
+        print()
+        if ask_bool("Add extra disks for StarRocks storage?", bool(existing_sr_paths), tag="db_sr_multidisk"):
             if existing_sr_paths:
                 print()
-                print("  Current storage paths:")
+                print("  Current extra storage paths:")
                 for p in existing_sr_paths:
                     print(f"    {p}")
                 print()
-                if ask_bool("Keep existing storage paths?", True, tag="db_sr_keep_paths"):
+                if ask_bool("Keep existing extra storage paths?", True, tag="db_sr_keep_paths"):
                     settings["starrocks_storage_paths"] = list(existing_sr_paths)
 
             if "starrocks_storage_paths" not in settings:
                 storage_paths = []
                 while True:
-                    sp = ask("Host path for StarRocks storage (e.g. /mnt/nvme1/starrocks)", tag="db_sr_storage_path")
+                    sp = ask("Extra host path for StarRocks storage (e.g. /mnt/nvme1/starrocks)", tag="db_sr_storage_path")
                     if sp:
                         storage_paths.append(sp)
-                    if not ask_bool("Add another storage path?", False, tag="db_sr_more_paths"):
+                    if not ask_bool("Add another extra storage path?", False, tag="db_sr_more_paths"):
                         break
                 if storage_paths:
                     settings["starrocks_storage_paths"] = storage_paths
