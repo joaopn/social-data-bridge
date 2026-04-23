@@ -10,6 +10,7 @@ processing:
   data_types: []           # Override in source config or set via platform config
   check_duplicates: true   # Use merge_condition for conditional upsert
   create_indexes: true     # Create BITMAP indexes after ingestion
+  index_poll_interval: 10  # Seconds between alter-job status polls during index build
   cleanup_temp: false      # Delete intermediate files after ingestion
   watch_interval: 0        # Check for new files every N minutes (0 = run once)
   prefer_lingua: true      # If true: ingest lingua files instead of original parsed; falls back to original if not found

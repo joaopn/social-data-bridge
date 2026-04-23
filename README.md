@@ -127,7 +127,7 @@ python sdp.py db setup              # Configure databases (PostgreSQL, MongoDB, 
 python sdp.py source add reddit     # Add a data source (interactive setup)
 ```
 
-`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration), and StarRocks `fe.conf`/`be.conf` (with FE/BE memory tuning). To add a database later without reconfiguring existing ones, use `db setup --add <db>` (e.g. `--add mongo`). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
+`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration), and StarRocks `fe.conf`/`be.conf` (with FE/BE memory tuning and BE alter-worker sizing for parallel BITMAP index builds). To add a database later without reconfiguring existing ones, use `db setup --add <db>` (e.g. `--add mongo`). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
 
 For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). For manual configuration or to understand what each setting does, see the [Configuration Reference](docs/configuration.md).
 

@@ -1836,6 +1836,67 @@ def _sr_exec(port, database, statement, password=None):
     return result.returncode == 0, result.stderr.strip()
 
 
+_SR_ALTER_TERMINAL = {"FINISHED", "CANCELLED"}
+
+
+def _sr_alter_column_rows(port, database, password):
+    """Return SHOW ALTER TABLE COLUMN rows (list of string lists); empty on error."""
+    try:
+        return _sr_query(port, database,
+                         f"SHOW ALTER TABLE COLUMN FROM `{database}`", password)
+    except RuntimeError:
+        return []
+
+
+def _sr_wait_for_active_alter(port, database, table, password, poll_interval=10.0,
+                              line_prefix="", print_fn=None):
+    """Block until no non-terminal alter-column job exists for `table`.
+
+    StarRocks rejects CREATE INDEX while another schema change on the same
+    table is running, so we drain any in-flight job first. `line_prefix` is
+    prepended to progress lines; `print_fn` overrides `print` (e.g. for a
+    thread-safe wrapper when multiple tables are polled concurrently).
+    """
+    import time
+    emit = print_fn or (lambda m: print(m, flush=True))
+    last_progress = None
+    while True:
+        rows = _sr_alter_column_rows(port, database, password)
+        active = [r for r in rows
+                  if len(r) >= 12 and r[1] == table and r[9] not in _SR_ALTER_TERMINAL]
+        if not active:
+            return
+        row = max(active, key=lambda r: int(r[0]))
+        progress = row[11]
+        if progress != last_progress:
+            emit(f"    {line_prefix}...waiting on alter job {row[0]}: state={row[9]} progress={progress}")
+            last_progress = progress
+        time.sleep(poll_interval)
+
+
+def _sr_poll_alter_job(port, database, job_id, password, poll_interval=10.0,
+                       line_prefix="", print_fn=None):
+    """Poll one alter JobId until it reaches FINISHED or CANCELLED. Returns (state, msg)."""
+    import time
+    emit = print_fn or (lambda m: print(m, flush=True))
+    target = str(job_id)
+    last_progress = None
+    while True:
+        rows = _sr_alter_column_rows(port, database, password)
+        row = next((r for r in rows if r and r[0] == target), None)
+        if row is None:
+            return "FINISHED", ""
+        state = row[9] if len(row) > 9 else ""
+        msg = row[10] if len(row) > 10 else ""
+        progress = row[11] if len(row) > 11 else ""
+        if state in _SR_ALTER_TERMINAL:
+            return state, msg
+        if progress != last_progress:
+            emit(f"    {line_prefix}alter job {job_id}: state={state} progress={progress}")
+            last_progress = progress
+        time.sleep(poll_interval)
+
+
 def _interactive_sr_indexes(source, platform_config, password):
     """Interactive StarRocks BITMAP index creation. Returns {table: [new_fields]} for config persistence."""
     from social_data_pipeline.setup.utils import ask_multi_select, ask_list, section_header
@@ -1866,12 +1927,11 @@ def _interactive_sr_indexes(source, platform_config, password):
     print(f"  Database: {database}")
     selected_tables = ask_multi_select("Select tables to create indexes on", tables)
 
-    created = {}
-
+    # --- Collect phase: gather field lists per table interactively ---
+    plan = {}  # table -> list of fields
     for table in selected_tables:
         print(f"\n  --- {table} ---")
 
-        # Get columns
         try:
             rows = _sr_query(port, database,
                 f"SELECT column_name FROM information_schema.columns "
@@ -1884,7 +1944,6 @@ def _interactive_sr_indexes(source, platform_config, password):
         except Exception:
             pass
 
-        # Get existing indexes
         try:
             rows = _sr_query(port, database,
                 f"SHOW INDEXES FROM `{database}`.`{table}`",
@@ -1898,27 +1957,75 @@ def _interactive_sr_indexes(source, platform_config, password):
             print("  Existing indexes: (could not query)")
 
         fields = ask_list("New BITMAP indexes (comma-separated field names, empty to skip)", default=[])
-        if not fields:
-            continue
+        if fields:
+            plan[table] = fields
 
+    if not plan:
+        return {}
+
+    # --- Execute phase: parallel across tables; serial within each table ---
+    import threading
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    print_lock = threading.Lock()
+
+    def emit(msg):
+        with print_lock:
+            print(msg, flush=True)
+
+    def _build_for_table(table, fields):
+        prefix = f"[{table}] "
         table_created = []
         for field in fields:
             index_name = f"idx_{table}_{field}"
-            print(f"  Creating BITMAP index: {index_name} ...", end=" ", flush=True)
+            emit(f"  {prefix}Building {index_name}")
             t_start = time.time()
+
+            _sr_wait_for_active_alter(port, database, table, password,
+                                      line_prefix=prefix, print_fn=emit)
 
             statement = f"CREATE INDEX `{index_name}` ON `{database}`.`{table}` (`{field}`) USING BITMAP"
             success, stderr = _sr_exec(port, database, statement, password)
-            duration = time.time() - t_start
+            if not success:
+                emit(f"    {prefix}failed to submit: {stderr}")
+                continue
 
-            if success:
-                print(f"done ({_format_duration(duration)})")
+            rows = _sr_alter_column_rows(port, database, password)
+            job_ids = [int(r[0]) for r in rows if r and r[1] == table]
+            if not job_ids:
+                emit(f"    {prefix}submitted but no alter job visible; skipping wait")
+                table_created.append(field)
+                continue
+            job_id = max(job_ids)
+
+            state, msg = _sr_poll_alter_job(port, database, job_id, password,
+                                            line_prefix=prefix, print_fn=emit)
+            duration = time.time() - t_start
+            if state == "FINISHED":
+                emit(f"    {prefix}built {index_name} ({_format_duration(duration)})")
                 table_created.append(field)
             else:
-                print(f"failed: {stderr}")
+                emit(f"    {prefix}alter job {job_id} ended in state {state}: {msg}")
+        return table_created
 
-        if table_created:
-            created[table] = table_created
+    total_indexes = sum(len(v) for v in plan.values())
+    print()
+    print(f"  Building {total_indexes} index(es) across {len(plan)} table(s) — "
+          f"tables run in parallel, fields within a table serially.")
+    print()
+
+    created = {}
+    with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+        futures = {pool.submit(_build_for_table, t, f): t for t, f in plan.items()}
+        for fut in as_completed(futures):
+            table = futures[fut]
+            try:
+                result = fut.result()
+            except Exception as e:
+                emit(f"  [{table}] worker failed: {e}")
+                continue
+            if result:
+                created[table] = result
 
     return created
 

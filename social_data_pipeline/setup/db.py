@@ -161,6 +161,8 @@ def _load_existing_db_config():
                 existing.setdefault("sr_fe_jvm_heap", sr["fe_jvm_heap"])
             if sr.get("be_mem_limit") is not None:
                 existing.setdefault("sr_be_mem_limit", sr["be_mem_limit"])
+            if sr.get("alter_tablet_workers") is not None:
+                existing.setdefault("sr_alter_tablet_workers", sr["alter_tablet_workers"])
             if sr.get("storage_paths"):
                 existing["starrocks_storage_paths"] = sr["storage_paths"]
             if sr.get("auth"):
@@ -414,6 +416,23 @@ def run_questionnaire(hw):
             tag="db_sr_be_mem",
         )
 
+        # Schema-change / alter worker pool size (BE-side). Primary knob for
+        # CREATE INDEX / ALTER TABLE parallelism; each worker holds a buffer
+        # for bitmap building, so higher values trade memory for speed.
+        default_alter_workers = max(4, min(cores // 2, 10)) if cores else 4
+        print()
+        print("  The BE alter worker pool controls how many tablets are rebuilt in")
+        print("  parallel during CREATE INDEX / ALTER TABLE (StarRocks default: 3).")
+        print("  Higher values speed up index creation but use more memory — each")
+        print("  worker buffers bitmaps while it runs, and high-cardinality columns")
+        print("  can push the BE past its memory limit.")
+        print()
+        settings["sr_alter_tablet_workers"] = ask_int(
+            "BE alter/schema-change worker count",
+            existing.get("sr_alter_tablet_workers", default_alter_workers),
+            tag="db_sr_alter_workers",
+        )
+
         # Multi-disk storage — the primary data path above is always used as
         # storage; these are additional disks on top of it.
         print()
@@ -615,6 +634,7 @@ def generate_db_starrocks_yaml(settings):
         "fe_http_port": settings.get("starrocks_fe_http_port", 8030),
         "fe_jvm_heap": settings.get("sr_fe_jvm_heap", 4),
         "be_mem_limit": settings.get("sr_be_mem_limit", 8),
+        "alter_tablet_workers": settings.get("sr_alter_tablet_workers", 3),
     }
     if settings.get("starrocks_storage_paths"):
         config["storage_paths"] = settings["starrocks_storage_paths"]
@@ -669,6 +689,11 @@ def generate_starrocks_be_conf(settings):
     be_mem = settings.get("sr_be_mem_limit")
     if be_mem:
         content = _replace_conf_value(content, "mem_limit", f"{be_mem}G")
+
+    # Alter/schema-change worker pool (BE-side; sized at init, requires restart)
+    alter_workers = settings.get("sr_alter_tablet_workers")
+    if alter_workers:
+        content = _replace_conf_value(content, "alter_tablet_worker_count", str(alter_workers))
 
     return content
 
@@ -824,6 +849,7 @@ def print_summary(settings, files_to_write):
         print(f"    FE HTTP port:        {settings.get('starrocks_fe_http_port', 8030)}")
         print(f"    FE JVM heap:         {settings.get('sr_fe_jvm_heap', 4)} GB")
         print(f"    BE memory limit:     {settings.get('sr_be_mem_limit', 8)} GB")
+        print(f"    Alter workers:       {settings.get('sr_alter_tablet_workers', 3)}")
         print(f"    Data path:           {settings.get('starrocks_data_path', './data/database/starrocks')}")
         if settings.get("starrocks_storage_paths"):
             print(f"    Extra storage paths:")
@@ -951,6 +977,7 @@ def add_database(db_name):
     data_path = env["DATA_PATH"]
     hw = detect_hardware()
     ram = hw["ram_gb"]
+    cores = hw["cpu_cores"]
     settings = {"data_path": data_path, "databases": [db_name]}
 
     # --- Header ---
@@ -1153,6 +1180,20 @@ def add_database(db_name):
             "BE memory limit (GB)",
             existing.get("sr_be_mem_limit", default_be_mem),
             tag="db_sr_be_mem",
+        )
+
+        default_alter_workers = max(4, min(cores // 2, 10)) if cores else 4
+        print()
+        print("  The BE alter worker pool controls how many tablets are rebuilt in")
+        print("  parallel during CREATE INDEX / ALTER TABLE (StarRocks default: 3).")
+        print("  Higher values speed up index creation but use more memory — each")
+        print("  worker buffers bitmaps while it runs, and high-cardinality columns")
+        print("  can push the BE past its memory limit.")
+        print()
+        settings["sr_alter_tablet_workers"] = ask_int(
+            "BE alter/schema-change worker count",
+            existing.get("sr_alter_tablet_workers", default_alter_workers),
+            tag="db_sr_alter_workers",
         )
 
         existing_sr_paths = existing.get("starrocks_storage_paths", [])

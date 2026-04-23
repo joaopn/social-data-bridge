@@ -312,28 +312,58 @@ def run_pipeline(config_dir: str = "/app/config"):
         if not index_config:
             index_config = platform_config.get('indexes', {})
 
-        t_idx = time.time()
+        # Collect per-table plans up front so we can parallelize across tables.
+        # Each table runs its own serial drain-submit-poll loop in create_indexes();
+        # running multiple tables concurrently is safe because StarRocks' "one
+        # schema change at a time" constraint is per-table, and BE-side memory
+        # is bounded by alter_tablet_worker_count (set at sdp db setup).
+        plan = {}
         for data_type in data_types_with_files:
             index_fields = index_config.get(data_type, [])
             if not index_fields:
                 print(f"[sdp] No indexes configured for {data_type}, skipping")
                 continue
+            plan[data_type] = index_fields
+            print(f"[sdp] Queued {len(index_fields)} BITMAP indexes on {database}.{data_type}")
 
-            print(f"[sdp] Creating {len(index_fields)} BITMAP indexes on {database}.{data_type}")
-            try:
-                created = create_indexes(
+        t_idx = time.time()
+        if plan:
+            import threading
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            print_lock = threading.Lock()
+
+            def emit(msg):
+                with print_lock:
+                    print(msg, flush=True)
+
+            poll_interval = get_optional(config, 'processing', 'index_poll_interval', default=10)
+
+            def _run(data_type, fields):
+                return create_indexes(
                     table=data_type,
                     database=database,
-                    fields=index_fields,
+                    fields=fields,
                     host=db_config['host'],
                     port=db_config['port'],
                     user=db_config['user'],
                     password=password,
+                    poll_interval=poll_interval,
+                    line_prefix=f"[{data_type}] ",
+                    print_fn=emit,
                 )
-                if created:
-                    print(f"[sdp] Created indexes: {', '.join(created)}")
-            except Exception as e:
-                print(f"[sdp] Warning: Failed to create indexes on {data_type}: {e}")
+
+            with ThreadPoolExecutor(max_workers=len(plan)) as pool:
+                futures = {pool.submit(_run, dt, fs): dt for dt, fs in plan.items()}
+                for fut in as_completed(futures):
+                    data_type = futures[fut]
+                    try:
+                        created = fut.result()
+                    except Exception as e:
+                        print(f"[sdp] Warning: Failed to create indexes on {data_type}: {e}")
+                        continue
+                    if created:
+                        print(f"[sdp] Created indexes on {data_type}: {', '.join(created)}")
         indexing_time = time.time() - t_idx
 
     # Final summary

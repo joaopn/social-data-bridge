@@ -584,7 +584,7 @@ Ingests parsed Parquet or CSV files into StarRocks Primary Key tables. Feature p
 2. **Creates Primary Key tables** — columns and types derived from `platform.yaml` field definitions. Primary Key tables auto-deduplicate on insert
 3. **Ingests files** — `INSERT INTO ... SELECT FROM FILES()` reads Parquet/CSV directly from the StarRocks BE filesystem mount. The ingestion container sends SQL; StarRocks BE reads the files itself
 4. **Conditional upsert** — when `check_duplicates: true`, uses `merge_condition` to keep rows with higher `upsert_order_field` (e.g., `retrieved_utc`)
-5. **Creates BITMAP indexes** — for low-cardinality columns (dataset, subreddit, etc.)
+5. **Creates BITMAP indexes** — for configured columns (e.g., `dataset`, `subreddit`, `author`). Tables are built in parallel with each other; fields within a table are built serially (StarRocks allows only one schema change per table at a time). `CREATE INDEX` is async on the BE, so the pipeline polls `SHOW ALTER TABLE COLUMN` every `processing.index_poll_interval` seconds (default: 10) until each alter job reaches `FINISHED`. Per-BE concurrency for schema changes is capped by `alter_tablet_worker_count` in `config/starrocks/be.conf` — configured at `sdp db setup`.
 6. **Runs ANALYZE** — collects statistics for the query optimizer
 
 State tracking via JSON files in the StarRocks data directory enables resume after interruption.
@@ -602,6 +602,7 @@ Source override: `config/sources/<name>/starrocks.yaml`
 | Data types | `processing.data_types` | `[]` | Falls back to platform config |
 | Check duplicates | `processing.check_duplicates` | `true` | Use merge_condition for conditional upsert |
 | Create indexes | `processing.create_indexes` | `true` | Create BITMAP indexes after ingestion |
+| Index poll interval | `processing.index_poll_interval` | `10` | Seconds between alter-job status polls during BITMAP index build |
 | Prefer lingua | `processing.prefer_lingua` | `true` | Ingest lingua-enriched files (includes lang columns) |
 | Watch interval | `processing.watch_interval` | `0` | Minutes between checks (0 = run once) |
 | BITMAP indexes | `sr_indexes` | `{}` | Per data type index fields; falls back to `indexes` |

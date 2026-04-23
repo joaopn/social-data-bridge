@@ -255,57 +255,112 @@ def analyze_table(table, database, host, port, user, password=None):
     execute_query(query, host, port, user, password, database)
 
 
-def create_indexes(table, database, fields, host, port, user, password=None,
-                   timeout=300, poll_interval=0.5):
-    """Create BITMAP indexes on multiple columns, handling async schema changes.
+_ALTER_TERMINAL_STATES = {'FINISHED', 'CANCELLED'}
 
-    StarRocks only allows one schema change per table at a time, so we submit
-    each index sequentially (skipping on "schema change in progress" errors),
-    then poll until all pending operations finish.
+
+def _show_alter_column_jobs(database, host, port, user, password):
+    """Return SHOW ALTER TABLE COLUMN rows as a list (empty if none)."""
+    rows = execute_query(f"SHOW ALTER TABLE COLUMN FROM `{database}`",
+                         host, port, user, password, database)
+    return rows if isinstance(rows, list) else []
+
+
+def _wait_for_active_alter_job(database, table, host, port, user, password, poll_interval,
+                               line_prefix='', print_fn=None):
+    """Block until no non-terminal alter job exists for `table`.
+
+    StarRocks rejects CREATE INDEX while another schema change on the same
+    table is running; we must drain any in-flight job (e.g. from an earlier
+    interrupted run) before submitting the next one.
     """
     import time
+    emit = print_fn or (lambda m: print(m, flush=True))
+    last_progress = None
+    while True:
+        rows = _show_alter_column_jobs(database, host, port, user, password)
+        active = [r for r in rows if r[1] == table and r[9] not in _ALTER_TERMINAL_STATES]
+        if not active:
+            return
+        row = max(active, key=lambda r: int(r[0]))
+        progress = row[11]
+        if progress != last_progress:
+            emit(f"[sdp]   {line_prefix}Waiting on alter job {row[0]}: "
+                 f"state={row[9]} progress={progress}")
+            last_progress = progress
+        time.sleep(poll_interval)
 
-    # Determine which indexes already exist
+
+def _poll_alter_job(database, job_id, host, port, user, password, poll_interval,
+                    line_prefix='', print_fn=None):
+    """Poll one alter JobId until it reaches FINISHED or CANCELLED. Returns (state, msg)."""
+    import time
+    emit = print_fn or (lambda m: print(m, flush=True))
+    last_progress = None
+    while True:
+        rows = _show_alter_column_jobs(database, host, port, user, password)
+        row = next((r for r in rows if int(r[0]) == job_id), None)
+        if row is None:
+            return 'FINISHED', ''
+        state = row[9]
+        progress = row[11]
+        if state in _ALTER_TERMINAL_STATES:
+            return state, row[10]
+        if progress != last_progress:
+            emit(f"[sdp]   {line_prefix}Alter job {job_id}: state={state} progress={progress}")
+            last_progress = progress
+        time.sleep(poll_interval)
+
+
+def create_indexes(table, database, fields, host, port, user, password=None,
+                   poll_interval=10.0, line_prefix='', print_fn=None):
+    """Create BITMAP indexes on multiple columns, serializing per table.
+
+    StarRocks only allows one schema change per table at a time. For each
+    field we drain any in-flight alter job, submit CREATE INDEX, then poll
+    the resulting alter job until it reaches FINISHED (or CANCELLED — in
+    which case we log a warning and move on to the next field). No timeout:
+    large tables can take a long time and bailing early just leaks half-built
+    indexes. Optional `line_prefix` / `print_fn` are used when multiple tables
+    run in parallel so each table's progress lines are distinguishable and
+    stdout writes can be serialized.
+    """
+    emit = print_fn or (lambda m: print(m, flush=True))
     existing = set()
     rows = execute_query(f"SHOW INDEXES FROM `{database}`.`{table}`",
                          host, port, user, password, database)
     if isinstance(rows, list):
         existing = {row[2] for row in rows}
 
-    pending = []
+    created = []
     for field in fields:
         index_name = f"idx_{table}_{field}"
-        if index_name not in existing:
-            pending.append((field, index_name))
+        if index_name in existing:
+            continue
 
-    if not pending:
-        return []
+        _wait_for_active_alter_job(database, table, host, port, user, password, poll_interval,
+                                   line_prefix=line_prefix, print_fn=emit)
 
-    # Submit all — some may fail with "schema change in progress", retry those
-    remaining = list(pending)
-    created = []
-    deadline = time.time() + timeout
+        emit(f"[sdp]   {line_prefix}Building {index_name} ...")
+        execute_query(
+            f"CREATE INDEX `{index_name}` ON `{database}`.`{table}` (`{field}`) USING BITMAP",
+            host, port, user, password, database)
 
-    while remaining and time.time() < deadline:
-        still_remaining = []
-        for field, index_name in remaining:
-            try:
-                execute_query(
-                    f"CREATE INDEX `{index_name}` ON `{database}`.`{table}` (`{field}`) USING BITMAP",
-                    host, port, user, password, database)
-                created.append(field)
-            except Exception as e:
-                if 'schema change operation is in progress' in str(e).lower():
-                    still_remaining.append((field, index_name))
-                else:
-                    raise
-        remaining = still_remaining
-        if remaining:
-            time.sleep(poll_interval)
+        rows = _show_alter_column_jobs(database, host, port, user, password)
+        matching = [int(r[0]) for r in rows if r[1] == table]
+        if not matching:
+            logging.warning("Submitted %s but no alter job found on %s.%s",
+                            index_name, database, table)
+            continue
+        job_id = max(matching)
 
-    if remaining:
-        logging.warning("Timed out waiting to create indexes on %s.%s: %s",
-                        database, table, [f for f, _ in remaining])
+        state, msg = _poll_alter_job(database, job_id, host, port, user, password, poll_interval,
+                                     line_prefix=line_prefix, print_fn=emit)
+        if state == 'FINISHED':
+            created.append(field)
+            emit(f"[sdp]   {line_prefix}Built {index_name}")
+        else:
+            logging.warning("BITMAP index %s on %s.%s ended in state %s: %s",
+                            index_name, database, table, state, msg)
 
     return created
 

@@ -545,6 +545,7 @@ processing:
   data_types: []           # Set via source config
   check_duplicates: true   # Use merge_condition for conditional upsert
   create_indexes: true     # Create BITMAP indexes after ingestion
+  index_poll_interval: 10  # Seconds between alter-job status polls during index build
   cleanup_temp: false      # Delete intermediate files after ingestion
   watch_interval: 0        # Run once (0) or poll every N minutes
   prefer_lingua: true      # Ingest lingua-enriched files if available
@@ -560,11 +561,14 @@ sr_indexes: {}             # Per-data-type index fields (set via platform config
 | **processing.data_types** | Data types to process. Set via source config. | `[]` |
 | **processing.check_duplicates** | Enable `merge_condition` for conditional upsert (keeps row with higher `upsert_order_field`). | `true` |
 | **processing.create_indexes** | Create BITMAP indexes after ingestion completes. | `true` |
+| **processing.index_poll_interval** | Seconds between `SHOW ALTER TABLE COLUMN` polls while waiting for a BITMAP index build to finish. | `10` |
 | **processing.prefer_lingua** | Prefer lingua-enriched files over original parsed files. | `true` |
 | **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
 | **sr_indexes** | BITMAP index fields per data type. Falls back to `indexes` from platform config. | `{}` |
 
 StarRocks uses database-per-source (database name = source name). Tables are Primary Key tables with `DISTRIBUTED BY HASH(pk)` and `enable_persistent_index = true`.
+
+**BITMAP index builds.** `sr_ingest` and `sdp db create-indexes` submit `CREATE INDEX` and then poll `SHOW ALTER TABLE COLUMN` until each alter job reaches `FINISHED`, so progress reporting reflects the actual build (not just the submission). Different tables run in parallel, because StarRocks' "one schema change per table" constraint is per-table — but fields within a single table run serially. BE-side parallelism is capped by `alter_tablet_worker_count` in `config/starrocks/be.conf` (set at `sdp db setup` based on hardware). Each worker buffers bitmaps while it runs, so raising the count speeds up builds at the cost of BE memory — high-cardinality columns (e.g. `author`) can push the BE past its memory limit if the pool is too large.
 
 #### ML Classifier Ingestion: `config/sr_ml/pipeline.yaml` + `services.yaml`
 
