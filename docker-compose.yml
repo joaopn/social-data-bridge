@@ -241,6 +241,7 @@ services:
       - ./config/starrocks/fe.local.conf:/etc/starrocks/config/fe.local.conf:ro
       - ./config/starrocks/be.local.conf:/etc/starrocks/config/be.local.conf:ro
       - ./config/starrocks/entrypoint-wrapper.sh:/etc/starrocks/config/entrypoint-wrapper.sh:ro
+      - ${JOBS_RESULT_ROOT:-./data/jobs/results}:/jobs_export
     healthcheck:
       test: ["CMD-SHELL", "(mysql -h 127.0.0.1 -P 9030 -u root --skip-password -e 'SHOW BACKENDS\\G' 2>/dev/null || mysql -h 127.0.0.1 -P 9030 -u root -p\"$STARROCKS_ROOT_PASSWORD\" -e 'SHOW BACKENDS\\G' 2>/dev/null) | grep -q 'Alive: true'"]
       interval: 15s
