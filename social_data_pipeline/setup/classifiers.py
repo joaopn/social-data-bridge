@@ -149,7 +149,17 @@ def _load_existing_classifier_config(source_name):
                 existing["text_columns"] = tc
             gpu_cls = mc.get("pipeline", {}).get("gpu_classifiers")
             if gpu_cls:
-                existing["ml_classifiers"] = gpu_cls
+                # Normalize to [{name, data_types}]; data_types=None means "all"
+                normalized = []
+                for e in gpu_cls:
+                    if isinstance(e, str):
+                        normalized.append({"name": e, "data_types": None})
+                    elif isinstance(e, dict) and "name" in e:
+                        normalized.append({
+                            "name": e["name"],
+                            "data_types": e.get("data_types"),
+                        })
+                existing["ml_classifiers"] = normalized
         except (OSError, yaml.YAMLError):
             pass
 
@@ -285,12 +295,36 @@ def run_questionnaire(hw, state):
         settings["ml_classifier_batch_size"] = ask_int("Classifier batch size", existing.get("ml_classifier_batch_size", defaults["ml_classifier_batch_size"]), tag="cl_gpu_batch_size")
 
         available_classifiers = defaults["ml_classifiers"]
-        settings["ml_classifiers"] = ask_multi_select(
+        existing_classifiers = existing.get("ml_classifiers", [])
+        existing_names = [c["name"] for c in existing_classifiers] if existing_classifiers else available_classifiers
+        existing_scope = {c["name"]: c.get("data_types") for c in existing_classifiers} if existing_classifiers else {}
+
+        selected_names = ask_multi_select(
             "Classifiers to run:",
             available_classifiers,
-            existing.get("ml_classifiers", defaults["ml_classifiers"]),
+            existing_names,
             tag="cl_gpu_classifiers",
         )
+
+        # Force per-classifier data_types choice (skip when only one data_type is configured).
+        selected_entries = []
+        for name in selected_names:
+            if len(data_types) <= 1:
+                selected_entries.append({"name": name, "data_types": None})
+                continue
+            prev = existing_scope.get(name)
+            default_scope = prev if prev else data_types
+            chosen = ask_multi_select(
+                f"Data types for '{name}':",
+                data_types,
+                default_scope,
+                tag=f"cl_gpu_classifier_data_types__{name}",
+            )
+            # If the user picks the full set, store as None (= "all") to keep the YAML terse.
+            scope = None if set(chosen) == set(data_types) else chosen
+            selected_entries.append({"name": name, "data_types": scope})
+
+        settings["ml_classifiers"] = selected_entries
 
         settings["hf_token"] = ask_password("HuggingFace token (optional, press Enter to skip): ", tag="cl_hf_token")
 
@@ -348,12 +382,21 @@ def generate_ml_user_yaml(settings):
             gpu_classifiers_config["remove_patterns"] = settings["remove_patterns"]
         gpu_classifiers_config["fields"] = settings["gpu_fields"]
 
+    # Emit list of classifiers: bare string when running on all data_types,
+    # dict {name, data_types} when scoped to a subset.
+    classifier_entries = []
+    for c in settings["ml_classifiers"]:
+        if c.get("data_types") is None:
+            classifier_entries.append(c["name"])
+        else:
+            classifier_entries.append({"name": c["name"], "data_types": c["data_types"]})
+
     config = {
         "pipeline": {
             "processing": {
                 "data_types": settings["data_types"],
             },
-            "gpu_classifiers": settings["ml_classifiers"],
+            "gpu_classifiers": classifier_entries,
         },
         "gpu_classifiers": gpu_classifiers_config,
     }
@@ -393,7 +436,10 @@ def print_summary(settings, files_to_write):
         print(f"    File workers:        {settings['ml_file_workers']}")
         print(f"    Tokenize workers:    {settings['ml_tokenize_workers']}")
         print(f"    Classifier batch:    {settings['ml_classifier_batch_size']}")
-        print(f"    Classifiers:         {', '.join(settings['ml_classifiers'])}")
+        print(f"    Classifiers:")
+        for c in settings["ml_classifiers"]:
+            scope = "all" if c.get("data_types") is None else ", ".join(c["data_types"])
+            print(f"      - {c['name']} (data_types: {scope})")
         print(f"    HF token:            {'set' if settings.get('hf_token') else 'not set'}")
         print()
 

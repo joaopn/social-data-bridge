@@ -210,12 +210,13 @@ Ingests ML classifier outputs into separate PostgreSQL tables.
 
 ### How It Works
 
-1. **Service Discovery**: Reads `config/postgres_ml/services.yaml` for enabled classifiers
-2. **File Detection**: Finds classifier output files in `OUTPUT_PATH/<source>/{source_dir}/{data_type}/`
-3. **Type Inference**: Samples `type_inference_rows` rows to auto-detect column types (CSV) or reads schema directly (Parquet)
-4. **Table Creation**: Creates tables named `{data_type}{suffix}` (e.g., `submissions_toxicity_en`)
-5. **Ingestion**: Loads CSV data with duplicate handling
-6. **Foreign Keys**: Optionally adds FK constraint to main table via `(dataset, id)`
+1. **Classifier Resolution**: Loads the source's ml/lingua profile config to determine which classifiers to ingest, their `suffix`, and their `data_types` scope. Source `ml.yaml` is authoritative for what runs.
+2. **Override Layer**: `config/postgres_ml/services.yaml` and `config/sources/<name>/postgres_ml.yaml` add optional ingestion-only tweaks (`enabled: false` to skip, custom `source_dir`, `column_overrides`).
+3. **File Detection**: Finds classifier output files in `OUTPUT_PATH/<source>/{source_dir}/{data_type}/` — only for `data_types` in the classifier's scope.
+4. **Type Inference**: Samples `type_inference_rows` rows to auto-detect column types (CSV) or reads schema directly (Parquet).
+5. **Table Creation**: Creates tables named `{data_type}{suffix}` (e.g., `submissions_toxicity_en`).
+6. **Ingestion**: Loads CSV data with duplicate handling.
+7. **Foreign Keys**: Optionally adds FK constraint to main table via `(dataset, id)`.
 
 ### prefer_lingua Interaction
 
@@ -234,18 +235,18 @@ Same algorithm as postgres_ingest, with an additional step:
 
 Once the table exists, subsequent ingestions use ON CONFLICT.
 
-### Classifier Table Definitions
+### Classifier Resolution and Overrides
 
-**Config file:** `config/postgres_ml/services.yaml`
-
-Each classifier entry has:
+What runs and the per-classifier `suffix` come from the source's ml/lingua profile config. `config/postgres_ml/services.yaml` and the per-source `config/sources/<name>/postgres_ml.yaml` only carry ingestion-only overrides:
 
 | Option | Description |
 |--------|-------------|
-| `enabled` | Whether to process this classifier |
-| `source_dir` | Directory under `OUTPUT_PATH/` |
-| `source_dir_ingest` | Alternative directory (for lingua when prefer_lingua: false) |
-| `suffix` | File and table name suffix |
+| `enabled` | Skip ingestion of a classifier without removing it from the ml profile. Default `true`. |
+| `source_dir` | Directory under `OUTPUT_PATH/` (default: classifier name). |
+| `source_dir_ingest` | Lingua-only: alternative directory used when `prefer_lingua: false`. Defaults to `lingua_ingest`. |
+| `column_overrides` | Force specific column types instead of inferring from data. |
+
+`suffix` is **not** an ingestion override; it lives in the ml/lingua profile so file naming is consistent between the run and the ingest.
 
 ### Configuration
 
@@ -621,8 +622,8 @@ Ingests ML classifier outputs (lingua, toxic_roberta, go_emotions) into separate
 
 ### How It Works
 
-1. **Loads classifier definitions** from `config/sr_ml/services.yaml` (same format as `config/postgres_ml/services.yaml`)
-2. **Detects classifier output files** in `/data/output/{classifier_dir}/{data_type}/`
+1. **Resolves classifier runs** from the source's ml/lingua profile config (the same place `postgres_ml` reads from). Source `ml.yaml` is authoritative for which classifiers run and their `data_types` scope; `suffix` comes from the merged ml/lingua config. `config/sr_ml/services.yaml` and `config/sources/<name>/sr_ml.yaml` add optional ingestion-only overrides.
+2. **Detects classifier output files** in `/data/output/{source_dir}/{data_type}/`, restricted to each classifier's `data_types` scope.
 3. **Infers schema** from the first file per data type:
    - **Parquet**: reads typed schema from file metadata (no sampling)
    - **CSV**: samples N rows and infers types (INT > FLOAT > BOOLEAN > STRING)

@@ -30,14 +30,19 @@ my_classifier:
 
 ### 2. Enable in Pipeline
 
-Add to `config/ml/pipeline.yaml`:
+Add to `config/ml/pipeline.yaml` (or, per source, `config/sources/<source>/ml.yaml`):
 
 ```yaml
 gpu_classifiers:
-  - toxic_roberta
+  - toxic_roberta                    # bare string = runs on every processing.data_types entry
   - go_emotions
-  - my_classifier                    # Add your classifier
+  - name: my_classifier              # dict form scopes to a subset of data_types
+    data_types: [comments]
 ```
+
+Each entry is either a string (runs on all configured `data_types`) or a `{name, data_types}` dict that limits the classifier to the listed data types. Unknown `data_types` raise a config error.
+
+`sdp source add-classifiers <source>` drives this interactively — for every selected classifier it asks which data types it should run on when the source has more than one.
 
 ### 3. Run
 
@@ -49,17 +54,19 @@ python sdp.py run ml
 CLASSIFIER=my_classifier docker compose --profile ml up
 ```
 
-### 4. Configure Database Ingestion (Optional)
+### 4. Configure Database Ingestion
 
-Add to `config/postgres_ml/services.yaml` (PostgreSQL) and/or `config/sr_ml/services.yaml` (StarRocks):
+Once a classifier is in your source's `ml.yaml`, **ingestion is automatic** — `postgres_ml` and `sr_ml` resolve the classifier list and per-classifier `suffix` directly from the same merged ml profile config. No duplication needed.
+
+`config/postgres_ml/services.yaml` and `config/sr_ml/services.yaml` (and their per-source overrides at `config/sources/<name>/postgres_ml.yaml` / `sr_ml.yaml`) hold **ingestion-only overrides**, all optional:
 
 ```yaml
 classifiers:
-  # ... existing classifiers ...
   my_classifier:
-    enabled: true
-    source_dir: my_classifier
-    suffix: "_my_output"
+    enabled: false              # ran in ml profile, but skip ingestion
+    source_dir: custom_outputs  # non-default output directory
+    column_overrides:
+      confidence: REAL          # force a specific PG/SR column type
 ```
 
 ### Model Requirements

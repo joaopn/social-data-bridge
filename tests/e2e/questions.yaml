@@ -623,6 +623,15 @@ cl_gpu_classifiers:
     the data.
   default: "all available"
 
+"cl_gpu_classifier_data_types__*":
+  prompt: "Data types for '<classifier>'"
+  explain: >
+    One prompt per selected classifier (only when more than one data_type
+    is configured). Multi-select the data_types this classifier should run
+    on. Persisted per source: bare classifier name in the YAML list means
+    "runs on all data_types"; {name, data_types} dict means "scoped".
+  default: "all configured data_types (or previous selection on re-run)"
+
 cl_hf_token:
   prompt: "HuggingFace token"
   explain: >

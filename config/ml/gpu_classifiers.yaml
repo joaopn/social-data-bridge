@@ -99,6 +99,35 @@ go_emotions:
   top_k: 3
   min_tokens: 1
 
+# --- Multilingual Sentiment (Single-label) ---
+multilingual_sentiment:
+  suffix: "_sentiment"
+  type: onnx_fp16
+  model: "joaopn/multilingual-sentiment-analysis-onnx-fp16"
+  file_name: "model.onnx"
+  activation: softmax
+  supported_languages: [en, zh, es, hi, ar, bn, pt, ru, ja, de, ms, te, vi, ko, fr, tr, it, pl, uk, nl, sw]
+  classifier_batch_size: 8
+  max_length: 512
+  chunking_strategy: chunk
+  stride: 256
+  top_k: 1  # Crucial: Use Max-Pooling, not averaging
+  min_tokens: 10
+
+# --- Multilingual Toxicity (Binary) ---
+xlmr_toxicity:
+  suffix: "_toxicity"
+  type: onnx_fp16
+  model: "joaopn/xlmr-large-toxicity-classifier-v2-onnx-fp16"
+  activation: softmax
+  supported_languages: [en, ru, uk, de, es, ar, am, hi, zh, it, fr, he, ja, tt]
+  classifier_batch_size: 8
+  max_length: 512
+  chunking_strategy: chunk
+  stride: 256
+  top_k: 1
+  min_tokens: 1
+
 # --- GPT2-Generated Text Detection (Single-label) ---
 # openai_detector:
 #   suffix: "_ai"

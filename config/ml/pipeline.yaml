@@ -7,8 +7,18 @@ processing:
     - comments
   watch_interval: 0          # Check for new files every N minutes (0 = run once)
 
-# GPU classifiers to run (from gpu_classifiers.yaml)
-# If use_lingua = true, you must run lingua profile first to generate lingua output
+# GPU classifiers to run (defined in gpu_classifiers.yaml).
+# If use_lingua = true, you must run lingua profile first to generate lingua output.
+#
+# Each entry can be either:
+#   - a string (runs on every data_type in processing.data_types)
+#   - a dict {name, data_types} (runs only on the listed data_types)
+#
+# Example:
+#   gpu_classifiers:
+#     - toxic_roberta                                # runs on all data_types
+#     - name: xlmr_toxicity
+#       data_types: [comments]                       # runs only on comments
 gpu_classifiers:
   - toxic_roberta
   - go_emotions

@@ -17,6 +17,7 @@ from ..core.state import PipelineState
 from ..core.config import (
     load_profile_config,
     load_platform_config as _load_platform_config,
+    resolve_classifier_runs,
     apply_env_overrides,
     validate_processing_config,
     validate_starrocks_config,
@@ -114,7 +115,10 @@ def run_pipeline(config_dir: str = "/app/config"):
     db_config = config['database']
     password = db_config.get('password')
     proc_config = config.get('processing', {})
-    classifiers_config = config.get('classifiers', {})
+    # Optional ingestion-only overrides keyed by classifier name.
+    # Supported: enabled (bool), source_dir (str), source_dir_ingest (lingua),
+    # column_overrides (dict).
+    ingestion_overrides = config.get('classifiers', {}) or {}
 
     output_dir = proc_config.get('output_dir', '/data/output')
 
@@ -142,10 +146,21 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Database name = source name (database-per-source, like sr_ingest)
     database = SOURCE
 
+    # Resolve classifier runs from source's ml/lingua profiles + ingestion overrides.
+    classifier_runs = resolve_classifier_runs(
+        config_dir=config_dir,
+        source=SOURCE,
+        ingestion_overrides=ingestion_overrides,
+        prefer_lingua=prefer_lingua,
+    )
+
     print(f"[sdp] Database: {database}")
     print(f"[sdp] Output dir: {output_dir}")
     print(f"[sdp] Data types: {data_types}")
-    print(f"[sdp] Classifiers: {list(classifiers_config.keys())}")
+    print(f"[sdp] Classifiers:")
+    for run in classifier_runs:
+        scope = "all" if run['data_types'] is None else ",".join(run['data_types'])
+        print(f"[sdp]   - {run['name']} (suffix: {run['suffix']}, data_types: {scope})")
     print(f"[sdp] Prefer lingua: {prefer_lingua} (from sr_ingest profile)")
 
     # Ensure database exists
@@ -174,32 +189,24 @@ def run_pipeline(config_dir: str = "/app/config"):
     start_time = time.time()
 
     # Process each classifier
-    for classifier_name, classifier_cfg in classifiers_config.items():
-        if not classifier_cfg.get('enabled', True):
-            print(f"\n[sdp] {classifier_name}: Skipped (disabled)")
-            continue
+    for run in classifier_runs:
+        classifier_name = run['name']
+        source_dir = run['source_dir']
+        suffix = run['suffix']
+        column_overrides = run['column_overrides']
+        scope = run['data_types']
+        # Restrict file detection to the classifier's data_types scope.
+        run_data_types = data_types if scope is None else [dt for dt in data_types if dt in set(scope)]
 
-        # Handle lingua classifier based on prefer_lingua setting
-        if classifier_name == 'lingua':
-            if prefer_lingua:
-                print(f"\n[sdp] {classifier_name}: Skipped (prefer_lingua=true, data in main table)")
-                continue
-            else:
-                source_dir = classifier_cfg.get('source_dir_ingest', 'lingua_ingest')
-        else:
-            source_dir = classifier_cfg.get('source_dir', classifier_name)
-
-        suffix = classifier_cfg.get('suffix', f'_{classifier_name}')
-        column_overrides = classifier_cfg.get('column_overrides', {})
-
+        scope_label = "all" if scope is None else ",".join(scope)
         print(f"\n{'=' * 60}")
-        print(f"PROCESSING: {classifier_name}")
+        print(f"PROCESSING: {classifier_name} [data_types={scope_label}]")
         print(f"{'=' * 60}")
         print(f"[sdp] Source: {output_dir}/{source_dir}")
         print(f"[sdp] Suffix: {suffix}")
 
         # Detect classifier files
-        files = detect_classifier_csvs(output_dir, classifier_name, source_dir, suffix, data_types, file_format=file_format)
+        files = detect_classifier_csvs(output_dir, classifier_name, source_dir, suffix, run_data_types, file_format=file_format)
 
         if not files:
             print(f"[sdp] {classifier_name}: No classified files found")

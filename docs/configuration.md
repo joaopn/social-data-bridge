@@ -273,15 +273,16 @@ processing:
   watch_interval: 0
 
 gpu_classifiers:
-  - toxic_roberta
-  - go_emotions
+  - toxic_roberta                    # runs on every data_type in processing.data_types
+  - name: xlmr_toxicity
+    data_types: [comments]           # runs only on comments
 ```
 
 | Setting | Description | Default |
 |---------|-------------|---------|
 | `data_types` | Data types to process. | `[submissions, comments]` |
 | `watch_interval` | Poll interval in minutes (`0` = run once). | `0` |
-| `gpu_classifiers` | List of GPU classifiers to run (references keys in `gpu_classifiers.yaml`). | `[toxic_roberta, go_emotions]` |
+| `gpu_classifiers` | List of GPU classifiers to run (references keys in `gpu_classifiers.yaml`). Each entry is either a bare classifier name (runs on every `processing.data_types` entry) or a `{name, data_types}` dict that scopes the classifier to a subset. Unknown `data_types` raise a config error. | `[toxic_roberta, go_emotions]` |
 
 #### Classifiers: `config/ml/gpu_classifiers.yaml`
 
@@ -335,6 +336,8 @@ gpu_classifiers:
 |-----------|-------|------|------------|-----------|
 | `toxic_roberta` | `joaopn/unbiased-toxic-roberta-onnx-fp16` | `onnx_fp16` | `sigmoid` (multi-label) | English |
 | `go_emotions` | `joaopn/roberta-base-go_emotions-onnx-fp16` | `onnx_fp16` | `sigmoid` (multi-label) | English |
+| `multilingual_sentiment` | `joaopn/multilingual-sentiment-analysis-onnx-fp16` | `onnx_fp16` | `softmax` (single-label) | 21 languages (en, zh, es, hi, ar, bn, pt, ru, ja, de, ms, te, vi, ko, fr, tr, it, pl, uk, nl, sw) |
+| `xlmr_toxicity` | `joaopn/xlmr-large-toxicity-classifier-v2-onnx-fp16` | `onnx_fp16` | `softmax` (binary) | 14 languages (en, ru, uk, de, es, ar, am, hi, zh, it, fr, he, ja, tt) |
 
 Output columns are auto-derived from the model's `config.id2label` mapping.
 
@@ -428,35 +431,35 @@ processing:
 > [!NOTE]
 > `prefer_lingua` is read from the postgres profile (`config/postgres/pipeline.yaml`). When `true`, the lingua classifier is skipped during `postgres_ml` ingestion because lingua data is already in the main table. When `false`, lingua data is ingested from the `lingua_ingest` directory.
 
-#### Classifier Table Definitions: `config/postgres_ml/services.yaml`
+#### Classifier Resolution
+
+**What ingestion runs comes from the source's ml/lingua profile config**, not from a separate declaration. For each classifier listed in `config/sources/<name>/ml.yaml`'s `pipeline.gpu_classifiers` (and lingua via `cpu_classifiers`), `postgres_ml` reads the merged profile config to get its `suffix` and `data_types` scope. Source overrides win over the global `gpu_classifiers.yaml` defaults.
+
+#### Ingestion Overrides: `config/postgres_ml/services.yaml`
+
+This file is for ingestion-only tweaks that don't belong in the ml profile. Empty by default; everything is derived.
 
 ```yaml
+# All optional. Per-source overrides live in config/sources/<name>/postgres_ml.yaml.
 classifiers:
-  lingua:
-    enabled: true
-    source_dir: lingua
-    source_dir_ingest: lingua_ingest  # Used when prefer_lingua: false
-    suffix: "_lingua"
-
   toxic_roberta:
-    enabled: true
-    source_dir: toxic_roberta
-    suffix: "_toxicity_en"
-
+    enabled: false              # ran in ml profile, but skip PG ingestion
   go_emotions:
-    enabled: true
-    source_dir: go_emotions
-    suffix: "_emotions_en"
+    source_dir: custom_outputs  # non-default output directory
+    column_overrides:
+      confidence: REAL          # force a specific column type
+  lingua:
+    source_dir_ingest: lingua_ingest   # used when prefer_lingua: false
 ```
 
 | Option | Description |
 |--------|-------------|
-| `enabled` | Whether to process this classifier (`true`/`false`). |
-| `source_dir` | Directory under `/data/output/` containing classifier output files. |
-| `source_dir_ingest` | Alternative source directory (lingua only, used when `prefer_lingua: false`). |
-| `suffix` | File suffix pattern and table name suffix (e.g., `_lingua` produces table `submissions_lingua`). |
+| `enabled` | Skip ingestion of a classifier without removing it from the ml profile. Defaults to `true`. |
+| `source_dir` | Directory under `/data/output/` (default: classifier name). |
+| `source_dir_ingest` | Lingua-only: alternative dir used when `prefer_lingua: false`. Defaults to `lingua_ingest`. |
+| `column_overrides` | Force specific column types instead of inferring from data. |
 
-Column types are auto-inferred from CSV data — no manual column definitions are needed.
+`suffix` is **not** an ingestion override — it lives in the ml/lingua profile (so the ML run and the ingestion always agree on file names). Column types are auto-inferred from data unless `column_overrides` is set.
 
 See also: [Database Profile guide](profiles/database.md)
 
@@ -598,6 +601,8 @@ processing:
 | **processing.watch_interval** | Poll for new files every N minutes (`0` = run once). | `0` |
 
 Classifier tables (e.g., `submissions_lingua`, `comments_toxicity_en`) are created in the same database as base tables. Schema is auto-inferred from Parquet metadata or CSV sampling. `prefer_lingua` is read from the `sr_ingest` profile config.
+
+`sr_ml` resolves classifier runs (name, suffix, `data_types` scope) from the source's ml/lingua profile config, the same way `postgres_ml` does. `config/sr_ml/services.yaml` (and the per-source `config/sources/<name>/sr_ml.yaml`) holds optional ingestion-only overrides — see *Ingestion Overrides* under PostgreSQL ML above for the schema.
 
 ---
 

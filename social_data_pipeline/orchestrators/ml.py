@@ -18,6 +18,7 @@ from ..core.config import (
     load_platform_config,
     get_required,
     get_optional,
+    normalize_classifier_entries,
     validate_processing_config,
     validate_classifier_config,
     ConfigurationError,
@@ -203,20 +204,23 @@ def detect_lingua_files(
 def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", target_classifier: Optional[str] = None):
     """Run the ML classifier pipeline."""
     config = load_config(config_dir=config_dir, profile=profile)
-    
+
     data_types = get_required(config, 'processing', 'data_types')
-    
+
     if profile == "lingua":
-        classifiers_to_run = get_required(config, 'cpu_classifiers')
+        raw_entries = get_required(config, 'cpu_classifiers')
     else:
-        classifiers_to_run = get_required(config, 'gpu_classifiers')
-    
+        raw_entries = get_required(config, 'gpu_classifiers')
+
+    classifier_entries = normalize_classifier_entries(raw_entries, data_types, profile)
+
     single_classifier = os.environ.get('CLASSIFIER', '')
     if single_classifier:
-        if single_classifier not in classifiers_to_run:
-            print(f"[sdp] CLASSIFIER='{single_classifier}' not in classifiers list: {classifiers_to_run}")
+        names = [e['name'] for e in classifier_entries]
+        if single_classifier not in names:
+            print(f"[sdp] CLASSIFIER='{single_classifier}' not in classifiers list: {names}")
             sys.exit(1)
-        classifiers_to_run = [single_classifier]
+        classifier_entries = [e for e in classifier_entries if e['name'] == single_classifier]
         print(f"[sdp] Running single classifier: {single_classifier}")
     
     global_config = {
@@ -252,19 +256,21 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
         })
     
     enabled_classifiers = []
-    for name in classifiers_to_run:
+    for entry in classifier_entries:
+        name = entry['name']
+        scope = entry['data_types']
         if name not in config:
             print(f"[sdp] Classifier '{name}' not configured, skipping")
             continue
-        
+
         cfg = config[name]
         if not isinstance(cfg, dict):
             cfg = {}
-        
+
         validate_classifier_config(cfg, name, profile)
         merged_cfg = {**global_config, **cfg}
-        enabled_classifiers.append((name, merged_cfg))
-        
+        enabled_classifiers.append((name, merged_cfg, scope))
+
         if target_classifier and name == target_classifier:
             break
     
@@ -278,7 +284,10 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
 
     print(f"[sdp] Profile: {profile}")
     print(f"[sdp] Data types: {data_types}")
-    print(f"[sdp] Classifiers: {[name for name, _ in enabled_classifiers]}")
+    print(f"[sdp] Classifiers:")
+    for name, _, scope in enabled_classifiers:
+        scope_str = "all" if scope is None else ",".join(scope)
+        print(f"[sdp]   - {name} (data_types: {scope_str})")
 
     if profile == "ml":
         print(f"[sdp] GPUs: {global_config['gpu_ids']}, file_workers: {global_config['file_workers']}")
@@ -337,16 +346,16 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
     
     t_start = time.time()
     
-    for classifier_name, classifier_config in enabled_classifiers:
+    for classifier_name, classifier_config, scope in enabled_classifiers:
         is_lingua = classifier_name == 'lingua'
-        
+
         if is_lingua:
             workers = classifier_config['workers']
             os.environ['RAYON_NUM_THREADS'] = str(workers)
-        
+
         classifier_output_dir = Path(output_dir) / classifier_name
         suffix = classifier_config['suffix']
-        
+
         if is_lingua:
             input_files = parsed_files
             input_source = "parsed/"
@@ -368,7 +377,12 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
                     if lingua_file.exists():
                         input_files.append((str(lingua_file), file_id, data_type))
                 input_source = "output/lingua/"
-        
+
+        # Apply per-classifier data_types scope
+        if scope is not None:
+            scope_set = set(scope)
+            input_files = [f for f in input_files if f[2] in scope_set]
+
         files_for_classifier = []
         skipped_count = 0
         for file_path, file_id, data_type in input_files:
@@ -377,12 +391,13 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
                 skipped_count += 1
             else:
                 files_for_classifier.append((file_path, file_id, data_type))
-        
+
+        scope_label = "all" if scope is None else ",".join(scope)
         if not files_for_classifier:
-            print(f"[sdp] {classifier_name}: No new files (skipped {skipped_count})")
+            print(f"[sdp] {classifier_name} [data_types={scope_label}]: No new files (skipped {skipped_count})")
             continue
-        
-        print(f"[sdp] {classifier_name}: {len(files_for_classifier)} files ({skipped_count} skipped)")
+
+        print(f"[sdp] {classifier_name} [data_types={scope_label}]: {len(files_for_classifier)} files ({skipped_count} skipped)")
         
         if is_lingua:
             languages = classifier_config['languages']

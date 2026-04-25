@@ -339,6 +339,160 @@ def validate_starrocks_config(config: Dict) -> None:
             )
 
 
+def normalize_classifier_entries(entries: List, data_types: List[str], profile: str) -> List[Dict]:
+    """Normalize a classifier list to [{name, data_types}].
+
+    Accepts two forms per entry:
+      - 'name'                              -> runs on all data_types
+      - {'name': ..., 'data_types': [...]}  -> runs only on listed data_types
+
+    data_types=None in the normalized form means 'all'. Unknown data_types
+    in a scoped entry raise ConfigurationError.
+    """
+    normalized = []
+    known = set(data_types)
+    for entry in entries:
+        if isinstance(entry, str):
+            normalized.append({'name': entry, 'data_types': None})
+        elif isinstance(entry, dict):
+            name = entry.get('name')
+            if not name:
+                raise ConfigurationError(
+                    f"[{profile}] Classifier entry missing 'name': {entry}"
+                )
+            scope = entry.get('data_types')
+            if scope is not None:
+                if not isinstance(scope, list) or not scope:
+                    raise ConfigurationError(
+                        f"[{profile}] Classifier '{name}' data_types must be a non-empty list"
+                    )
+                unknown = [dt for dt in scope if dt not in known]
+                if unknown:
+                    raise ConfigurationError(
+                        f"[{profile}] Classifier '{name}' scoped to unknown data_types {unknown} "
+                        f"(known: {sorted(known)})"
+                    )
+            normalized.append({'name': name, 'data_types': scope})
+        else:
+            raise ConfigurationError(
+                f"[{profile}] Invalid classifier entry (must be string or dict): {entry!r}"
+            )
+    return normalized
+
+
+def load_classifier_scopes(
+    config_dir: str,
+    source: str,
+    profile: str = 'ml',
+) -> List[Dict]:
+    """Resolve the source's classifier scopes from its ml/lingua profile config.
+
+    Returns list of dicts: [{name, suffix, data_types}, ...]. data_types is
+    None when the classifier should run on every configured data_type.
+
+    The 'what' (which classifiers to run, with optional data_types scope)
+    comes from the source's pipeline.gpu_classifiers (or cpu_classifiers
+    for the lingua profile). The 'how' (suffix and other per-classifier
+    settings) comes from the same merged profile config — i.e. the source
+    can override any classifier setting in its own ml.yaml/lingua.yaml.
+
+    Args:
+        config_dir: Base configuration directory
+        source: Source name to load overrides for
+        profile: 'ml' or 'lingua'
+
+    Raises:
+        ConfigurationError: If the profile config is missing required keys
+            or a referenced classifier lacks a 'suffix'.
+    """
+    if profile not in ('ml', 'lingua'):
+        raise ConfigurationError(
+            f"load_classifier_scopes only supports 'ml' or 'lingua', got '{profile}'"
+        )
+    cfg = load_profile_config(profile, config_dir, source=source, quiet=True)
+    data_types = get_required(cfg, 'processing', 'data_types')
+    list_key = 'cpu_classifiers' if profile == 'lingua' else 'gpu_classifiers'
+    raw = get_required(cfg, list_key)
+
+    out = []
+    for entry in normalize_classifier_entries(raw, data_types, profile):
+        name = entry['name']
+        cls_cfg = cfg.get(name)
+        if not isinstance(cls_cfg, dict) or 'suffix' not in cls_cfg:
+            raise ConfigurationError(
+                f"[{profile}] Classifier '{name}' missing 'suffix'. "
+                f"Define it in config/{profile}/ or override in config/sources/{source}/{profile}.yaml."
+            )
+        out.append({
+            'name': name,
+            'suffix': cls_cfg['suffix'],
+            'data_types': entry['data_types'],
+        })
+    return out
+
+
+def resolve_classifier_runs(
+    config_dir: str,
+    source: str,
+    ingestion_overrides: Dict,
+    prefer_lingua: bool,
+) -> List[Dict]:
+    """Build the ordered list of classifier ingestion runs for a source.
+
+    Used by postgres_ml and sr_ml — both compose runs the same way:
+      - lingua profile (cpu_classifiers list) -> lingua classifier (only
+        when prefer_lingua=False; otherwise lingua data is already in the
+        main table via the parent ingestion profile).
+      - ml profile (gpu_classifiers list) -> non-lingua classifiers.
+      - ingestion_overrides (services.yaml + source override): per-classifier
+        {enabled, source_dir, source_dir_ingest, column_overrides}.
+        enabled=False skips the classifier at ingest time without affecting
+        the ml profile.
+
+    Each run is a dict: {name, suffix, source_dir, data_types,
+    column_overrides}. data_types=None means 'all configured data_types'.
+    """
+    runs = []
+
+    if not prefer_lingua:
+        try:
+            lingua_scopes = load_classifier_scopes(config_dir, source=source, profile='lingua')
+        except ConfigurationError:
+            lingua_scopes = []
+        for scope in lingua_scopes:
+            if scope['name'] != 'lingua':
+                continue
+            ovr = ingestion_overrides.get('lingua', {}) or {}
+            if not ovr.get('enabled', True):
+                continue
+            runs.append({
+                'name': 'lingua',
+                'suffix': scope['suffix'],
+                'source_dir': ovr.get('source_dir_ingest', 'lingua_ingest'),
+                'data_types': scope['data_types'],
+                'column_overrides': ovr.get('column_overrides', {}),
+            })
+
+    try:
+        ml_scopes = load_classifier_scopes(config_dir, source=source, profile='ml')
+    except ConfigurationError:
+        ml_scopes = []
+    for scope in ml_scopes:
+        ovr = ingestion_overrides.get(scope['name'], {}) or {}
+        if not ovr.get('enabled', True):
+            print(f"[sdp] {scope['name']}: Skipped (enabled=false in ingestion overrides)")
+            continue
+        runs.append({
+            'name': scope['name'],
+            'suffix': scope['suffix'],
+            'source_dir': ovr.get('source_dir', scope['name']),
+            'data_types': scope['data_types'],
+            'column_overrides': ovr.get('column_overrides', {}),
+        })
+
+    return runs
+
+
 def validate_classifier_config(config: Dict, classifier_name: str, profile: str) -> None:
     """
     Validate that required classifier config exists.

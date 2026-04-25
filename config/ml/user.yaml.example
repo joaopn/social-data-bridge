@@ -10,9 +10,12 @@
 #       - submissions
 #       - comments
 #     watch_interval: 0          # Check for new files every N minutes (0 = run once)
-#   gpu_classifiers:             # List of GPU classifiers to run (replaces default list)
-#     - toxic_roberta
-#     - go_emotions
+#   gpu_classifiers:             # List of GPU classifiers to run (replaces default list).
+#                                # Each entry is either a string (runs on all data_types)
+#                                # or a {name, data_types} dict (scoped to a subset).
+#     - toxic_roberta                            # all data_types
+#     - name: xlmr_toxicity
+#       data_types: [comments]                   # only comments
 
 # gpu_classifiers:               # Overrides gpu_classifiers.yaml
 #   text_columns:                # Columns to use for classification (per data type)
