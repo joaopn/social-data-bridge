@@ -513,6 +513,7 @@ src_csv_delimiter:
 # Dynamic tags (one per data_type):
 # src_dump_glob_{dt}:      Dump file glob pattern for this data type
 # src_compression_{dt}:    Compression format (when auto-detect fails)
+# src_fields_{dt}:         Fields (comma-separated) to extract for this data type (custom non-HF only)
 # src_tablespace_{dt}:     Tablespace assignment for this data type
 # src_mongo_collection_{dt}: MongoDB collection name for this data type
 # src_pg_indexes_{dt}:     PostgreSQL index columns for this data type

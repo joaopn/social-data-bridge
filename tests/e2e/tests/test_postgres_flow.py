@@ -2,16 +2,20 @@
 
 Full flow:
   sdp db setup       → postgres, no auth
-  sdp source add reddit → parse + postgres_ingest, csv format
+  sdp source add reddit → parse + postgres_ingest
   [compress fixtures → .zst]
   sdp db start postgres
   sdp run parse
   sdp run postgres_ingest
   → verify: schema exists, rows correct, no dupes, indexes created
   sdp db stop postgres
+
+Runs once per intermediate file format (parquet, csv) — CSV exercises the
+COPY-with-header path and pins the parser↔COPY column-list contract that
+broke in v2.0.0.
 """
 
-import polars
+import pytest
 
 from tests.e2e.helpers.sdp import SDPSession, run_sdp, wait_for_healthy
 from tests.e2e.helpers.fixtures import place_reddit_fixtures
@@ -32,24 +36,31 @@ DB_SETUP_ANSWERS = {
     "db_write_files": "",
 }
 
-# parse + postgres_ingest, parquet format (default, recommended)
-SOURCE_ADD_ANSWERS = {
-    "src_data_types": "",            # accept default [submissions, comments]
-    "src_dumps_path": "",
-    "src_extracted_path": "",
-    "src_parsed_path": "",
-    "src_output_path": "",
-    "src_file_format": "1",          # parquet
-    "src_parquet_rg_size": "",       # accept default 1M
-    "src_profiles": "1,4",           # parse + postgres_ingest
-    "src_parse_workers": "2",
-    "src_pg_prefer_lingua": "n",
-    "src_pg_index_workers": "2",
-    "src_write_files": "",
-}
+
+def _source_add_answers(file_format_choice: str) -> dict:
+    answers = {
+        "src_data_types": "",            # accept default [submissions, comments]
+        "src_dumps_path": "",
+        "src_extracted_path": "",
+        "src_parsed_path": "",
+        "src_output_path": "",
+        "src_file_format": file_format_choice,
+        "src_profiles": "1,4",           # parse + postgres_ingest
+        "src_parse_workers": "2",
+        "src_pg_prefer_lingua": "n",
+        "src_pg_index_workers": "2",
+        "src_write_files": "",
+    }
+    if file_format_choice == "1":  # parquet asks an extra row-group-size question
+        answers["src_parquet_rg_size"] = ""
+    return answers
 
 
-def test_postgres_full_flow(workspace):
+@pytest.mark.parametrize(
+    "file_format,format_choice,parsed_ext",
+    [("parquet", "1", "parquet"), ("csv", "2", "csv")],
+)
+def test_postgres_full_flow(workspace, file_format, format_choice, parsed_ext):
     """Parse Reddit dumps, ingest into PostgreSQL, verify data."""
     # 1. Database setup
     session = SDPSession(DB_SETUP_ANSWERS)
@@ -57,7 +68,7 @@ def test_postgres_full_flow(workspace):
     assert rc == 0, f"db setup failed:\n{output}"
 
     # 2. Source add
-    session = SDPSession(SOURCE_ADD_ANSWERS)
+    session = SDPSession(_source_add_answers(format_choice))
     rc, output = session.run_interactive("source add reddit")
     assert rc == 0, f"source add failed:\n{output}"
 
@@ -74,8 +85,8 @@ def test_postgres_full_flow(workspace):
     assert result.returncode == 0, f"run parse failed:\n{result.stderr}"
 
     # Verify parsed output was created
-    parsed_path = workspace / "data" / "parsed" / "reddit" / "comments" / "RC_2024-01.parquet"
-    assert parsed_path.exists(), f"Parsed parquet not found. Parse output:\n{result.stdout}"
+    parsed_path = workspace / "data" / "parsed" / "reddit" / "comments" / f"RC_2024-01.{parsed_ext}"
+    assert parsed_path.exists(), f"Parsed {parsed_ext} not found. Parse output:\n{result.stdout}"
 
     # 6. Run postgres_ingest
     result = run_sdp("run postgres_ingest --source reddit --build")

@@ -64,10 +64,14 @@ mongo_indexes:
 # overrides, but the default is a single int applied to all tables in the source.
 sr_buckets: 256
 
-# Mandatory fields: always prepended to column list (before fields listed per data_type)
+# Mandatory fields: always prepended to column list (before fields listed per data_type).
+# Must match MANDATORY_FIELDS in platforms/reddit/parser.py (plus 'dataset' which the
+# parser prepends explicitly) — listing the same field here AND in `fields` below
+# produces a duplicate column in the CSV header that breaks PG COPY.
 mandatory_fields:
   - dataset
   - id
+  - retrieved_utc
 
 # Primary key column (used for deduplication, ON CONFLICT, and table constraints)
 primary_key: id
@@ -146,7 +150,6 @@ field_types:
 fields:
   submissions:
   # core
-    - retrieved_utc
     - created_utc
     - id10
     - score
@@ -179,7 +182,6 @@ fields:
 
   comments:
   # core
-    - retrieved_utc
     - created_utc
     - link_id
     - parent_id

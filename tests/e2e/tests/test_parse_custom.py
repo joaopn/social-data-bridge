@@ -3,24 +3,16 @@
 Full flow:
   sdp db setup       → postgres, no auth
   sdp source add mydata → custom platform, events, ndjson input, parquet output
-  [replace platform.yaml with test fixture config that has fields defined]
+                          fields prompted per data_type (regression: source add
+                          previously produced an empty fields list, breaking parse)
   [place events.ndjson in extracted/]
   sdp run parse      → verify Parquet output
-
-Note: source add for non-HF custom platforms produces an empty fields list
-(fields are populated via HF metadata or manual editing). This test replaces
-platform.yaml with the unit test fixture config after source add to provide
-the parser with field definitions.
 """
-
-import shutil
-from pathlib import Path
 
 import polars
 
 from tests.e2e.helpers.sdp import SDPSession, run_sdp
 from tests.e2e.helpers.fixtures import place_custom_fixtures
-from tests.e2e.helpers.workspace import WORKSPACE
 
 
 DB_SETUP_ANSWERS = {
@@ -52,10 +44,10 @@ SOURCE_ADD_ANSWERS = {
     "src_db_schema": "",             # accept default (mydata)
     "src_input_format": "1",         # ndjson
     "src_dump_glob_events": "events*.ndjson.zst",
+    # Fields per data_type (dot notation supported for nested JSON paths)
+    "src_fields_events": "timestamp, user.name, user.profile.age, score, tags, content",
     "src_write_files": "",
 }
-
-FIXTURE_PLATFORM_YAML = Path("/workspace/tests/fixtures/config/valid_platform_custom.yaml")
 
 
 def test_parse_custom_parquet(workspace):
@@ -65,23 +57,19 @@ def test_parse_custom_parquet(workspace):
     rc, output = session.run_interactive("db setup")
     assert rc == 0, f"db setup failed:\n{output}"
 
-    # 2. Source add (custom platform — creates directory structure and parse.yaml)
+    # 2. Source add (custom platform — fields supplied via prompt)
     session = SDPSession(SOURCE_ADD_ANSWERS)
     rc, output = session.run_interactive("source add mydata")
     assert rc == 0, f"source add failed:\n{output}"
 
-    # 3. Replace platform.yaml with fixture config that has fields + file patterns
-    platform_yaml = workspace / "config" / "sources" / "mydata" / "platform.yaml"
-    shutil.copy2(FIXTURE_PLATFORM_YAML, platform_yaml)
-
-    # 4. Place fixtures (uncompressed NDJSON → extracted/)
+    # 3. Place fixtures (uncompressed NDJSON → extracted/)
     place_custom_fixtures("mydata", data_types=["events"])
 
-    # 5. Run parse
+    # 4. Run parse
     result = run_sdp("run parse --source mydata --build")
     assert result.returncode == 0, f"run parse failed:\n{result.stderr}"
 
-    # 6. Verify Parquet output
+    # 5. Verify Parquet output
     parsed_dir = workspace / "data" / "parsed" / "mydata" / "events"
     parquets = list(parsed_dir.glob("*.parquet"))
     assert len(parquets) >= 1, f"Expected parquet files, found: {list(parsed_dir.iterdir()) if parsed_dir.exists() else 'dir missing'}"
@@ -89,8 +77,7 @@ def test_parse_custom_parquet(workspace):
     df = polars.read_parquet(parquets[0])
     assert len(df) == 5, f"Expected 5 rows, got {len(df)}"
 
-    # Fields from the fixture platform config
-    assert "id" in df.columns
+    # Fields from the prompted list above
     assert "timestamp" in df.columns
     assert "score" in df.columns
     assert "content" in df.columns

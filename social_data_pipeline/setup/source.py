@@ -229,6 +229,8 @@ def _load_existing_source_config(source_name):
             existing["custom_sr_indexes"] = pc["sr_indexes"]
         if pc.get("file_patterns"):
             existing["file_patterns"] = pc["file_patterns"]
+        if pc.get("fields"):
+            existing["custom_fields"] = pc["fields"]
         if pc.get("primary_key"):
             existing["primary_key"] = pc["primary_key"]
         if pc.get("sr_buckets") is not None:
@@ -471,6 +473,25 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
             print("    data/extracted/<source>/<data_type>/ — the pipeline will")
             print("    pick them up automatically with no dump files needed.")
 
+            # ---- Fields per data type ----
+            section_header("Fields")
+            print("  Field names to extract from each input record. Use dot")
+            print("  notation for nested fields (e.g., user.name).")
+            print("  Field types default to TEXT; refine in platform.yaml after setup.")
+            existing_fields = existing.get("custom_fields") or {}
+            settings["custom_fields"] = {}
+            for dt in data_types:
+                while True:
+                    fields = ask_list(
+                        f"  Fields for '{dt}'",
+                        existing_fields.get(dt),
+                        tag=f"src_fields_{dt}",
+                    )
+                    if fields:
+                        break
+                    print(f"    Error: at least one field is required for '{dt}'.")
+                settings["custom_fields"][dt] = fields
+
         if has_mongo:
             print()
             settings["mongo_collection_strategy"] = ask_choice(
@@ -655,11 +676,15 @@ def generate_platform_yaml(settings):
         }
     config["field_types"] = field_types
 
-    # Fields: use HF-derived fields if available, otherwise empty
-    if settings.get("custom_fields"):
-        config["fields"] = settings["custom_fields"]
-    else:
-        config["fields"] = {dt: [] for dt in settings["data_types"]}
+    # Fields are populated either by the HF metadata flow or by the per-data-type
+    # prompt in the non-HF custom flow. Either way, an empty list here means setup
+    # was bypassed and downstream profiles will fail; surface that immediately.
+    if not settings.get("custom_fields"):
+        raise ValueError(
+            "No fields configured. Run `sdp source add` interactively or set "
+            "settings['custom_fields'] before calling generate_platform_yaml()."
+        )
+    config["fields"] = settings["custom_fields"]
 
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
