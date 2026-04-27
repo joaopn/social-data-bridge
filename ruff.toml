@@ -1,0 +1,11 @@
+target-version = "py313"
+
+[lint]
+# Narrow ruleset — start with what catches real bugs at near-zero noise.
+# Expand later (B for bugbear, UP for pyupgrade, I for import sort) only
+# after a deliberate cleanup pass.
+select = [
+    "F",     # pyflakes: unused imports, undefined names, redefined unused, format-string issues
+    "E9",    # syntax errors
+    "W6",    # invalid escape sequences, deprecated async/await keyword usage
+]

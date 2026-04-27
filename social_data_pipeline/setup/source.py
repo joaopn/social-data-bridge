@@ -8,7 +8,6 @@ Each source is independent and self-contained.
 """
 
 import sys
-from pathlib import Path
 
 try:
     import yaml
@@ -20,7 +19,7 @@ from social_data_pipeline.setup.utils import (
     ROOT, CONFIG_DIR,
     detect_hardware,
     ask, ask_int, ask_bool, ask_choice, ask_list, ask_multi_select,
-    section_header, write_files, list_sources, load_db_setup, load_env,
+    section_header, write_files, load_db_setup, load_env,
     load_source_config,
     print_pipeline_commands, update_env_file,
     detect_compression_from_glob, derive_file_patterns,
@@ -106,7 +105,7 @@ def _run_hf_config_grouping(hf_defaults):
 
         # Suggest data_type name from common prefix or first config
         suggested_name = _suggest_data_type_name(selected_configs)
-        dt_name = ask(f"  Data type name for this group", suggested_name, tag=f"hf_data_type_name_{gi}")
+        dt_name = ask("  Data type name for this group", suggested_name, tag=f"hf_data_type_name_{gi}")
         if not dt_name:
             dt_name = suggested_name
 
@@ -814,30 +813,30 @@ def print_summary(settings, files_to_write):
     print()
 
     if "parse" in profiles:
-        print(f"  Parse:")
+        print("  Parse:")
         print(f"    Workers:   {settings.get('parse_workers', 4)}")
         print()
 
     if any(p.startswith("postgres") for p in profiles):
-        print(f"  PostgreSQL:")
+        print("  PostgreSQL:")
         if "postgres_ingest" in profiles:
             print(f"    Prefer lingua:       {settings.get('pg_prefer_lingua', False)}")
             print(f"    Index workers:       {settings.get('pg_parallel_index_workers', 4)}")
         if "table_tablespaces" in settings:
-            print(f"    Table assignments:")
+            print("    Table assignments:")
             for dt, ts in settings["table_tablespaces"].items():
                 print(f"      {dt} -> {ts}")
         print()
 
     if settings["platform"].startswith("custom/"):
-        print(f"  Custom Platform:")
+        print("  Custom Platform:")
         print(f"    Schema:              {settings.get('db_schema', source_name)}")
         if settings.get("custom_indexes"):
-            print(f"    PostgreSQL indexes:")
+            print("    PostgreSQL indexes:")
             for dt, idx in settings["custom_indexes"].items():
                 print(f"      {dt}: {', '.join(idx)}")
         if settings.get("custom_mongo_indexes"):
-            print(f"    MongoDB indexes:")
+            print("    MongoDB indexes:")
             for dt, idx in settings["custom_mongo_indexes"].items():
                 print(f"      {dt}: {', '.join(idx)}")
         print()
@@ -904,7 +903,7 @@ def main(source_name=None, hf_dataset_id=None):
             sys.exit(1)
 
     print(f"\n  Configuring source: {source_name}")
-    print(f"  Press Enter to accept defaults shown in [brackets].")
+    print("  Press Enter to accept defaults shown in [brackets].")
     print()
 
     hw = detect_hardware()
@@ -998,7 +997,7 @@ def main(source_name=None, hf_dataset_id=None):
     cs = settings.get("classifier_settings")
     if cs and cs.get("hf_token"):
         update_env_file({"HF_TOKEN": cs["hf_token"]})
-        print(f"  Updated:   .env (HF_TOKEN)")
+        print("  Updated:   .env (HF_TOKEN)")
 
     print(f"\n  Done! Source '{source_name}' has been configured.")
 

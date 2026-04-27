@@ -23,7 +23,7 @@ import os
 import time
 import threading
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Tuple, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 # Lazy imports for GPU dependencies (only loaded when actually processing)
@@ -69,9 +69,9 @@ def _worker_init(gpu_id: int, model_id: str, model_type: str, file_name: str, qu
         # Check CUDA availability
         if not torch.cuda.is_available():
             raise RuntimeError(
-                f"CUDA is not available. "
-                f"torch.cuda.is_available()=False. "
-                f"Check NVIDIA drivers and CUDA installation."
+                "CUDA is not available. "
+                "torch.cuda.is_available()=False. "
+                "Check NVIDIA drivers and CUDA installation."
             )
         
         cuda_device_count = torch.cuda.device_count()
@@ -206,7 +206,7 @@ def _infer_worker(
         model_type = _thread_local.model_type
     except AttributeError as e:
         print(f"[INFERENCE] FATAL: Worker not initialized. Thread-local missing: {e}")
-        print(f"[INFERENCE] This usually means _worker_init failed silently or was never called.")
+        print("[INFERENCE] This usually means _worker_init failed silently or was never called.")
         raise RuntimeError(f"Worker thread-local storage not initialized: {e}")
     
     all_logits = []

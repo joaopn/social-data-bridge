@@ -6,7 +6,6 @@ import logging
 import os
 import shutil
 import threading
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -18,7 +17,7 @@ from .backends import (
     PostgresBackend,
     StarrocksBackend,
 )
-from .config import JobsConfig, Target
+from .config import JobsConfig
 from .store import Job, Store
 
 

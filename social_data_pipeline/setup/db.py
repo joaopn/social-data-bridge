@@ -290,7 +290,7 @@ def run_questionnaire(hw):
         print()
         print("  For PostgreSQL memory tuning, provide your PGTune output.")
         print("  Generate at: https://pgtune.leopard.in.ua/")
-        print(f"    DB Version: 18 | OS: linux | DB Type: dw | Storage: ssd")
+        print("    DB Version: 18 | OS: linux | DB Type: dw | Storage: ssd")
         print()
         print("  NOTE: PGTune may include 'io_method = io_uring'. If PostgreSQL fails")
         print("  to start, remove that line — io_uring is blocked on some kernels.")
@@ -327,10 +327,10 @@ def run_questionnaire(hw):
             arc_max_gb = int(hw["ram_gb"] // 2)
             arc_max_bytes = arc_max_gb * 1024 ** 3
             print()
-            print(f"  NOTE: ZFS ARC cache competes with PostgreSQL for RAM.")
+            print("  NOTE: ZFS ARC cache competes with PostgreSQL for RAM.")
             print(f"  To avoid memory pressure, limit ARC (suggested ~{arc_max_gb}GB for this system):")
             print(f"    echo {arc_max_bytes} > /sys/module/zfs/parameters/zfs_arc_max")
-            print(f"  Persist in /etc/modprobe.d/zfs.conf:")
+            print("  Persist in /etc/modprobe.d/zfs.conf:")
             print(f"    options zfs zfs_arc_max={arc_max_bytes}")
 
         print()
@@ -735,8 +735,8 @@ def generate_postgresql_local_conf(settings):
         base_content = base_path.read_text()
     except PermissionError:
         print(f"\n  Error: Cannot read {base_path}")
-        print(f"  The config/ directory may be missing the execute bit (needed for traversal).")
-        print(f"  Try: chmod 755 config/ config/*/")
+        print("  The config/ directory may be missing the execute bit (needed for traversal).")
+        print("  Try: chmod 755 config/ config/*/")
         sys.exit(1)
 
     # Split at the pgtune marker
@@ -824,27 +824,27 @@ def print_summary(settings, files_to_write):
     print()
 
     if "postgres" in databases:
-        print(f"  PostgreSQL:")
+        print("  PostgreSQL:")
         print(f"    DB name:             {settings.get('db_name', 'datasets')}")
         print(f"    Port:                {settings.get('pg_port', 5432)}")
         print(f"    Data path:           {settings.get('pgdata_path', './data/database/postgres')}")
         print(f"    Filesystem:          {settings.get('filesystem', 'standard')}")
         if "tablespaces" in settings:
-            print(f"    Tablespaces:")
+            print("    Tablespaces:")
             for ts_name, ts_path in settings["tablespaces"].items():
                 print(f"      {ts_name}: {ts_path}")
         print(f"    PGTune:              {'provided' if settings.get('pgtune_output') else 'not provided'}")
         print()
 
     if "mongo" in databases:
-        print(f"  MongoDB:")
+        print("  MongoDB:")
         print(f"    Port:                {settings.get('mongo_port', 27017)}")
         print(f"    Cache size:          {settings.get('mongo_cache_size_gb', 2)} GB")
         print(f"    Data path:           {settings.get('mongo_data_path', './data/database/mongo')}")
         print()
 
     if "starrocks" in databases:
-        print(f"  StarRocks:")
+        print("  StarRocks:")
         print(f"    Port (MySQL):        {settings.get('starrocks_port', 9030)}")
         print(f"    FE HTTP port:        {settings.get('starrocks_fe_http_port', 8030)}")
         print(f"    FE JVM heap:         {settings.get('sr_fe_jvm_heap', 4)} GB")
@@ -852,7 +852,7 @@ def print_summary(settings, files_to_write):
         print(f"    Alter workers:       {settings.get('sr_alter_tablet_workers', 3)}")
         print(f"    Data path:           {settings.get('starrocks_data_path', './data/database/starrocks')}")
         if settings.get("starrocks_storage_paths"):
-            print(f"    Extra storage paths:")
+            print("    Extra storage paths:")
             for sp in settings["starrocks_storage_paths"]:
                 print(f"      {sp}")
         if settings.get("starrocks_mem_limit"):
@@ -860,7 +860,7 @@ def print_summary(settings, files_to_write):
         print()
 
     if settings.get("auth_enabled"):
-        print(f"  Authentication:  enabled")
+        print("  Authentication:  enabled")
         if settings.get("ro_username"):
             print(f"    RO user:         {settings['ro_username']} (auto-generated password)")
         print()
@@ -993,7 +993,7 @@ def add_database(db_name):
         print(f"  Reconfiguring {db_label} without touching other databases.")
     else:
         print(f"  Adding {db_label} to existing database setup.")
-    print(f"  Press Enter to accept defaults shown in [brackets].")
+    print("  Press Enter to accept defaults shown in [brackets].")
     print()
 
     # --- Hardware summary ---
@@ -1055,7 +1055,7 @@ def add_database(db_name):
         print()
         print("  For PostgreSQL memory tuning, provide your PGTune output.")
         print("  Generate at: https://pgtune.leopard.in.ua/")
-        print(f"    DB Version: 18 | OS: linux | DB Type: dw | Storage: ssd")
+        print("    DB Version: 18 | OS: linux | DB Type: dw | Storage: ssd")
         print()
         print("  NOTE: PGTune may include 'io_method = io_uring'. If PostgreSQL fails")
         print("  to start, remove that line — io_uring is blocked on some kernels.")
@@ -1092,10 +1092,10 @@ def add_database(db_name):
             arc_max_gb = int(ram // 2)
             arc_max_bytes = arc_max_gb * 1024 ** 3
             print()
-            print(f"  NOTE: ZFS ARC cache competes with PostgreSQL for RAM.")
+            print("  NOTE: ZFS ARC cache competes with PostgreSQL for RAM.")
             print(f"  To avoid memory pressure, limit ARC (suggested ~{arc_max_gb}GB for this system):")
             print(f"    echo {arc_max_bytes} > /sys/module/zfs/parameters/zfs_arc_max")
-            print(f"  Persist in /etc/modprobe.d/zfs.conf:")
+            print("  Persist in /etc/modprobe.d/zfs.conf:")
             print(f"    options zfs zfs_arc_max={arc_max_bytes}")
 
         print()
@@ -1234,9 +1234,9 @@ def add_database(db_name):
             settings["ro_username"] = ro_user
             settings["ro_password"] = ro_pass
 
-        print(f"  Authentication is enabled on existing databases.")
+        print("  Authentication is enabled on existing databases.")
         print(f"  The same settings will be applied to {db_label}:")
-        print(f"    - auth: enabled (admin password prompted at 'sdp db start')")
+        print("    - auth: enabled (admin password prompted at 'sdp db start')")
         if ro_user:
             print(f"    - read-only user: {ro_user}")
         print()
@@ -1348,7 +1348,7 @@ def add_database(db_name):
 
     # Update .env (merge, not rewrite)
     update_env_file(env_updates)
-    print(f"  Updated: .env")
+    print("  Updated: .env")
 
     # Handle docker-compose.override.yml for tablespace / SR storage volumes
     if db_name == "postgres" and settings.get("tablespaces"):
@@ -1359,7 +1359,7 @@ def add_database(db_name):
         ]
         if volumes:
             _update_override_volumes("postgres", volumes)
-            print(f"  Updated: docker-compose.override.yml")
+            print("  Updated: docker-compose.override.yml")
 
     if db_name == "starrocks" and settings.get("starrocks_storage_paths"):
         volumes = [
@@ -1368,7 +1368,7 @@ def add_database(db_name):
         ]
         if volumes:
             _update_override_volumes("starrocks", volumes)
-            print(f"  Updated: docker-compose.override.yml")
+            print("  Updated: docker-compose.override.yml")
 
     # Write RO credentials to new database data volume
     if settings.get("auth_enabled") and settings.get("ro_username") and settings.get("ro_password"):
@@ -1385,12 +1385,12 @@ def add_database(db_name):
         print(f"\n  {db_label} admin user: {rw_names[db_name]}")
         if settings.get("ro_username"):
             print(f"  Read-only user: {settings['ro_username']}")
-        print(f"\n  IMPORTANT: Remember your admin password — it is not stored anywhere.")
-        print(f"  If lost, recover with: python sdp.py db recover-password")
+        print("\n  IMPORTANT: Remember your admin password — it is not stored anywhere.")
+        print("  If lost, recover with: python sdp.py db recover-password")
 
-    print(f"\n  Next steps:")
-    print(f"    python sdp.py db status           # Check database status and info")
-    print(f"    python sdp.py source add <name>   # Add a data source")
+    print("\n  Next steps:")
+    print("    python sdp.py db status           # Check database status and info")
+    print("    python sdp.py source add <name>   # Add a data source")
     print()
 
 
@@ -1490,23 +1490,23 @@ def main():
         for cf in cred_files:
             print(f"  Written:   {cf} (chmod 600)")
 
-    print(f"\n  Done! Database configuration has been generated.")
+    print("\n  Done! Database configuration has been generated.")
 
     if settings.get("auth_enabled"):
         rw_names = {"postgres": "postgres", "mongo": "admin", "starrocks": "root"}
-        print(f"\n  Database users (admin / read-write):")
+        print("\n  Database users (admin / read-write):")
         for db in settings["databases"]:
             if db in rw_names:
                 print(f"    {db:12s} {rw_names[db]}")
         if settings.get("ro_username"):
             print(f"\n  Read-only user for all databases: {settings['ro_username']} (auto-generated password)")
-        print(f"\n  The admin password is the same for all databases.")
-        print(f"\n  IMPORTANT: Remember your admin password — it is not stored anywhere.")
-        print(f"  If lost, recover with: python sdp.py db recover-password")
+        print("\n  The admin password is the same for all databases.")
+        print("\n  IMPORTANT: Remember your admin password — it is not stored anywhere.")
+        print("  If lost, recover with: python sdp.py db recover-password")
 
-    print(f"\n  Next steps:")
-    print(f"    python sdp.py db status           # Check database status and info")
-    print(f"    python sdp.py source add <name>   # Add a data source")
+    print("\n  Next steps:")
+    print("    python sdp.py db status           # Check database status and info")
+    print("    python sdp.py source add <name>   # Add a data source")
     print()
 
     return settings

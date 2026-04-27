@@ -15,7 +15,7 @@ except ImportError:
 from social_data_pipeline.setup.utils import (
     ROOT, CONFIG_DIR,
     ask, ask_bool, ask_list, ask_multi_select,
-    section_header, write_files, print_pipeline_commands,
+    section_header, print_pipeline_commands,
     get_source_profiles,
 )
 
@@ -227,6 +227,6 @@ def main(source_name):
     apply_overrides_to_platform_yaml(source_name, reddit_yaml)
     print(f"  Updated:   config/sources/{source_name}/platform.yaml")
 
-    print(f"\n  Done! Reddit platform configuration has been updated.")
+    print("\n  Done! Reddit platform configuration has been updated.")
     profiles = get_source_profiles(source_name)
     print_pipeline_commands(profiles, source_name)

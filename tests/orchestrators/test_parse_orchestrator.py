@@ -1,9 +1,7 @@
 """Tests for parse orchestrator file detection functions."""
 
-import os
 from pathlib import Path
 
-import pytest
 
 from social_data_pipeline.orchestrators.parse import (
     detect_dump_files,

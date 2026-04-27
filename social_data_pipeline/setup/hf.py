@@ -321,7 +321,7 @@ def download_hf_files(parquet_urls, dumps_dir, dataset_id=None, token=None):
                 req = urllib.request.Request(readme_url, headers=headers)
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     readme_path.write_bytes(resp.read())
-                print(f"  Downloaded README.md")
+                print("  Downloaded README.md")
             except (urllib.error.URLError, OSError) as e:
                 print(f"  Warning: could not download README.md: {e}")
 

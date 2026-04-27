@@ -193,21 +193,21 @@ def print_summary(settings, files_to_write):
     section_header("MCP Configuration Summary")
 
     if settings.get("postgres_mcp_enabled"):
-        print(f"  PostgreSQL MCP:")
+        print("  PostgreSQL MCP:")
         print(f"    Port:        {settings['postgres_mcp_port']}")
         print(f"    Access:      {settings['postgres_mcp_access_mode']}")
         print(f"    Endpoint:    http://localhost:{settings['postgres_mcp_port']}/sse")
         print()
 
     if settings.get("mongo_mcp_enabled"):
-        print(f"  MongoDB MCP:")
+        print("  MongoDB MCP:")
         print(f"    Port:        {settings['mongo_mcp_port']}")
         print(f"    Read-only:   {settings['mongo_mcp_read_only']}")
         print(f"    Endpoint:    http://localhost:{settings['mongo_mcp_port']}/mcp")
         print()
 
     if settings.get("starrocks_mcp_enabled"):
-        print(f"  StarRocks MCP:")
+        print("  StarRocks MCP:")
         print(f"    Port:        {settings['starrocks_mcp_port']}")
         print(f"    Endpoint:    http://localhost:{settings['starrocks_mcp_port']}/mcp")
         print()
@@ -224,7 +224,7 @@ def print_summary(settings, files_to_write):
         exists = path.exists()
         status = " (exists, will backup)" if exists else ""
         print(f"    {rel}{status}")
-    print(f"    .env (update)")
+    print("    .env (update)")
     print()
 
 
@@ -266,8 +266,8 @@ def main():
                 missing.append("StarRocks")
         if missing:
             print(f"  Error: No read-only user credentials found for: {', '.join(missing)}")
-            print(f"  MCP servers require a read-only database user.")
-            print(f"  Re-run: python sdp.py db setup  (enable authentication with a read-only user)")
+            print("  MCP servers require a read-only database user.")
+            print("  Re-run: python sdp.py db setup  (enable authentication with a read-only user)")
             sys.exit(1)
 
     settings = run_questionnaire(db_setup)
@@ -316,11 +316,11 @@ def main():
 
     if env_updates:
         update_env_file(env_updates)
-        print(f"  Updated:   .env")
+        print("  Updated:   .env")
 
-    print(f"\n  Done! MCP servers have been configured.")
-    print(f"\n  Start databases with MCP servers:")
-    print(f"    python sdp.py db start")
+    print("\n  Done! MCP servers have been configured.")
+    print("\n  Start databases with MCP servers:")
+    print("    python sdp.py db start")
 
     # Print client configuration instructions
     print()
@@ -332,19 +332,19 @@ def main():
 
     if settings.get("postgres_mcp_enabled"):
         pg_port = settings["postgres_mcp_port"]
-        print(f"  PostgreSQL MCP (SSE):")
+        print("  PostgreSQL MCP (SSE):")
         print(f"    URL: http://<host>:{pg_port}/sse")
         print()
 
     if settings.get("mongo_mcp_enabled"):
         mongo_port = settings["mongo_mcp_port"]
-        print(f"  MongoDB MCP (Streamable HTTP):")
+        print("  MongoDB MCP (Streamable HTTP):")
         print(f"    URL: http://<host>:{mongo_port}/mcp")
         print()
 
     if settings.get("starrocks_mcp_enabled"):
         sr_port = settings["starrocks_mcp_port"]
-        print(f"  StarRocks MCP (Streamable HTTP):")
+        print("  StarRocks MCP (Streamable HTTP):")
         print(f"    URL: http://<host>:{sr_port}/mcp")
         print()
 
@@ -352,8 +352,8 @@ def main():
     if export_path:
         print("  Export:")
         print(f"    Database containers mount {export_path} at /export (read-write).")
-        print(f"    Use /export in SQL COPY or mongoexport to write results to the host.")
-        print(f"    Example: COPY (SELECT * FROM table) TO '/export/results.csv' WITH CSV HEADER;")
+        print("    Use /export in SQL COPY or mongoexport to write results to the host.")
+        print("    Example: COPY (SELECT * FROM table) TO '/export/results.csv' WITH CSV HEADER;")
         print()
 
     print("  Example VS Code mcp.json:")

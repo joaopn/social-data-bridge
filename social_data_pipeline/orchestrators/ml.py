@@ -284,7 +284,7 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
 
     print(f"[sdp] Profile: {profile}")
     print(f"[sdp] Data types: {data_types}")
-    print(f"[sdp] Classifiers:")
+    print("[sdp] Classifiers:")
     for name, _, scope in enabled_classifiers:
         scope_str = "all" if scope is None else ",".join(scope)
         print(f"[sdp]   - {name} (data_types: {scope_str})")
@@ -358,14 +358,12 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
 
         if is_lingua:
             input_files = parsed_files
-            input_source = "parsed/"
         else:
             use_lingua = classifier_config.get('use_lingua', global_config['use_lingua'])
             supported_languages = classifier_config.get('supported_languages', None)
 
             if not use_lingua or not supported_languages:
                 input_files = parsed_files
-                input_source = "parsed/"
             else:
                 # Use lingua files - look them up based on parsed file list
                 lingua_config = config.get('lingua', {})
@@ -376,7 +374,6 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
                     lingua_file = lingua_output_dir / data_type / f"{file_id}{lingua_suffix}.{ext}"
                     if lingua_file.exists():
                         input_files.append((str(lingua_file), file_id, data_type))
-                input_source = "output/lingua/"
 
         # Apply per-classifier data_types scope
         if scope is not None:

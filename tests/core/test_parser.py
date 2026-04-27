@@ -2,7 +2,6 @@
 
 import pytest
 import polars as pl
-from pathlib import Path
 
 from social_data_pipeline.core.parser import (
     escape_string,

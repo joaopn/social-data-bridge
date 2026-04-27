@@ -48,9 +48,7 @@ REDDIT_GPU_FIELDS = ["author", "subreddit"]
 def compute_classifier_defaults(hw, profiles):
     """Compute suggested defaults for classifier settings."""
     cores = hw["cpu_cores"] or 4
-    ram = hw["ram_gb"] or 8
     gpus = hw["gpus"]
-    min_vram = min((g["vram_mb"] for g in gpus), default=0)
 
     d = {}
 
@@ -248,7 +246,7 @@ def run_questionnaire(hw, state):
         for g in gpus:
             print(f"  GPU {g['index']}:    {g['name']} ({g['vram_mb']} MB)")
     else:
-        print(f"  GPUs:      none detected")
+        print("  GPUs:      none detected")
     print()
 
     # Compute defaults
@@ -417,13 +415,13 @@ def print_summary(settings, files_to_write):
     print(f"  Data types:  {', '.join(settings['data_types'])}")
     print()
 
-    print(f"  Text columns:")
+    print("  Text columns:")
     for dt, cols in settings.get("text_columns", {}).items():
         print(f"    {dt}: {', '.join(cols)}")
     print()
 
     if "lingua" in profiles:
-        print(f"  Lingua:")
+        print("  Lingua:")
         print(f"    Workers:        {settings['lingua_workers']}")
         print(f"    File workers:   {settings['lingua_file_workers']}")
         print(f"    Batch size:     {settings['lingua_batch_size']:,}")
@@ -431,12 +429,12 @@ def print_summary(settings, files_to_write):
         print()
 
     if "ml" in profiles:
-        print(f"  GPU Classifiers:")
+        print("  GPU Classifiers:")
         print(f"    GPU IDs:             {settings['gpu_ids']}")
         print(f"    File workers:        {settings['ml_file_workers']}")
         print(f"    Tokenize workers:    {settings['ml_tokenize_workers']}")
         print(f"    Classifier batch:    {settings['ml_classifier_batch_size']}")
-        print(f"    Classifiers:")
+        print("    Classifiers:")
         for c in settings["ml_classifiers"]:
             scope = "all" if c.get("data_types") is None else ", ".join(c["data_types"])
             print(f"      - {c['name']} (data_types: {scope})")
@@ -450,7 +448,7 @@ def print_summary(settings, files_to_write):
         status = " (exists, will backup)" if exists else ""
         print(f"    {rel}{status}")
     if settings.get("hf_token"):
-        print(f"    .env (update HF_TOKEN)")
+        print("    .env (update HF_TOKEN)")
     print()
 
 
@@ -517,9 +515,9 @@ def main(source_name):
     # Update .env with HF_TOKEN
     if settings.get("hf_token"):
         update_env_file({"HF_TOKEN": settings["hf_token"]})
-        print(f"  Updated:   .env (HF_TOKEN)")
+        print("  Updated:   .env (HF_TOKEN)")
 
-    print(f"\n  Done! Classifier configuration has been generated.")
+    print("\n  Done! Classifier configuration has been generated.")
 
     platform = state["platform"]
     if platform == "reddit":

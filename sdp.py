@@ -257,7 +257,7 @@ def cmd_db_unsetup_jobs(args):
     docker_compose("--profile", "jobs", "down")
 
     jobs_local.unlink()
-    print(f"  Removed:   config/jobs/config.local.yaml")
+    print("  Removed:   config/jobs/config.local.yaml")
 
     # Remove JOBS_* env vars from .env
     env_path = ROOT / ".env"
@@ -271,7 +271,7 @@ def cmd_db_unsetup_jobs(args):
             if key not in jobs_keys:
                 new_lines.append(line)
         env_path.write_text("\n".join(new_lines) + "\n")
-        print(f"  Updated:   .env")
+        print("  Updated:   .env")
 
     # Strip /jobs_export mounts from docker-compose.override.yml
     override_path = ROOT / "docker-compose.override.yml"
@@ -334,7 +334,7 @@ def cmd_db_unsetup_mcp(args):
 
     # Remove config file
     mcp_path.unlink()
-    print(f"  Removed:   config/db/mcp.yaml")
+    print("  Removed:   config/db/mcp.yaml")
 
     # Remove MCP env vars from .env
     env_path = ROOT / ".env"
@@ -351,7 +351,7 @@ def cmd_db_unsetup_mcp(args):
             if key not in mcp_keys:
                 new_lines.append(line)
         env_path.write_text("\n".join(new_lines) + "\n")
-        print(f"  Updated:   .env")
+        print("  Updated:   .env")
 
     print("\n  MCP configuration removed. Databases are not affected.\n")
     return 0
@@ -468,7 +468,7 @@ def cmd_db_start(args):
             return 1
         # Verify parent DB is running
         ps_result = docker_compose("ps", "--format", "{{.Names}}", "--filter",
-                                   f"status=running")
+                                   "status=running")
         if ps_result.returncode != 0:
             return ps_result.returncode
         # Prompt for admin password if auth is enabled (needed for init container)
@@ -706,7 +706,7 @@ def cmd_db_status(args):
         if not pgdata.is_absolute():
             pgdata = ROOT / pgdata
 
-        print(f"\n  PostgreSQL:")
+        print("\n  PostgreSQL:")
         print(f"    Path:      {pgdata_path}")
         print(f"    Name:      {env.get('DB_NAME', 'datasets')}")
         print(f"    Port:      {env.get('POSTGRES_PORT', '5432')}")
@@ -722,7 +722,7 @@ def cmd_db_status(args):
         if not mongo_data.is_absolute():
             mongo_data = ROOT / mongo_data
 
-        print(f"\n  MongoDB:")
+        print("\n  MongoDB:")
         print(f"    Path:      {mongo_data_path}")
         print(f"    Port:      {env.get('MONGO_PORT', '27017')}")
         print(f"    Running:   {'yes' if 'mongo' in running_services else 'no'}")
@@ -737,7 +737,7 @@ def cmd_db_status(args):
         if not sr_data.is_absolute():
             sr_data = ROOT / sr_data
 
-        print(f"\n  StarRocks:")
+        print("\n  StarRocks:")
         print(f"    Path:      {sr_data_path}")
         print(f"    Port:      {env.get('STARROCKS_PORT', '9030')}")
         print(f"    FE HTTP:   {env.get('STARROCKS_FE_HTTP_PORT', '8030')}")
@@ -746,9 +746,9 @@ def cmd_db_status(args):
     # Export path
     export_path = env.get("DB_EXPORT_PATH")
     if export_path:
-        print(f"\n  Export:")
+        print("\n  Export:")
         print(f"    Host path:      {export_path}")
-        print(f"    Container path: /export")
+        print("    Container path: /export")
 
     # MCP servers
     mcp_config = _load_mcp_config()
@@ -758,7 +758,7 @@ def cmd_db_status(args):
             port = pg_mcp.get("port", 8000)
             access = pg_mcp.get("access_mode", "restricted")
             running = "yes" if "postgres-mcp" in running_services else "no"
-            print(f"\n  PostgreSQL MCP:")
+            print("\n  PostgreSQL MCP:")
             print(f"    Port:      {port}")
             print(f"    Access:    {access}")
             print(f"    Endpoint:  http://<server_ip>:{port}/sse (type: sse)")
@@ -769,7 +769,7 @@ def cmd_db_status(args):
             port = mongo_mcp.get("port", 3000)
             read_only = mongo_mcp.get("read_only", True)
             running = "yes" if "mongo-mcp" in running_services else "no"
-            print(f"\n  MongoDB MCP:")
+            print("\n  MongoDB MCP:")
             print(f"    Port:      {port}")
             print(f"    Read-only: {read_only}")
             print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
@@ -779,7 +779,7 @@ def cmd_db_status(args):
         if sr_mcp.get("enabled"):
             port = sr_mcp.get("port", 9000)
             running = "yes" if "starrocks-mcp" in running_services else "no"
-            print(f"\n  StarRocks MCP:")
+            print("\n  StarRocks MCP:")
             print(f"    Port:      {port}")
             print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
             print(f"    Running:   {running}")
@@ -790,7 +790,7 @@ def cmd_db_status(args):
         port = jobs_cfg.get("port", 8050)
         running = "yes" if "jobs" in running_services else "no"
         targets = jobs_cfg.get("targets") or {}
-        print(f"\n  Jobs scheduler:")
+        print("\n  Jobs scheduler:")
         print(f"    Port:         {port}")
         print(f"    Result root:  {jobs_cfg.get('result_root', './data/jobs/results')}")
         print(f"    Max concur.:  {jobs_cfg.get('max_concurrent', 1)}")
@@ -835,12 +835,12 @@ def _print_ingestion_state(state_dir, label_split, db_type):
     from social_data_pipeline.setup.utils import load_source_config
 
     if not state_dir.exists():
-        print(f"\n    No ingestion data yet.")
+        print("\n    No ingestion data yet.")
         return
 
     state_files = sorted(state_dir.glob("*.json"))
     if not state_files:
-        print(f"\n    No ingestion data yet.")
+        print("\n    No ingestion data yet.")
         return
 
     # Cache platform configs per source
@@ -936,7 +936,7 @@ def _print_ingestion_state(state_dir, label_split, db_type):
             )
 
     # Print grouped by source
-    print(f"\n    Ingestion status:")
+    print("\n    Ingestion status:")
     for source, entries in sorted(source_entries.items()):
         print(f"      platform: {source}")
         for tag, table, count, latest, in_progress, failed, last_updated in entries:
@@ -1079,7 +1079,7 @@ def _unsetup_single_db(db_name, env):
             data_path = dp
             print(f"  Data directory: {data_path_str}")
             if tablespace_paths:
-                print(f"  Tablespace directories:")
+                print("  Tablespace directories:")
                 for ts_name, ts_path in tablespace_paths.items():
                     print(f"    {ts_name}: {ts_path}")
             print()
@@ -1186,7 +1186,7 @@ def _unsetup_single_db(db_name, env):
             if key not in env_keys:
                 new_lines.append(line)
         env_path.write_text("\n".join(new_lines) + "\n")
-        print(f"  Updated:   .env")
+        print("  Updated:   .env")
 
     # --- Strip DB services block from docker-compose.override.yml ---
     override_path = ROOT / "docker-compose.override.yml"
@@ -1207,10 +1207,10 @@ def _unsetup_single_db(db_name, env):
                 )
                 body = yaml.dump(data, default_flow_style=False, sort_keys=False)
                 override_path.write_text(header + body)
-                print(f"  Updated:   docker-compose.override.yml")
+                print("  Updated:   docker-compose.override.yml")
             else:
                 override_path.unlink()
-                print(f"  Removed:   docker-compose.override.yml")
+                print("  Removed:   docker-compose.override.yml")
 
     # --- Strip DB subtree from config/db/mcp.yaml ---
     mcp_path = CONFIG_DIR / "db" / "mcp.yaml"
@@ -1223,10 +1223,10 @@ def _unsetup_single_db(db_name, env):
             mcp_cfg.pop(db_name)
             if mcp_cfg:
                 mcp_path.write_text(yaml.dump(mcp_cfg, default_flow_style=False, sort_keys=False))
-                print(f"  Updated:   config/db/mcp.yaml")
+                print("  Updated:   config/db/mcp.yaml")
             else:
                 mcp_path.unlink()
-                print(f"  Removed:   config/db/mcp.yaml")
+                print("  Removed:   config/db/mcp.yaml")
 
     print()
     print(f"  {db_label} removed. Other databases are not affected.\n")
@@ -1308,7 +1308,7 @@ def cmd_db_unsetup(args):
         if pgdata.exists():
             print(f"  Database directory: {pgdata_path}")
             if tablespace_paths:
-                print(f"  Tablespace directories:")
+                print("  Tablespace directories:")
                 for ts_name, ts_path in tablespace_paths.items():
                     print(f"    {ts_name}: {ts_path}")
             print()
@@ -2452,12 +2452,12 @@ def cmd_source_download(args):
 
     try:
         # Phase 1: Download 1-to-1 mirror to dumps/
-        print(f"\n  --- Downloading from HF Hub ---\n")
+        print("\n  --- Downloading from HF Hub ---\n")
         parquet_urls = fetch_parquet_urls(hf_dataset, token=token)
         download_hf_files(parquet_urls, dumps_dir, dataset_id=hf_dataset, token=token)
 
         # Phase 2: Organize into extracted/<data_type>/ using config_map
-        print(f"\n  --- Organizing into data types ---\n")
+        print("\n  --- Organizing into data types ---\n")
         organize_hf_downloads(dumps_dir, extracted_dir, config_map)
 
     except HFAPIError as e:
@@ -2545,7 +2545,7 @@ def cmd_source_remove(args):
     # List files
     files = sorted(source_dir.glob("*"))
     if files:
-        print(f"  Files:")
+        print("  Files:")
         for f in files:
             print(f"    {f.name}")
     print()
@@ -2574,7 +2574,7 @@ def cmd_source_list(args):
         print("\n  No sources configured. Run: python sdp.py source add <name>\n")
         return 0
 
-    print(f"\n  Configured sources:\n")
+    print("\n  Configured sources:\n")
     for source in sources:
         profiles = get_source_profiles(source)
         profiles_str = ", ".join(profiles) if profiles else "none"
@@ -2623,7 +2623,7 @@ def cmd_source_status(args):
         print(f"    Data types:  {', '.join(data_types)}")
         print(f"    Profiles:    {', '.join(profiles) if profiles else 'none'}")
         paths = config.get("paths", {})
-        print(f"    Paths:")
+        print("    Paths:")
         print(f"      Dumps:     {paths.get('dumps', f'./data/dumps/{source}')}")
         print(f"      Extracted: {paths.get('extracted', f'./data/extracted/{source}')}")
         print(f"      Parsed:    {paths.get('parsed', f'./data/parsed/{source}')}")
@@ -2940,7 +2940,7 @@ def _print_mongoimport_log_sections(log_dir, failed_filenames):
                 for ol in output_lines:
                     print(f"      {ol}")
             else:
-                print(f"      (no mongoimport output found)")
+                print("      (no mongoimport output found)")
 
 
 # ============================================================================

@@ -8,7 +8,6 @@ Platform selection via PLATFORM env var (default: reddit).
 
 import os
 import re
-import sys
 import time
 from fnmatch import fnmatch
 from pathlib import Path
@@ -261,8 +260,6 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Get platform-specific parser
     parser = get_platform_parser()
 
-    proc_config = config['processing']
-
     # Get data types from profile config, fall back to platform config
     data_types = get_optional(config, 'processing', 'data_types', default=[])
     if not data_types:
@@ -273,7 +270,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Get file patterns from platform config
     file_patterns = platform_config.get('file_patterns', {})
 
-    print(f"[sdp] Profile: parse")
+    print("[sdp] Profile: parse")
     print(f"[sdp] Platform: {PLATFORM}")
     print(f"[sdp] Data types: {data_types}")
 
@@ -449,7 +446,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdp] Successful: {success_count}")
     print(f"[sdp] Failed: {fail_count}")
 
-    print(f"\n[sdp] Timing (minutes):")
+    print("\n[sdp] Timing (minutes):")
     print(f"[sdp]   Extraction: {total_timings['extraction'] / 60:.2f}")
     print(f"[sdp]   Parsing:    {total_timings['parsing'] / 60:.2f}")
     total_time = sum(total_timings.values())

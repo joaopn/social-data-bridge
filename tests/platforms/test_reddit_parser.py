@@ -1,9 +1,7 @@
 """Tests for Reddit platform parser."""
 
 import csv
-import json
 import os
-from pathlib import Path
 
 import pytest
 import yaml
@@ -15,8 +13,6 @@ from social_data_pipeline.platforms.reddit.parser import (
     transform_json,
     parse_to_csv,
     process_single_file,
-    MANDATORY_FIELDS,
-    MANDATORY_FIELD_TYPES,
 )
 
 

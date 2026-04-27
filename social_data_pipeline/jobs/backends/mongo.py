@@ -28,7 +28,6 @@ from pymongo.errors import ExecutionTimeout, OperationFailure, PyMongoError
 from ..config import admin_password, auth_enabled
 from ..store import Job
 from .base import (
-    Backend,
     BackendError,
     ExecutionHandle,
     ExecutionResult,

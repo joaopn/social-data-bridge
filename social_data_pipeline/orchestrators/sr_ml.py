@@ -21,8 +21,6 @@ from ..core.config import (
     apply_env_overrides,
     validate_processing_config,
     validate_starrocks_config,
-    get_optional,
-    ConfigurationError,
 )
 from ..db.starrocks.ingest import (
     compute_bucket_count,
@@ -109,7 +107,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("=" * 60)
     print("STARROCKS ML INGESTION")
     print("=" * 60)
-    print(f"[sdp] Profile: sr_ml")
+    print("[sdp] Profile: sr_ml")
     print(f"[sdp] Platform: {PLATFORM}")
 
     db_config = config['database']
@@ -157,7 +155,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdp] Database: {database}")
     print(f"[sdp] Output dir: {output_dir}")
     print(f"[sdp] Data types: {data_types}")
-    print(f"[sdp] Classifiers:")
+    print("[sdp] Classifiers:")
     for run in classifier_runs:
         scope = "all" if run['data_types'] is None else ",".join(run['data_types'])
         print(f"[sdp]   - {run['name']} (suffix: {run['suffix']}, data_types: {scope})")
@@ -331,7 +329,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         )
 
         if use_parallel:
-            print(f"[sdp] Parallel ingestion enabled (submissions + comments concurrently)")
+            print("[sdp] Parallel ingestion enabled (submissions + comments concurrently)")
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 future_submissions = executor.submit(ingest_classifier_type, 'submissions')

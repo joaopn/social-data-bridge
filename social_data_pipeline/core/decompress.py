@@ -6,7 +6,6 @@ All functions use atomic temp-file writes: decompress to .temp, rename on succes
 """
 
 import subprocess
-import os
 from pathlib import Path
 
 

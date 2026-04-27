@@ -2,8 +2,6 @@
 
 import json
 import shutil
-import pytest
-from pathlib import Path
 
 from social_data_pipeline.core.state import PipelineState
 

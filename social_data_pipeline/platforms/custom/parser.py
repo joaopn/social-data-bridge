@@ -15,7 +15,6 @@ from typing import Dict, List, Tuple
 
 from ...core.config import ConfigurationError
 from ...core.parser import (
-    escape_string,
     quote_field,
     flatten_record,
     flatten_record_parquet,

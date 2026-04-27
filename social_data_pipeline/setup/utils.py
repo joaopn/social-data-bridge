@@ -108,7 +108,7 @@ def ask_int(prompt, default=None, tag=None):
         try:
             return int(value)
         except ValueError:
-            print(f"    Please enter a valid integer.")
+            print("    Please enter a valid integer.")
 
 
 def ask_bool(prompt, default=True, tag=None):
@@ -153,7 +153,7 @@ def ask_multi_select(prompt, options, defaults=None, tag=None):
         marker = " *" if opt in defaults else ""
         print(f"    {i}) {opt}{marker}")
     default_indices = ",".join(str(options.index(d) + 1) for d in defaults)
-    print(f"  (* = default)")
+    print("  (* = default)")
     value = input(f"  Select (comma-separated) [{default_indices}]: ").strip()
     if not value:
         return defaults[:]
@@ -187,7 +187,7 @@ def ask_multi_line(prompt, tag=None):
     import select
     prefix = _tag_prefix(tag)
     print(f"  {prefix}{prompt}")
-    print(f"  (paste content, then press Enter on an empty line to finish)")
+    print("  (paste content, then press Enter on an empty line to finish)")
     lines = []
     while True:
         try:
@@ -384,7 +384,7 @@ def resolve_source(source_name=None):
         return sources[0]
 
     print(f"\n  Multiple sources configured: {', '.join(sources)}")
-    print(f"  Please specify --source <name>\n")
+    print("  Please specify --source <name>\n")
     sys.exit(1)
 
 
@@ -494,7 +494,7 @@ def print_pipeline_commands(profiles, source_name=None):
     print("\n  To run your pipeline, execute these commands in order:\n")
     for p in selected:
         if p == "_start":
-            print(f"    python sdp.py db start")
+            print("    python sdp.py db start")
         else:
             print(f"    python sdp.py run {p}{source_flag}")
     print()

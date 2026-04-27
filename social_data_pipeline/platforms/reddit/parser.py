@@ -13,7 +13,7 @@ import os
 import logging
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from ...core.config import ConfigurationError
 from ...core.parser import (

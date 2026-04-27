@@ -129,14 +129,12 @@ def _validate_ndjson_full(filepath: str) -> str:
         raise ValueError(f"Empty file: {filepath}")
 
     line_count = 0
-    last_nonempty_num = 0
     with open(filepath, 'r', encoding='utf-8') as f:
         for line_num, line in enumerate(f, 1):
             stripped = line.strip()
             if not stripped:
                 continue
             line_count += 1
-            last_nonempty_num = line_num
             try:
                 json.loads(stripped)
             except json.JSONDecodeError as e:

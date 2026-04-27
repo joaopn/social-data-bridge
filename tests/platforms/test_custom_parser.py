@@ -1,9 +1,7 @@
 """Tests for custom platform parser."""
 
 import csv
-import json
 import os
-from pathlib import Path
 
 import pytest
 import yaml

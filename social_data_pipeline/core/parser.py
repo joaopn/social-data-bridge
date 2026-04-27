@@ -6,7 +6,7 @@ Platform-specific logic (like Reddit's waterfall algorithm) lives in platforms/*
 """
 
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 
 def escape_string(value: str) -> str:

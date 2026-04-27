@@ -9,7 +9,7 @@ Supports both CSV and Parquet file formats.
 import os
 import time
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict
 
 import polars as pl
 

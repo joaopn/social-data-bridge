@@ -1,8 +1,6 @@
 """Tests for setup utility functions."""
 
-import os
 
-import pytest
 
 from social_data_pipeline.setup.utils import (
     ask,

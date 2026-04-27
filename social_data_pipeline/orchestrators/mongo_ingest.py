@@ -255,7 +255,6 @@ def run_pipeline(config_dir: str = "/app/config", watch_mode: bool = False):
     platform_config = load_platform_config(config_dir)
 
     db_config = config['database']
-    proc_config = config['processing']
 
     # Get data types from profile config, fall back to platform config
     data_types = get_optional(config, 'processing', 'data_types', default=[])
@@ -282,7 +281,7 @@ def run_pipeline(config_dir: str = "/app/config", watch_mode: bool = False):
     user = db_config.get('user')
     password = db_config.get('password')
 
-    print(f"[sdp] Profile: mongo_ingest")
+    print("[sdp] Profile: mongo_ingest")
     print(f"[sdp] Platform: {PLATFORM}")
     print(f"[sdp] Collection strategy: {collection_strategy}")
     print(f"[sdp] Data types: {data_types}")
@@ -641,7 +640,7 @@ def run_pipeline(config_dir: str = "/app/config", watch_mode: bool = False):
     print(f"Total processed: {total_processed}")
     print(f"Total failed: {total_failed}")
 
-    print(f"\nTiming (minutes):")
+    print("\nTiming (minutes):")
     print(f"  Extraction: {total_timings['extraction'] / 60:.2f}")
     print(f"  Ingestion:  {total_timings['ingestion'] / 60:.2f}")
     print(f"  Indexing:   {total_timings['indexing'] / 60:.2f}")

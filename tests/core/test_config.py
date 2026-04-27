@@ -1,9 +1,7 @@
 """Tests for social_data_pipeline.core.config."""
 
-import os
 import pytest
 import yaml
-from pathlib import Path
 
 from social_data_pipeline.core.config import (
     deep_merge,

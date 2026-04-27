@@ -372,7 +372,7 @@ def print_summary(settings, files_to_write, services_with_mount, sr_fe_applicabl
     print(f"  Max concurrent:   {settings['max_concurrent']}")
     print(f"  History limit:    {settings['history_retention']}")
     print(f"  Web UI auth:      {'enabled (DB admin password)' if settings.get('auth_enabled') else 'disabled (UI is open)'}")
-    print(f"  Timeouts:")
+    print("  Timeouts:")
     for backend in ("postgres", "starrocks", "mongodb"):
         if backend in settings.get("default_timeouts", {}):
             secs = settings["default_timeouts"][backend]

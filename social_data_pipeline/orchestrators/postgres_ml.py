@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 from ..core.state import PipelineState
 from ..core.config import (
@@ -143,7 +143,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print("="*60)
     print("POSTGRES ML INGESTION")
     print("="*60)
-    print(f"[sdp] Profile: postgres_ml")
+    print("[sdp] Profile: postgres_ml")
     print(f"[sdp] Platform: {PLATFORM}")
     
     # Extract configuration
@@ -209,7 +209,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"[sdp] Schema: {db_config.get('schema')}")
     print(f"[sdp] Output dir: {output_dir}")
     print(f"[sdp] Data types: {data_types}")
-    print(f"[sdp] Classifiers:")
+    print("[sdp] Classifiers:")
     for run in classifier_runs:
         scope = "all" if run['data_types'] is None else ",".join(run['data_types'])
         print(f"[sdp]   - {run['name']} (suffix: {run['suffix']}, data_types: {scope})")
@@ -455,7 +455,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                 return local_success, local_fail
             
             if use_parallel_fast_load:
-                print(f"[sdp] Parallel ingestion enabled (submissions + comments concurrently)")
+                print("[sdp] Parallel ingestion enabled (submissions + comments concurrently)")
                 
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     future_submissions = executor.submit(fast_load_classifier_type, 'submissions')
@@ -468,7 +468,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                         fail_count += sub_fail + com_fail
                     except Exception as e:
                         print(f"[sdp] CRITICAL ERROR: {e}")
-                        print(f"[sdp] Tables may be in inconsistent state. Manual recovery required.")
+                        print("[sdp] Tables may be in inconsistent state. Manual recovery required.")
                         raise
             else:
                 for dt in sorted(fast_load_types):
@@ -478,7 +478,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                         fail_count += local_fail
                     except Exception as e:
                         print(f"[sdp] CRITICAL ERROR for {dt}{suffix}: {e}")
-                        print(f"[sdp] Table may be in inconsistent state. Manual recovery required.")
+                        print("[sdp] Table may be in inconsistent state. Manual recovery required.")
                         raise
         
         # =====================================================================
@@ -531,7 +531,7 @@ def run_pipeline(config_dir: str = "/app/config"):
                 return local_success, local_fail
             
             if use_parallel_standard:
-                print(f"[sdp] Parallel ingestion enabled (submissions + comments concurrently)")
+                print("[sdp] Parallel ingestion enabled (submissions + comments concurrently)")
                 
                 with ThreadPoolExecutor(max_workers=2) as executor:
                     future_submissions = executor.submit(ingest_classifier_type_files, 'submissions')

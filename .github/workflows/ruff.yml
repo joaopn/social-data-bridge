@@ -1,0 +1,20 @@
+name: Ruff
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/*.py'
+      - 'ruff.toml'
+  pull_request:
+    paths:
+      - '**/*.py'
+      - 'ruff.toml'
+
+jobs:
+  ruff:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - run: docker run --rm -v "$PWD":/io -w /io ghcr.io/astral-sh/ruff:0.15.12 check .

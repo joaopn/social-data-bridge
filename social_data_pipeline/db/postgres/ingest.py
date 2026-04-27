@@ -154,7 +154,7 @@ def configure_ingestion_session(
 
     if not quiet:
         # Log applied settings
-        print(f"[sdp] Session configured for ingestion:")
+        print("[sdp] Session configured for ingestion:")
         print(f"      shared_buffers = {shared_buffers_gb:.1f}GB (detected)")
         for key, value in settings.items():
             print(f"      {key} = {value}")
@@ -440,7 +440,7 @@ def execute_query(
                 try:
                     curr.execute(query)
                     conn.commit()
-                except Exception as e:
+                except Exception:
                     logging.error("Exception occurred", exc_info=True)
                     raise
             else:
@@ -448,7 +448,7 @@ def execute_query(
                     try:
                         curr.execute(query % arg)
                         conn.commit()
-                    except Exception as e:
+                    except Exception:
                         logging.error(f"Exception occurred with arg {arg}", exc_info=True)
                         raise
 
@@ -829,7 +829,7 @@ def create_index(
                 conn.commit()
                 print(f"[sdp] Created index: {index_name}")
                 return True
-            except Exception as e:
+            except Exception:
                 logging.error("Exception occurred", exc_info=True)
                 raise
 
