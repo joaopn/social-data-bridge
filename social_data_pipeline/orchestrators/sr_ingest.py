@@ -7,16 +7,14 @@ Platform selection via PLATFORM env var (default: reddit).
 """
 
 import os
-import sys
 import time
 from pathlib import Path
-from typing import List, Dict
+from typing import Dict
 
 from ..core.state import PipelineState
 from ..core.config import (
     load_profile_config,
     load_platform_config as _load_platform_config,
-    get_required,
     get_optional,
     validate_processing_config,
     validate_starrocks_config,
@@ -89,7 +87,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Database name = source name (database-per-source, like MongoDB)
     database = SOURCE
 
-    print(f"[sdp] Profile: sr_ingest")
+    print("[sdp] Profile: sr_ingest")
     print(f"[sdp] Platform: {PLATFORM}")
     print(f"[sdp] Database: {database}")
     print(f"[sdp] Data types: {data_types}")
@@ -158,7 +156,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             parsed_files, parsed_source_map = detect_lingua_files(data_types, lingua_config, file_format=file_format)
             lingua_count = sum(1 for src in parsed_source_map.values() if src == 'lingua')
             original_count = sum(1 for src in parsed_source_map.values() if src == 'original')
-            print(f"[sdp] Found {lingua_count} lingua files")
+            print(f"[sdp] Found {lingua_count} lingua files, {original_count} original files")
         else:
             print("[sdp] Prefer lingua: enabled but lingua config not found, using original parsed files")
             parsed_files = detect_parsed_files(parsed_dir, data_types, file_patterns, file_format=file_format)
@@ -378,7 +376,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"Total processed: {total_processed}")
     print(f"Total failed: {total_failed}")
 
-    print(f"\nTiming (minutes):")
+    print("\nTiming (minutes):")
     print(f"  Ingestion:  {ingestion_time / 60:.2f}")
     print(f"  Indexing:   {indexing_time / 60:.2f}")
     total_time = ingestion_time + indexing_time

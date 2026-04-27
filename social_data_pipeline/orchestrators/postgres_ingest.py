@@ -12,7 +12,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 
 from ..core.state import PipelineState
 from ..core.decompress import decompress_file, is_compressed, strip_compression_extension
@@ -175,40 +175,6 @@ def detect_json_files(extracted_dir: str, data_types: List[str], file_patterns: 
     return [(f[0], f[1], f[2]) for f in files]
 
 
-def detect_parsed_files(parsed_dir: str, data_types: List[str], file_patterns: Dict, file_format: str = 'csv') -> List[Tuple[str, str, str]]:
-    """Detect parsed files (Parquet or CSV) in the parsed directory."""
-    parsed_base = Path(parsed_dir)
-    files = []
-
-    ext = 'parquet' if file_format == 'parquet' else 'csv'
-
-    # Build patterns from platform config
-    patterns = {}
-    for data_type in data_types:
-        if data_type in file_patterns and file_format in file_patterns[data_type]:
-            patterns[data_type] = re.compile(file_patterns[data_type][file_format])
-
-    for data_type in data_types:
-        if data_type not in patterns:
-            continue
-
-        type_dir = parsed_base / data_type
-        if not type_dir.is_dir():
-            continue
-
-        for filepath in type_dir.glob(f"*.{ext}"):
-            filename = filepath.name
-            match = patterns[data_type].match(filename)
-            if match:
-                date_str = match.group(1) if match.groups() else filename
-                file_id = filepath.stem
-                files.append((str(filepath), file_id, data_type, date_str))
-    
-    files.sort(key=lambda x: (x[3], x[2]))
-    
-    return [(f[0], f[1], f[2]) for f in files]
-
-
 def run_pipeline(config_dir: str = "/app/config"):
     """
     Run the database ingestion pipeline.
@@ -224,8 +190,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     
     db_config = config['database']
     password = db_config.get('password')
-    proc_config = config['processing']
-    
+
     # Get db_schema from profile config, fall back to platform config
     db_schema = db_config.get('schema')
     if not db_schema:
@@ -257,7 +222,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     def get_tablespace(data_type):
         return resolve_tablespace(table_tablespaces.get(data_type))
 
-    print(f"[sdp] Profile: postgres_ingest")
+    print("[sdp] Profile: postgres_ingest")
     print(f"[sdp] Platform: {PLATFORM}")
     print(f"[sdp] Database: {db_config['name']}")
     print(f"[sdp] Schema: {db_schema}")
@@ -353,7 +318,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             # Count sources
             lingua_count = sum(1 for src in parsed_source_map.values() if src == 'lingua')
             original_count = sum(1 for src in parsed_source_map.values() if src == 'original')
-            print(f"[sdp] Found {lingua_count} lingua files")
+            print(f"[sdp] Found {lingua_count} lingua files, {original_count} original files")
         else:
             print("[sdp] Prefer lingua: enabled but lingua config not found, using original parsed files")
             parsed_files = detect_parsed_files(parsed_dir, data_types, file_patterns, file_format=file_format)
@@ -394,9 +359,7 @@ def run_pipeline(config_dir: str = "/app/config"):
             user=db_config['user'],
             password=password
         )
-    
-    is_initial_ingestion = not all(tables_existed_before.values())
-    
+
     parallel_mode = get_required(config, 'processing', 'parallel_mode')
     workers = get_required(config, 'processing', 'parse_workers')
     
@@ -439,7 +402,7 @@ def run_pipeline(config_dir: str = "/app/config"):
 
     if files_to_parse:
         print("\n" + "="*60)
-        print(f"PHASE 2: PARSING")
+        print("PHASE 2: PARSING")
         print("="*60)
         
         t_start = time.time()
@@ -509,7 +472,7 @@ def run_pipeline(config_dir: str = "/app/config"):
         if prefer_lingua and parsed_source_map:
             ingest_from_lingua = sum(1 for p, fid, dt in files_to_ingest if parsed_source_map.get(fid) == 'lingua')
             ingest_from_original = sum(1 for p, fid, dt in files_to_ingest if parsed_source_map.get(fid) == 'original')
-            print(f"[sdp] Sources: {ingest_from_lingua} lingua")
+            print(f"[sdp] Sources: {ingest_from_lingua} lingua, {ingest_from_original} original")
         
         t_start = time.time()
         
@@ -882,7 +845,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     print(f"Total processed: {total_processed}")
     print(f"Total failed: {total_failed}")
     
-    print(f"\nTiming (minutes):")
+    print("\nTiming (minutes):")
     print(f"  Extraction: {total_timings['extraction'] / 60:.2f}")
     print(f"  Parsing:    {total_timings['parsing'] / 60:.2f}")
     print(f"  Ingestion:  {total_timings['ingestion'] / 60:.2f}")
