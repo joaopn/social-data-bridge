@@ -137,6 +137,25 @@ def sr_row_count(conn, database, table):
     return sr_query_scalar(conn, f"SELECT COUNT(*) FROM `{database}`.`{table}`")
 
 
+def read_ro_credentials(data_path):
+    """Read .ro_credentials from a database data directory.
+
+    Format on disk is `username:password` (single line, chmod 600). Written
+    by `_write_ro_credentials` in setup/db.py during `sdp db setup` when
+    auth is enabled with a read-only user.
+
+    Args:
+        data_path: pathlib.Path to the data directory (e.g. workspace /
+            "data" / "database" / "postgres").
+
+    Returns:
+        (username, password) tuple.
+    """
+    cred = (data_path / ".ro_credentials").read_text().strip()
+    user, _, pwd = cred.partition(":")
+    return user, pwd
+
+
 def sr_index_columns(conn, database, table):
     """Return the set of column names with BITMAP indexes on a table.
 
