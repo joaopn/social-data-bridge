@@ -51,11 +51,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Python virtualenv with all test + project dependencies
 RUN python3.13 -m venv /opt/e2e-venv
-COPY requirements.txt requirements-test.txt requirements-mongo.txt /tmp/
+COPY requirements.txt requirements-test.txt requirements-mongo.txt requirements-starrocks.txt /tmp/
 RUN /opt/e2e-venv/bin/pip install --no-cache-dir \
     -r /tmp/requirements.txt \
     -r /tmp/requirements-test.txt \
     -r /tmp/requirements-mongo.txt \
+    -r /tmp/requirements-starrocks.txt \
     pexpect
 
 ENV PATH="/opt/e2e-venv/bin:$PATH"

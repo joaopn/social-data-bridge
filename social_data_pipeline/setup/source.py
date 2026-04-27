@@ -43,6 +43,7 @@ def compute_defaults(hw, profiles):
     d["parse_workers"] = min(cores, 8)
     d["pg_parallel_index_workers"] = min(max(1, cores // 2), 8)
     d["pg_prefer_lingua"] = "lingua" in profiles
+    d["sr_prefer_lingua"] = "lingua" in profiles
     return d
 
 
@@ -259,6 +260,17 @@ def _load_existing_source_config(source_name):
             tts = pgc.get("pipeline", {}).get("table_tablespaces")
             if tts:
                 existing["table_tablespaces"] = tts
+        except (OSError, yaml.YAMLError):
+            pass
+
+    # Load starrocks.yaml
+    sr_path = source_dir / "starrocks.yaml"
+    if sr_path.exists():
+        try:
+            src = yaml.safe_load(sr_path.read_text()) or {}
+            proc = src.get("pipeline", {}).get("processing", {})
+            if proc.get("prefer_lingua") is not None:
+                existing["sr_prefer_lingua"] = proc["prefer_lingua"]
         except (OSError, yaml.YAMLError):
             pass
 
@@ -564,9 +576,16 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                 default_pk = "id"
             settings["primary_key"] = ask("Primary key column", default_pk, tag="src_primary_key")
 
-    # ---- StarRocks table sizing (single knob per source) ----
+    # ---- StarRocks settings (per-source) ----
     if has_starrocks:
-        section_header("StarRocks Table Sizing")
+        section_header("StarRocks Settings (for this source)")
+        settings["sr_prefer_lingua"] = ask_bool(
+            "Use Lingua files (includes lang columns in base tables)?",
+            existing.get("sr_prefer_lingua", defaults["sr_prefer_lingua"]),
+            tag="src_sr_prefer_lingua",
+        )
+
+        print()
         cores = hw["cpu_cores"] or 4
         default_buckets = cores * 8
         print("  Splits each StarRocks table into tablets — the physical storage")
@@ -775,11 +794,14 @@ def generate_mongo_yaml(settings):
 
 def generate_starrocks_yaml(settings):
     """Generate config/sources/<name>/starrocks.yaml."""
+    processing = {
+        "data_types": settings["data_types"],
+    }
+    if "sr_prefer_lingua" in settings:
+        processing["prefer_lingua"] = settings["sr_prefer_lingua"]
     config = {
         "pipeline": {
-            "processing": {
-                "data_types": settings["data_types"],
-            }
+            "processing": processing,
         }
     }
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
@@ -826,6 +848,13 @@ def print_summary(settings, files_to_write):
             print("    Table assignments:")
             for dt, ts in settings["table_tablespaces"].items():
                 print(f"      {dt} -> {ts}")
+        print()
+
+    if "sr_ingest" in profiles:
+        print("  StarRocks:")
+        print(f"    Prefer lingua:       {settings.get('sr_prefer_lingua', False)}")
+        if settings.get("sr_buckets") is not None:
+            print(f"    Buckets per table:   {settings['sr_buckets']}")
         print()
 
     if settings["platform"].startswith("custom/"):

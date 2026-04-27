@@ -87,3 +87,69 @@ def mongo_doc_count(client, db_name, collection_name):
 def mongo_collection_exists(client, db_name, collection_name):
     """Check if a collection exists in a database."""
     return collection_name in client[db_name].list_collection_names()
+
+
+def sr_connect(port=9030, user="root", password=None, database=None):
+    """Create a mysql-connector connection to StarRocks (MySQL wire protocol).
+
+    Args:
+        port: StarRocks MySQL protocol port.
+        user: StarRocks user.
+        password: Optional password (omit for no-auth setups).
+        database: Optional database to USE on connect.
+
+    Returns:
+        mysql.connector connection object.
+    """
+    import mysql.connector
+
+    params = dict(host="localhost", port=port, user=user)
+    if password:
+        params["password"] = password
+    if database:
+        params["database"] = database
+    return mysql.connector.connect(**params)
+
+
+def sr_query_scalar(conn, query, params=None):
+    """Execute a query and return the first column of the first row."""
+    cur = conn.cursor()
+    try:
+        cur.execute(query, params or ())
+        row = cur.fetchone()
+        return row[0] if row else None
+    finally:
+        cur.close()
+
+
+def sr_table_exists(conn, database, table):
+    """Check if a table exists in a StarRocks database."""
+    return sr_query_scalar(
+        conn,
+        "SELECT COUNT(*) FROM information_schema.tables "
+        "WHERE table_schema = %s AND table_name = %s",
+        (database, table),
+    ) > 0
+
+
+def sr_row_count(conn, database, table):
+    """Return row count for a StarRocks table."""
+    return sr_query_scalar(conn, f"SELECT COUNT(*) FROM `{database}`.`{table}`")
+
+
+def sr_index_columns(conn, database, table):
+    """Return the set of column names with BITMAP indexes on a table.
+
+    Uses SHOW INDEXES; StarRocks reports one row per index with the column
+    in the `Column_name` field (case as returned by the server).
+    """
+    cur = conn.cursor()
+    try:
+        cur.execute(f"SHOW INDEXES FROM `{database}`.`{table}`")
+        rows = cur.fetchall()
+        # Locate Column_name dynamically — column ordering varies by SR version.
+        col_names = [d[0] for d in cur.description]
+        idx = col_names.index("Column_name")
+        return {row[idx] for row in rows}
+    finally:
+        cur.close()

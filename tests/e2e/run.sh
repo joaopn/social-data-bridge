@@ -17,6 +17,7 @@ ENABLED_TESTS=(
     tests/e2e/tests/test_mongo_flow.py
     tests/e2e/tests/test_parse_reddit.py
     tests/e2e/tests/test_postgres_flow.py
+    tests/e2e/tests/test_sr_flow.py
     # tests/e2e/tests/test_parse_custom.py    # deferred: custom parser fields config
 )
 

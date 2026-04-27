@@ -271,6 +271,16 @@ src_pg_prefer_lingua:
     files if lingua output doesn't exist.
   default: "yes (if lingua profile selected)"
 
+src_sr_prefer_lingua:
+  prompt: "Use Lingua files?"
+  explain: >
+    When enabled, sr_ingest reads from lingua output (which includes
+    language columns) instead of plain parsed files. Default mirrors
+    src_pg_prefer_lingua: yes if the lingua profile was selected, no
+    otherwise. The setup always writes an explicit value to the source
+    override so the base default never silently selects the wrong path.
+  default: "yes (if lingua profile selected)"
+
 src_pg_index_workers:
   prompt: "Parallel index workers"
   explain: >
