@@ -352,7 +352,7 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
     if "mongo" in databases:
         all_profiles += ["mongo_ingest"]
     if "starrocks" in databases:
-        all_profiles += ["sr_ingest"]
+        all_profiles += ["sr_ingest", "sr_ml"]
 
     # When reconfiguring an existing source, only pre-check profiles that don't
     # already have a config file — avoids overwriting working configurations.
@@ -792,6 +792,18 @@ def generate_mongo_yaml(settings):
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
 
+def generate_sr_ml_yaml(settings):
+    """Generate config/sources/<name>/sr_ml.yaml."""
+    config = {
+        "pipeline": {
+            "processing": {
+                "data_types": settings["data_types"],
+            }
+        }
+    }
+    return yaml.dump(config, default_flow_style=False, sort_keys=False)
+
+
 def generate_starrocks_yaml(settings):
     """Generate config/sources/<name>/starrocks.yaml."""
     processing = {
@@ -998,6 +1010,12 @@ def main(source_name=None, hf_dataset_id=None):
         files_to_write.append((
             source_config_dir / "starrocks.yaml",
             generate_starrocks_yaml(settings),
+        ))
+
+    if "sr_ml" in profiles:
+        files_to_write.append((
+            source_config_dir / "sr_ml.yaml",
+            generate_sr_ml_yaml(settings),
         ))
 
     # Classifier config files (from inline questionnaire)
