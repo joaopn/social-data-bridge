@@ -230,12 +230,21 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
     }
     
     if profile == "lingua":
-        try:
-            postgres_config = load_profile_config('postgres_ingest', config_dir, source=SOURCE, quiet=True)
-            prefer_lingua = postgres_config.get('processing', {}).get('prefer_lingua', True)
-        except Exception:
-            prefer_lingua = True
-        
+        # Lingua's output_ingest dual-write is needed when ANY downstream
+        # ingestion profile (postgres_ingest or sr_ingest) wants the minimal
+        # lingua_ingest/ copy — i.e. has prefer_lingua=false. Default true
+        # everywhere keeps the no-dual-write behavior; one false anywhere
+        # flips us to writing the copy.
+        prefer_lingua = True
+        for ingest_profile in ('postgres_ingest', 'sr_ingest'):
+            try:
+                cfg = load_profile_config(ingest_profile, config_dir, source=SOURCE, quiet=True)
+            except Exception:
+                continue
+            if not cfg.get('processing', {}).get('prefer_lingua', True):
+                prefer_lingua = False
+                break
+
         global_config.update({
             'prefer_lingua': prefer_lingua,
             'fields': get_optional(config, 'fields', default=[]),
