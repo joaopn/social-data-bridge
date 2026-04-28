@@ -122,5 +122,20 @@ def test_starrocks_full_flow(workspace):
     finally:
         conn.close()
 
-    # 8. Stop StarRocks
+    # 8. Idempotency — re-run sr_ingest. State should mark the file processed;
+    # PK upsert handles dedup at the DB layer either way. Folded here to avoid
+    # paying SR's ~7 min cold-boot a second time in test_idempotency.py.
+    result = run_sdp("run sr_ingest --source reddit")
+    assert result.returncode == 0, f"sr_ingest re-run failed:\n{result.stderr}"
+
+    conn = sr_connect()
+    try:
+        rows_after = sr_row_count(conn, "reddit", "comments")
+        assert rows_after == count, (
+            f"row count drift on re-run: was {count}, now {rows_after}"
+        )
+    finally:
+        conn.close()
+
+    # 9. Stop StarRocks
     run_sdp("db stop starrocks")
