@@ -14,8 +14,6 @@ Bug class:
 
 from pathlib import Path
 
-import pytest
-
 from social_data_pipeline.setup.hf import organize_hf_downloads
 
 
