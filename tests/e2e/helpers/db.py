@@ -137,6 +137,41 @@ def sr_row_count(conn, database, table):
     return sr_query_scalar(conn, f"SELECT COUNT(*) FROM `{database}`.`{table}`")
 
 
+def wait_mcp_alive(url, timeout=60):
+    """Poll an MCP HTTP endpoint until it returns a non-5xx response.
+
+    The bug class we care about for MCP is "container started, port bound,
+    .ro_credentials read correctly" — proven by any HTTP response, including
+    4xx (e.g. method-not-allowed, missing-Accept-header). A connection error
+    means the container isn't bound; a 5xx means the server is broken.
+
+    Args:
+        url: Full URL to poll (e.g. http://localhost:8000/sse).
+        timeout: Max wait time in seconds.
+
+    Returns:
+        The first non-5xx requests.Response.
+    """
+    import time
+    import requests
+
+    deadline = time.time() + timeout
+    last_err = None
+    while time.time() < deadline:
+        try:
+            resp = requests.get(url, timeout=3, stream=True)
+            # Drain a tiny bit so the connection can close cleanly for
+            # streaming endpoints (SSE / Streamable HTTP).
+            resp.close()
+            if resp.status_code < 500:
+                return resp
+            last_err = f"HTTP {resp.status_code}"
+        except requests.RequestException as e:
+            last_err = repr(e)
+        time.sleep(2)
+    raise TimeoutError(f"MCP at {url} did not respond within {timeout}s. Last: {last_err}")
+
+
 def read_ro_credentials(data_path):
     """Read .ro_credentials from a database data directory.
 

@@ -57,7 +57,8 @@ RUN /opt/e2e-venv/bin/pip install --no-cache-dir \
     -r /tmp/requirements-test.txt \
     -r /tmp/requirements-mongo.txt \
     -r /tmp/requirements-starrocks.txt \
-    pexpect
+    pexpect \
+    requests
 
 ENV PATH="/opt/e2e-venv/bin:$PATH"
 
