@@ -255,6 +255,15 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
             'fields': get_optional(config, 'fields', default=None),
         })
     
+    # Load platform config for file format and mandatory fields BEFORE merging
+    # per-classifier config — otherwise the merged_cfg snapshots taken in the
+    # loop below miss mandatory_fields, and the lingua_ingest dual-write drops
+    # id/dataset/retrieved_utc (PK columns), failing downstream ingest.
+    platform_cfg = load_platform_config(config_dir, PLATFORM, source=SOURCE)
+    file_format = platform_cfg.get('file_format', 'csv')
+    ext = 'parquet' if file_format == 'parquet' else 'csv'
+    global_config['mandatory_fields'] = platform_cfg.get('mandatory_fields', [])
+
     enabled_classifiers = []
     for entry in classifier_entries:
         name = entry['name']
@@ -273,14 +282,6 @@ def run_pipeline(profile: str = "lingua", config_dir: str = "/app/config", targe
 
         if target_classifier and name == target_classifier:
             break
-    
-    # Load platform config for file format and mandatory fields
-    platform_cfg = load_platform_config(config_dir, PLATFORM, source=SOURCE)
-    file_format = platform_cfg.get('file_format', 'csv')
-    ext = 'parquet' if file_format == 'parquet' else 'csv'
-
-    # Pass mandatory fields to classifiers so they know which fields to preserve in output
-    global_config['mandatory_fields'] = platform_cfg.get('mandatory_fields', [])
 
     print(f"[sdp] Profile: {profile}")
     print(f"[sdp] Data types: {data_types}")
