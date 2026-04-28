@@ -23,6 +23,7 @@ ENABLED_TESTS=(
     tests/e2e/tests/test_auth_mongo.py
     tests/e2e/tests/test_auth_starrocks.py
     tests/e2e/tests/test_idempotency.py
+    tests/e2e/tests/test_filter.py
     # tests/e2e/tests/test_mcp_lifecycle.py   # deferred: hangs in sysbox (see plans/PLAN_MCP_E2E.md)
     # tests/e2e/tests/test_parse_custom.py    # deferred: custom parser fields config
 )
