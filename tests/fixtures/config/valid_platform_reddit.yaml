@@ -19,7 +19,6 @@ file_patterns:
 mandatory_fields:
   - dataset
   - id
-  - retrieved_utc
 
 primary_key: id
 upsert_order_field: retrieved_utc
@@ -49,6 +48,7 @@ field_types:
 
 fields:
   comments:
+    - retrieved_utc
     - created_utc
     - author
     - body
@@ -60,6 +60,7 @@ fields:
     - removal_type
     - id10
   submissions:
+    - retrieved_utc
     - created_utc
     - author
     - title

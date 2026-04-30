@@ -227,12 +227,14 @@ class TestDetermineRemovalStatus:
 
 class TestGetAllColumns:
     def test_basic(self):
-        result = get_all_columns("comments", ["author", "body", "score"])
+        # retrieved_utc lives in YAML fields:, not parser MANDATORY_FIELDS
+        # (so the DB column stays nullable for old Arctic Shift dumps).
+        result = get_all_columns("comments", ["retrieved_utc", "author", "body", "score"])
         assert result == ["dataset", "id", "retrieved_utc", "author", "body", "score"]
 
     def test_empty_fields(self):
         result = get_all_columns("submissions", [])
-        assert result == ["dataset", "id", "retrieved_utc"]
+        assert result == ["dataset", "id"]
 
 
 # ============================================================================
@@ -252,7 +254,9 @@ class TestTransformJson:
             "retrieved_utc": 1704153600,
         }
         field_types = {"score": "integer", "created_utc": "integer", "author": "text", "body": "text", "subreddit": "text"}
-        fields = ["created_utc", "author", "body", "subreddit", "score"]
+        # retrieved_utc is now a regular YAML field (not parser-mandatory)
+        # so callers must list it explicitly to keep it in the column list.
+        fields = ["retrieved_utc", "created_utc", "author", "body", "subreddit", "score"]
         result = transform_json(data, "2024-01", field_types, fields)
         # [dataset, id, retrieved_utc, created_utc, author, body, subreddit, score]
         assert result[0] == "2024-01"
@@ -269,8 +273,8 @@ class TestTransformJson:
             "subreddit": "test",
             "retrieved_on": 12345,
         }
-        field_types = {"author": "text", "subreddit": "text"}
-        result = transform_json(data, "2024-01", field_types, ["author"])
+        field_types = {"author": "text", "subreddit": "text", "retrieved_utc": "integer"}
+        result = transform_json(data, "2024-01", field_types, ["retrieved_utc", "author"])
         # retrieved_utc should come from retrieved_on
         assert result[2] == 12345
 
@@ -282,8 +286,8 @@ class TestTransformJson:
             "retrieved_utc": 11111,
             "_meta": {"retrieved_2nd_on": 22222},
         }
-        field_types = {"author": "text", "subreddit": "text"}
-        result = transform_json(data, "2024-01", field_types, ["author"])
+        field_types = {"author": "text", "subreddit": "text", "retrieved_utc": "integer"}
+        result = transform_json(data, "2024-01", field_types, ["retrieved_utc", "author"])
         # retrieved_utc overridden by _meta.retrieved_2nd_on
         assert result[2] == 22222
 
@@ -296,8 +300,9 @@ class TestTransformJson:
         }
         field_types = {"id10": "bigint", "author": "text", "subreddit": "text"}
         result = transform_json(data, "2024-01", field_types, ["id10"])
+        # [dataset, id, id10] — retrieved_utc not requested, so not emitted.
         # id10 = base36_to_int("1a") = 46
-        assert result[3] == 46
+        assert result[2] == 46
 
     def test_is_deleted_and_removal_type_text(self):
         data = {
@@ -309,9 +314,9 @@ class TestTransformJson:
         }
         field_types = {"is_deleted": "text", "removal_type": "text", "author": "text", "subreddit": "text"}
         result = transform_json(data, "2024-01", field_types, ["is_deleted", "removal_type"])
-        # spam=True -> (True, 'reddit')
-        assert result[3] == "True"  # is_deleted as text
-        assert result[4] == "reddit"  # removal_type as text
+        # [dataset, id, is_deleted, removal_type] — spam=True -> (True, 'reddit').
+        assert result[2] == "True"  # is_deleted as text
+        assert result[3] == "reddit"  # removal_type as text
 
 
 # ============================================================================

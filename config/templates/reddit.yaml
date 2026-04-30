@@ -68,10 +68,14 @@ sr_buckets: 256
 # Must match MANDATORY_FIELDS in platforms/reddit/parser.py (plus 'dataset' which the
 # parser prepends explicitly) — listing the same field here AND in `fields` below
 # produces a duplicate column in the CSV header that breaks PG COPY.
+#
+# `retrieved_utc` is intentionally NOT mandatory: it goes in `fields:` per
+# data_type instead, so the DB column stays nullable. Pre-2010 Arctic Shift
+# dumps lack retrieval timestamps; forcing NOT NULL there causes COPY to
+# reject every row.
 mandatory_fields:
   - dataset
   - id
-  - retrieved_utc
 
 # Primary key column (used for deduplication, ON CONFLICT, and table constraints)
 primary_key: id
@@ -140,7 +144,11 @@ field_types:
 # Mandatory fields (always included, not listed here):
 #   - dataset: derived from filename (e.g., RS_2023-01 -> "2023-01")
 #   - id: Reddit's unique identifier for the post/comment
-#   - retrieved_utc: when the data was retrieved, with format-specific fallbacks
+#
+# Auto-populated fields (parser fills these from source data with fallbacks,
+# but they are listed in `fields:` below so the DB column stays nullable):
+#   - retrieved_utc: retrieved_utc → retrieved_on → _meta.retrieved_2nd_on;
+#     null on pre-2010 Arctic Shift dumps that lack any retrieval timestamp
 #
 # Special fields with automatic handling:
 #   - is_deleted: computed via waterfall algorithm (see platforms/reddit/parser.py)
@@ -150,6 +158,7 @@ field_types:
 fields:
   submissions:
   # core
+    - retrieved_utc
     - created_utc
     - id10
     - score
@@ -182,6 +191,7 @@ fields:
 
   comments:
   # core
+    - retrieved_utc
     - created_utc
     - link_id
     - parent_id

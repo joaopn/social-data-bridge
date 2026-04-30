@@ -5,7 +5,8 @@ This module contains Reddit-specific parsing logic including:
 - Waterfall algorithm for deletion/removal detection
 - Base-36 to base-10 ID conversion
 - Old/new Reddit data format compatibility
-- Mandatory fields (dataset, id, retrieved_utc)
+- Mandatory fields (dataset, id; retrieved_utc is populated but kept nullable
+  so pre-2010 Arctic Shift dumps without retrieval timestamps can ingest)
 """
 
 import json
@@ -26,8 +27,13 @@ from ...core.parser import (
 )
 
 
-# Reddit-specific mandatory fields that are always included (not in YAML config)
-MANDATORY_FIELDS = ['id', 'retrieved_utc']
+# Reddit-specific mandatory fields that are always included (not in YAML config).
+# `retrieved_utc` is intentionally NOT here even though the parser populates it
+# via fallback logic in transform_json — listing it would force NOT NULL on the
+# DB column (via mandatory_fields → ingest.py NOT NULL rule), which breaks
+# pre-2010 Arctic Shift dumps that genuinely lack any retrieval timestamp.
+# It must stay in YAML `fields:` so the column is nullable.
+MANDATORY_FIELDS = ['id']
 MANDATORY_FIELD_TYPES = {
     'dataset': ['char', 7],
     'id': ['varchar', 7],
