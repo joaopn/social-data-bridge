@@ -27,7 +27,7 @@ from ..core.config import (
     ConfigurationError,
 )
 from ..db.postgres.ingest import (
-    ingest_csv, create_index, table_exists, table_has_pk, analyze_table,
+    ingest_csv, create_index, table_has_pk, analyze_table,
     ensure_database_exists, ensure_schema_exists, ensure_tablespaces, resolve_tablespace,
     ensure_pg_parquet,
     # Fast initial load functions

@@ -26,7 +26,7 @@ from ..core.config import (
 from ..db.postgres.ingest import (
     ensure_database_exists, ensure_schema_exists, ensure_tablespaces, resolve_tablespace,
     ensure_pg_parquet,
-    ingest_classifier_csv, table_exists, table_has_pk, infer_classifier_schema,
+    ingest_classifier_csv, table_has_pk, infer_classifier_schema,
     # Fast initial load functions
     create_fast_load_classifier_table, fast_ingest_classifier_csv,
     delete_duplicates, finalize_fast_load_table,
