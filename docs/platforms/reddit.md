@@ -28,19 +28,25 @@ Supports `.zst`, `.gz`, `.xz`, and `.tar.gz` compressed formats. Supports both f
 
 ## Mandatory Fields
 
-These fields are always included regardless of the `fields` config:
+These fields are always emitted by the parser regardless of the `fields` config and are `NOT NULL` in the database schema:
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `dataset` | char(7) | Derived from filename (e.g., `RS_2024-01` → `2024-01`) |
 | `id` | varchar(7) | Reddit's base-36 unique identifier |
-| `retrieved_utc` | integer | Unix timestamp of when data was retrieved |
 
-### Format Compatibility
+`retrieved_utc` is always emitted by the parser too (via the fallback chain below), but the DB column is **nullable** by design — see next section.
 
-The `retrieved_utc` field handles multiple Reddit dump formats:
-- **Old format**: Uses `retrieved_on` field if `retrieved_utc` is missing
-- **New format** (2023-11+): Uses `_meta.retrieved_2nd_on` when available (second retrieval is more reliable)
+### retrieved_utc Format Compatibility
+
+The parser sets `retrieved_utc` from multiple sources, in this priority:
+
+1. **Modern format**: uses `retrieved_utc` directly
+2. **Old format**: falls back to `retrieved_on` if `retrieved_utc` is missing
+3. **New format** (2023-11+): uses `_meta.retrieved_2nd_on` when available (second retrieval is more reliable)
+4. **Pre-2010 Arctic Shift dumps**: no retrieval metadata exists — column ingests as NULL
+
+The DB column is nullable because pre-2010 dumps genuinely lack retrieval timestamps; forcing `NOT NULL` would make every row from those dumps fail COPY. Dedup logic treats NULL as smallest, so a real timestamp always wins over NULL when the same id appears across mixed-era dumps. See [database.md](../profiles/database.md#fast-initial-load-new-tables) for the full ORDER BY.
 
 ---
 

@@ -386,14 +386,21 @@ def get_ingest_query(
             WITH ({copy_options});
             """
     else:
-        # Build ORDER BY and WHERE clauses based on platform config
+        # Build ORDER BY and WHERE clauses based on platform config.
+        # COALESCE wraps `order_field` on both sides so:
+        #   existing NULL, incoming valid → -1 < value → update fires
+        #   existing valid, incoming NULL → value > -1 → no update (no downgrade)
+        #   both NULL                     → tied        → no update (idempotent)
+        #   both valid                    → standard ordering
+        # Within-batch DISTINCT ON ties are broken by ctid (insertion order on
+        # the freshly-COPYed temp table is stable per file).
         if order_field and order_field in columns_list:
-            order_by = f"{pk_column}, {order_field} DESC"
+            order_by = f"{pk_column}, COALESCE({order_field}, -1) DESC, ctid"
             where_clause = f"""
             WHERE
-                {full_table}.{order_field} < EXCLUDED.{order_field}"""
+                COALESCE({full_table}.{order_field}, -1) < COALESCE(EXCLUDED.{order_field}, -1)"""
         else:
-            order_by = pk_column
+            order_by = f"{pk_column}, ctid"
             where_clause = ""
 
         return f"""
@@ -549,6 +556,26 @@ def analyze_table(
 # Creates tables without PK for fast bulk COPY, then adds PK after all data
 # is loaded. Avoids per-row index maintenance during ingestion.
 
+def _build_dedup_order_by(
+    pk_column: str,
+    order_column: Optional[str],
+    secondary_order_columns: Optional[List[str]],
+) -> str:
+    """Build the ORDER BY clause used by delete_duplicates' window function.
+
+    Extracted so unit tests can pin the exact ordering without mocking a DB.
+    The clause always partitions by pk_column and ends with `ctid` so ties
+    are broken deterministically by physical insertion order.
+    """
+    parts = [pk_column]
+    if order_column:
+        parts.append(f"COALESCE({order_column}, -1) DESC")
+    for col in (secondary_order_columns or []):
+        parts.append(f"{col} DESC")
+    parts.append("ctid")
+    return ", ".join(parts)
+
+
 def delete_duplicates(
     table: str,
     schema: str,
@@ -558,13 +585,21 @@ def delete_duplicates(
     user: str = 'postgres',
     password: str = None,
     pk_column: str = None,
-    order_column: Optional[str] = None
+    order_column: Optional[str] = None,
+    secondary_order_columns: Optional[List[str]] = None,
 ) -> int:
     """
     Delete duplicate rows keeping the best one per primary key.
 
     Uses ctid + ROW_NUMBER() window function. No temporary index needed -
     PostgreSQL's external merge sort handles this efficiently for rare duplicates.
+
+    The ORDER BY is built so the result is deterministic across runs and
+    machines: COALESCE wraps `order_column` so NULL is treated as smallest
+    (so rows with a real timestamp beat rows where the source dump didn't
+    record one); secondary columns provide between-dataset tiebreakers; and
+    `ctid` is the final tiebreaker — physical insertion order is stable on
+    a freshly-COPYed heap before any UPDATE/VACUUM.
 
     Args:
         table: Table name
@@ -574,19 +609,18 @@ def delete_duplicates(
         port: Database port
         user: Database user
         pk_column: Primary key column name
-        order_column: Column to use for ordering duplicates (keeps highest value).
-                      If None, arbitrary row is kept per pk.
+        order_column: Column to use for primary ordering (keeps highest value;
+                      NULL is treated as smallest via COALESCE).
+        secondary_order_columns: Optional list of additional columns appended
+                      DESC to the ORDER BY for between-dataset tiebreakers
+                      (e.g. ['dataset']). All values are ctid-tiebroken at
+                      the end regardless of these.
 
     Returns:
         Number of rows deleted
     """
     full_table = f"{schema}.{table}"
-
-    # Build ORDER BY clause
-    if order_column:
-        order_by = f"{pk_column}, {order_column} DESC"
-    else:
-        order_by = pk_column
+    order_by = _build_dedup_order_by(pk_column, order_column, secondary_order_columns)
 
     query = f"""
         DELETE FROM {full_table}
@@ -1315,14 +1349,17 @@ def get_classifier_ingest_query(
             WITH ({copy_options});
             """
     else:
-        # Build ORDER BY and WHERE clauses based on config
+        # Build ORDER BY and WHERE clauses based on config.
+        # COALESCE-tuple compare matches the base-table path: NULL behaves
+        # as smallest so a real timestamp always beats NULL on the WHERE,
+        # and ctid breaks within-batch ties deterministically.
         if order_field and order_field in column_list:
-            order_by = f"{pk_column}, {order_field} DESC"
+            order_by = f"{pk_column}, COALESCE({order_field}, -1) DESC, ctid"
             where_clause = f"""
             WHERE
-                {full_table}.{order_field} < EXCLUDED.{order_field}"""
+                COALESCE({full_table}.{order_field}, -1) < COALESCE(EXCLUDED.{order_field}, -1)"""
         else:
-            order_by = pk_column
+            order_by = f"{pk_column}, ctid"
             where_clause = ""
 
         return f"""

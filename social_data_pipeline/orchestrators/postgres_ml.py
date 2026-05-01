@@ -429,8 +429,14 @@ def run_pipeline(config_dir: str = "/app/config"):
                         local_fail += 1
                         raise  # Abort fast load on any failure
                 
-                # Step 4-5: Dedup and finalize (only if platform defines a primary key)
+                # Step 4-5: Dedup and finalize (only if platform defines a primary key).
+                # Secondary tiebreakers come from platform mandatory_fields and
+                # are filtered down to columns the classifier table actually has.
                 if pk_column:
+                    secondary_cols = [
+                        c for c in platform_config.get('mandatory_fields', [])
+                        if c != pk_column and c != order_field and c in column_list
+                    ]
                     delete_duplicates(
                         table=table_name,
                         schema=db_config['schema'],
@@ -440,7 +446,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                         user=db_config['user'],
                         pk_column=pk_column,
                         order_column=order_field if order_field and order_field in column_list else None,
-                        password=password
+                        secondary_order_columns=secondary_cols,
+                        password=password,
                     )
                     finalize_fast_load_table(
                         table=table_name,

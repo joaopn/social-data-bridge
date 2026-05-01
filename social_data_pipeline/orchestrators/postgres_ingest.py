@@ -624,6 +624,13 @@ def run_pipeline(config_dir: str = "/app/config"):
                 
                 # Step 3-4: Dedup and add PK (only if platform defines a primary key)
                 if pk_column:
+                    # Pass platform mandatory_fields (minus pk + order_field) as
+                    # secondary tiebreakers so cross-dataset ties on the order
+                    # column resolve deterministically (e.g. dataset DESC).
+                    secondary_cols = [
+                        c for c in platform_config.get('mandatory_fields', [])
+                        if c != pk_column and c != order_field
+                    ]
                     delete_duplicates(
                         table=data_type,
                         schema=db_config['schema'],
@@ -633,7 +640,8 @@ def run_pipeline(config_dir: str = "/app/config"):
                         user=db_config['user'],
                         password=password,
                         pk_column=pk_column,
-                        order_column=order_field
+                        order_column=order_field,
+                        secondary_order_columns=secondary_cols,
                     )
                     finalize_fast_load_table(
                         table=data_type,

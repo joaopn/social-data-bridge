@@ -95,22 +95,23 @@ When `prefer_lingua: false`:
 
 ### Standard Ingestion (ON CONFLICT)
 
-When the table already exists:
+When the table already exists with a primary key:
 - Uses server-side `COPY` with ON CONFLICT for duplicate handling (Parquet via pg_parquet or CSV)
-- Deduplicates by `(dataset, id)` composite key
+- Conflicts on `id` (the primary key); incoming row replaces existing only when `COALESCE(EXCLUDED.retrieved_utc, -1) > COALESCE(table.retrieved_utc, -1)`
+- NULL is treated as smaller than any value, so a real timestamp always replaces a NULL — never the reverse, and same-NULL re-ingests are no-ops (idempotent)
 - `check_duplicates: true` enables ON CONFLICT DO UPDATE
 
 ### Fast Initial Load (New Tables)
 
-When a table does not exist yet, the pipeline automatically uses an optimized bulk ingestion strategy:
+When a table does not exist yet — or exists without a primary key (e.g., from an interrupted prior run) — the pipeline uses an optimized bulk ingestion strategy:
 
 1. **CREATE TABLE (no PK)** — Table created without primary key to avoid per-row index maintenance
 2. **Blind COPY** — All files loaded without duplicate checking (Parquet or CSV)
-3. **Deduplication** — In-place `ROW_NUMBER()` window function removes duplicates by `id`, keeping the row with the latest `retrieved_utc`
+3. **Deduplication** — In-place `ROW_NUMBER()` window function removes duplicates per `id`. Surviving row is chosen by `COALESCE(retrieved_utc, -1) DESC` (real timestamps win over NULL), then platform `mandatory_fields` DESC for cross-dataset tiebreakers (e.g. Reddit's `dataset DESC` keeps the later month), then `ctid` as the final tiebreaker (run-to-run / cross-machine deterministic on a freshly-COPYed heap)
 4. **PRIMARY KEY** — Adds primary key constraint in a single index build after all data is loaded
 
 > [!NOTE]
-> Faster than ON CONFLICT for initial loads with billions of rows. The speedup comes from deferring index maintenance until after all data is loaded. Once the table exists, subsequent ingestions always use ON CONFLICT.
+> Faster than ON CONFLICT for initial loads with billions of rows. The speedup comes from deferring index maintenance until after all data is loaded. Once the table has a primary key, subsequent ingestions use ON CONFLICT. Tables left without a PK by an interrupted run are auto-detected and re-routed back through the fast-load path on the next ingest.
 
 ### Indexing
 
@@ -229,11 +230,11 @@ Same algorithm as postgres_ingest, with an additional step:
 
 1. CREATE TABLE (no PK, no FK)
 2. Blind COPY of all classifier output files
-3. Deduplication
+3. Deduplication (same null-safe ORDER BY: `COALESCE(retrieved_utc, -1) DESC, dataset DESC, ctid`)
 4. Add PRIMARY KEY
 5. **Add FOREIGN KEY** (validates all IDs exist in the main table)
 
-Once the table exists, subsequent ingestions use ON CONFLICT.
+Once the table has a primary key, subsequent ingestions use ON CONFLICT. Classifier tables left without a PK by an interrupted run are auto-detected and re-routed back through fast-load on the next ingest.
 
 ### Classifier Resolution and Overrides
 

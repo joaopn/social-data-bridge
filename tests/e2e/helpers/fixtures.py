@@ -50,6 +50,36 @@ def place_reddit_fixtures(source_name="reddit", data_types=None):
         compress_to_zst(FIXTURES / "reddit" / src_name, dt_dir / dst_name)
 
 
+def place_reddit_fixture_file(fixture_name, data_type="submissions",
+                              source_name="reddit"):
+    """Place a single named Reddit fixture as a compressed .zst dump.
+
+    The fixture filename must match the platform pattern
+    `^R[SC]_\\d{4}-\\d{2}\\.ndjson$` (e.g. `RS_2006-01.ndjson`,
+    `RS_2024-04.ndjson`) — the parser keys on YYYY-MM in the filename
+    to derive `dataset`. Dedup tests use this to drop multiple
+    handcrafted fixtures into one workspace and ingest them in
+    deterministic order.
+
+    Args:
+        fixture_name: Source NDJSON filename under tests/fixtures/reddit/.
+                      Must end in .ndjson.
+        data_type: 'submissions' or 'comments'.
+        source_name: Source name (default 'reddit').
+    """
+    if not fixture_name.endswith(".ndjson"):
+        raise ValueError(
+            f"Reddit fixture must be .ndjson, got: {fixture_name}"
+        )
+    src = FIXTURES / "reddit" / fixture_name
+    if not src.exists():
+        raise FileNotFoundError(f"Fixture not found: {src}")
+    dst_name = fixture_name[:-len(".ndjson")] + ".zst"
+    dt_dir = WORKSPACE / "data" / "dumps" / source_name / data_type
+    dt_dir.mkdir(parents=True, exist_ok=True)
+    compress_to_zst(src, dt_dir / dst_name)
+
+
 def place_custom_fixtures(source_name, data_types=None):
     """Place custom platform test fixtures as uncompressed NDJSON.
 

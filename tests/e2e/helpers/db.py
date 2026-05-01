@@ -50,6 +50,27 @@ def pg_row_count(conn, schema, table):
     return pg_query_scalar(conn, f'SELECT count(*) FROM "{schema}"."{table}"')
 
 
+def pg_select_one(conn, schema, table, id_value, columns=("*",)):
+    """Return a row by id as a dict, or None if no row matches.
+
+    Used by dedup tests to assert which of several candidate rows survived
+    after fast-load + delete_duplicates. Pass columns to limit the result
+    set when you only need a few fields.
+    """
+    cols = ", ".join(columns)
+    cur = conn.cursor()
+    try:
+        cur.execute(f'SELECT {cols} FROM "{schema}"."{table}" WHERE id = %s',
+                    (id_value,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        names = [d[0] for d in cur.description]
+        return dict(zip(names, row))
+    finally:
+        cur.close()
+
+
 def pg_index_count(conn, schema):
     """Return number of indexes in a schema (excluding PK)."""
     return pg_query_scalar(
