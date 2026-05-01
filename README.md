@@ -127,50 +127,46 @@ flowchart TB
 
 ## ◾ Quick Start
 
-#### 1. Configure
+#### 1. Configure (one-time)
 
 ```bash
-python sdp.py db setup              # Configure databases (PostgreSQL, MongoDB, StarRocks — one-time)
+python sdp.py db setup              # Configure databases — PostgreSQL, MongoDB, StarRocks (with optional auth)
+python sdp.py db setup-mcp          # Read-only MCP servers for agentic clients (optional)
+python sdp.py db setup-jobs         # Query scheduler — WebUI + MCP for human-approved agent queries (optional)
 python sdp.py source add reddit     # Add a data source (interactive setup)
 ```
 
-`db setup` configures database connections, data paths, generates `.env`, `config/db/*.yaml`, `postgresql.local.conf` (with optional [PGTune](https://pgtune.leopard.in.ua/) integration), and StarRocks `fe.conf`/`be.conf` (with FE/BE memory tuning and BE alter-worker sizing for parallel BITMAP index builds). To add a database later without reconfiguring existing ones, use `db setup --add <db>` (e.g. `--add mongo`). `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
+`db setup` walks you through database selection, data paths, port choices, optional authentication, and per-DB tuning (PGTune for PostgreSQL, FE/BE memory split for StarRocks). Run `db setup --add <db>` to add a new database later without reconfiguring existing ones. `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
 
-For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). For manual configuration or to understand what each setting does, see the [Configuration Reference](docs/configuration.md).
+`setup-mcp` and `setup-jobs` are optional but recommended for agentic workflows; they layer on top of `db setup` and reuse its read-only credentials. For details on each, see the [Database Profiles (MCP)](docs/profiles/database.md#mcp-servers) and [Jobs Scheduler](docs/profiles/jobs.md) docs.
+
+For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). For full configuration details, see the [Configuration Reference](docs/configuration.md).
 
 #### 2. Run
 
 ```bash
-python sdp.py db start                        # Start configured database(s)
-python sdp.py run parse --source reddit       # Decompress dumps → parse to structured files
-python sdp.py run postgres_ingest --source reddit  # Ingest parsed files into PostgreSQL
+python sdp.py db start                          # Start databases + MCPs + jobs (whatever's configured)
+python sdp.py run parse --source reddit         # Decompress dumps → parse to structured files
+python sdp.py run lingua --source reddit        # Optional: language detection (if configured during source add)
+python sdp.py run ml --source reddit            # Optional: GPU transformer classifiers — toxicity, emotions, etc.
+python sdp.py run sr_ingest --source reddit     # Ingest parsed files into StarRocks (or postgres_ingest / mongo_ingest)
+python sdp.py run sr_ml --source reddit         # Optional: ingest classifier outputs into StarRocks (or postgres_ml)
 ```
 
-The `--source` flag selects the target source (optional when only one is configured). `source add` prints the recommended run commands for your setup. See the [TL;DR](#tldr) for the full set of profiles, or `python sdp.py source status` to check progress.
+`db start` brings up everything `db setup`/`setup-mcp`/`setup-jobs` configured — no separate command per service. The `--source` flag selects the target source (optional when only one is configured); `source add` prints the recommended run commands for your setup. Ordering rules for the optional enrichment + classifier-ingest steps: `lingua` should run before `*_ingest` so its language columns get folded into the main table; `ml` (GPU transformer classifiers) can run at any point after `parse` — its outputs are independent files; the `*_ml` profiles must run **after** their `*_ingest` counterpart, since classifier tables foreign-key into the main table. See [Classification Profiles](docs/profiles/classification.md) for tuning and the GPU requirements for `ml`. Use `python sdp.py source status` to check progress and `python sdp.py source error-logs` to inspect ingestion failures.
 
-#### 3. Analyze
+#### 3. Query
 
-With your database running, you can query through:
-- **PostgreSQL**: [psql](https://www.postgresql.org/docs/current/app-psql.html) CLI, [pgAdmin](https://www.pgadmin.org/) or [DBeaver](https://dbeaver.io/) GUI
+Three ways to read data back, ordered by ceremony:
+
+**Direct** — connect with any standard client:
+- **PostgreSQL**: [psql](https://www.postgresql.org/docs/current/app-psql.html), [pgAdmin](https://www.pgadmin.org/), or [DBeaver](https://dbeaver.io/)
 - **StarRocks**: any MySQL client (`mysql -h 127.0.0.1 -P 9030 -u root`), DBeaver, or [StarRocks Manager](https://docs.starrocks.io/)
-- **AI tools** via the built-in MCP servers (see below)
+- **MongoDB**: `mongosh`, Compass, or DBeaver
 
-**MCP servers** (optional) expose your databases to AI tools like Claude Desktop, VS Code, and Cursor:
+**Agentic discovery (read-only MCP)** — short, ad-hoc Q&A from an AI agent. The per-DB MCP servers (started automatically alongside their database) expose read-only access to agentic clients like Claude Code, Codex, and Cursor. Best for quick queries to explore the dataset and schema and help the AI agent craft complex data analysis queries. Configured via `db setup-mcp`; see [Database Profiles → MCP Servers](docs/profiles/database.md#mcp-servers).
 
-```bash
-python sdp.py db setup-mcp           # Configure MCP servers (ports, read-only mode)
-python sdp.py db start               # Starts databases + MCP servers together
-```
-
-**Database authentication** (optional) adds password-protected admin access and a read-only user (used by the MCP servers):
-
-```bash
-# Enable during initial setup — or re-run to add auth to existing databases
-python sdp.py db setup               # Select "Enable database authentication"
-```
-
-> [!NOTE]
-> By default, databases accept local, unauthenticated connections. Authentication is optional and can be enabled at any time. See the [Database Profiles](docs/profiles/database.md#authentication) docs for details.
+**Agentic execution (jobs scheduler)** — human-approved queries that produce result files. Agents call `submit_postgres_query` / `submit_starrocks_query` / `submit_mongo_query` over the jobs MCP at `http://localhost:8050/mcp`; you approve / reject / kill them in the WebUI at `http://localhost:8050/`. Long-running aggregations don't pollute the agent's context, and result files (Parquet / CSV / NDJSON) land in `JOBS_RESULT_ROOT/<job_id>/`. Configured via `db setup-jobs`; see the [Jobs Scheduler doc](docs/profiles/jobs.md).
 
 ---
 
