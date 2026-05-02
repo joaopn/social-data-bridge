@@ -7,7 +7,6 @@ Requires databases to be configured first via `sdp db setup`.
 """
 
 import sys
-from pathlib import Path
 
 try:
     import yaml
@@ -109,27 +108,21 @@ def run_questionnaire(db_setup):
     settings["mongo_auth"] = db_setup.get("mongo_auth", False)
     settings["starrocks_auth"] = db_setup.get("starrocks_auth", False)
 
+    # Carry per-DB read-only usernames from db_setup (sourced from
+    # config/db/<db>.yaml). We deliberately read the username from the YAML
+    # rather than .ro_credentials because the postgres entrypoint chowns the
+    # credentials file to the in-container postgres user, which makes it
+    # unreadable from the host once the DB has been started.
+    settings["postgres_ro_username"] = db_setup.get("postgres_ro_username")
+    settings["mongo_ro_username"] = db_setup.get("mongo_ro_username")
+    settings["starrocks_ro_username"] = db_setup.get("starrocks_ro_username")
+
     return settings
 
 
 # ============================================================================
 # Config generators
 # ============================================================================
-
-def _read_ro_username_from_credentials(env_vars, db_type):
-    """Read the RO username from .ro_credentials in the database data volume."""
-    if db_type == "postgres":
-        data_path = Path(env_vars.get("PGDATA_PATH", "./data/database/postgres"))
-    elif db_type == "starrocks":
-        data_path = Path(env_vars.get("STARROCKS_DATA_PATH", "./data/database/starrocks"))
-    else:
-        data_path = Path(env_vars.get("MONGO_DATA_PATH", "./data/database/mongo"))
-    cred_file = data_path / ".ro_credentials"
-    if not cred_file.exists():
-        return None
-    content = cred_file.read_text().strip()
-    return content.split(":", 1)[0] if ":" in content else None
-
 
 def _load_env_vars():
     """Load env vars from .env file."""
@@ -147,7 +140,6 @@ def _load_env_vars():
 def generate_mcp_yaml(settings):
     """Generate config/db/mcp.yaml content."""
     config = {}
-    env_vars = _load_env_vars()
 
     if settings.get("postgres_mcp_enabled"):
         config["postgres"] = {
@@ -155,10 +147,8 @@ def generate_mcp_yaml(settings):
             "port": settings["postgres_mcp_port"],
             "access_mode": settings["postgres_mcp_access_mode"],
         }
-        if settings.get("postgres_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "postgres")
-            if ro_user:
-                config["postgres"]["mcp_user"] = ro_user
+        if settings.get("postgres_auth") and settings.get("postgres_ro_username"):
+            config["postgres"]["mcp_user"] = settings["postgres_ro_username"]
 
     if settings.get("mongo_mcp_enabled"):
         config["mongo"] = {
@@ -166,20 +156,16 @@ def generate_mcp_yaml(settings):
             "port": settings["mongo_mcp_port"],
             "read_only": settings["mongo_mcp_read_only"],
         }
-        if settings.get("mongo_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "mongo")
-            if ro_user:
-                config["mongo"]["mcp_user"] = ro_user
+        if settings.get("mongo_auth") and settings.get("mongo_ro_username"):
+            config["mongo"]["mcp_user"] = settings["mongo_ro_username"]
 
     if settings.get("starrocks_mcp_enabled"):
         config["starrocks"] = {
             "enabled": True,
             "port": settings["starrocks_mcp_port"],
         }
-        if settings.get("starrocks_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "starrocks")
-            if ro_user:
-                config["starrocks"]["mcp_user"] = ro_user
+        if settings.get("starrocks_auth") and settings.get("starrocks_ro_username"):
+            config["starrocks"]["mcp_user"] = settings["starrocks_ro_username"]
 
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
@@ -247,25 +233,21 @@ def main():
         print("  Error: No databases configured. Run first: python sdp.py db setup")
         sys.exit(1)
 
-    # Check that RO credentials exist when auth is enabled
-    env_vars = _load_env_vars()
+    # Check that RO usernames are present when auth is enabled. The username
+    # lives in config/db/<db>.yaml (host-readable); the password lives in
+    # .ro_credentials inside the DB data volume (which postgres chowns to its
+    # in-container user, so we deliberately don't try to read it from here).
     has_auth = db_setup.get("postgres_auth") or db_setup.get("mongo_auth") or db_setup.get("starrocks_auth")
     if has_auth:
         missing = []
-        if db_setup.get("postgres_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "postgres")
-            if not ro_user:
-                missing.append("PostgreSQL")
-        if db_setup.get("mongo_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "mongo")
-            if not ro_user:
-                missing.append("MongoDB")
-        if db_setup.get("starrocks_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "starrocks")
-            if not ro_user:
-                missing.append("StarRocks")
+        if db_setup.get("postgres_auth") and not db_setup.get("postgres_ro_username"):
+            missing.append("PostgreSQL")
+        if db_setup.get("mongo_auth") and not db_setup.get("mongo_ro_username"):
+            missing.append("MongoDB")
+        if db_setup.get("starrocks_auth") and not db_setup.get("starrocks_ro_username"):
+            missing.append("StarRocks")
         if missing:
-            print(f"  Error: No read-only user credentials found for: {', '.join(missing)}")
+            print(f"  Error: No read-only user configured for: {', '.join(missing)}")
             print("  MCP servers require a read-only database user.")
             print("  Re-run: python sdp.py db setup  (enable authentication with a read-only user)")
             sys.exit(1)
@@ -291,28 +273,21 @@ def main():
     print()
     write_files(files_to_write)
 
-    # Update .env with MCP settings (read RO username from credentials, not hardcoded)
     env_updates = {}
     if settings.get("postgres_mcp_enabled"):
         env_updates["POSTGRES_MCP_PORT"] = str(settings["postgres_mcp_port"])
         env_updates["POSTGRES_MCP_ACCESS_MODE"] = settings["postgres_mcp_access_mode"]
-        if settings.get("postgres_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "postgres")
-            if ro_user:
-                env_updates["POSTGRES_MCP_USER"] = ro_user
+        if settings.get("postgres_auth") and settings.get("postgres_ro_username"):
+            env_updates["POSTGRES_MCP_USER"] = settings["postgres_ro_username"]
     if settings.get("mongo_mcp_enabled"):
         env_updates["MONGO_MCP_PORT"] = str(settings["mongo_mcp_port"])
         env_updates["MONGO_MCP_READ_ONLY"] = str(settings["mongo_mcp_read_only"]).lower()
-        if settings.get("mongo_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "mongo")
-            if ro_user:
-                env_updates["MONGO_MCP_USER"] = ro_user
+        if settings.get("mongo_auth") and settings.get("mongo_ro_username"):
+            env_updates["MONGO_MCP_USER"] = settings["mongo_ro_username"]
     if settings.get("starrocks_mcp_enabled"):
         env_updates["STARROCKS_MCP_PORT"] = str(settings["starrocks_mcp_port"])
-        if settings.get("starrocks_auth"):
-            ro_user = _read_ro_username_from_credentials(env_vars, "starrocks")
-            if ro_user:
-                env_updates["STARROCKS_MCP_USER"] = ro_user
+        if settings.get("starrocks_auth") and settings.get("starrocks_ro_username"):
+            env_updates["STARROCKS_MCP_USER"] = settings["starrocks_ro_username"]
 
     if env_updates:
         update_env_file(env_updates)
@@ -348,7 +323,7 @@ def main():
         print(f"    URL: http://<host>:{sr_port}/mcp")
         print()
 
-    export_path = env_vars.get("DB_EXPORT_PATH")
+    export_path = _load_env_vars().get("DB_EXPORT_PATH")
     if export_path:
         print("  Export:")
         print(f"    Database containers mount {export_path} at /export (read-write).")

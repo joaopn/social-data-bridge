@@ -299,6 +299,7 @@ def get_source_profiles(source_name):
         "postgres_ml.yaml": "postgres_ml",
         "mongo.yaml": "mongo_ingest",
         "starrocks.yaml": "sr_ingest",
+        "sr_ml.yaml": "sr_ml",
     }
 
     profiles = []
@@ -328,6 +329,8 @@ def load_db_setup():
                 result["tablespaces"] = pg_config["tablespaces"]
             if pg_config.get("auth"):
                 result["postgres_auth"] = True
+            if pg_config.get("ro_username"):
+                result["postgres_ro_username"] = pg_config["ro_username"]
         except (OSError, yaml.YAMLError):
             pass
 
@@ -338,6 +341,8 @@ def load_db_setup():
             result["databases"].append("mongo")
             if mongo_config.get("auth"):
                 result["mongo_auth"] = True
+            if mongo_config.get("ro_username"):
+                result["mongo_ro_username"] = mongo_config["ro_username"]
         except (OSError, yaml.YAMLError):
             pass
 
@@ -348,6 +353,8 @@ def load_db_setup():
             result["databases"].append("starrocks")
             if sr_config.get("auth"):
                 result["starrocks_auth"] = True
+            if sr_config.get("ro_username"):
+                result["starrocks_ro_username"] = sr_config["ro_username"]
         except (OSError, yaml.YAMLError):
             pass
 
