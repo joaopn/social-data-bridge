@@ -15,6 +15,7 @@ try:
 except ImportError:  # older mcp SDK
     TransportSecuritySettings = None  # type: ignore[assignment]
 
+from .backends import BackendError, validate_submission
 from .config import JobsConfig
 from .runner import Runner
 from .store import Job, Store
@@ -83,6 +84,7 @@ def build_mcp(cfg: JobsConfig, store: Store, runner: Runner) -> FastMCP:
 
     _register_status_tool(mcp, store)
     _register_cancel_tool(mcp, store)
+    _register_list_targets(mcp, cfg)
 
     return mcp
 
@@ -324,10 +326,35 @@ def _register_cancel_tool(mcp: FastMCP, store: Store) -> None:
             return {
                 "job_id": job_id,
                 "status": phase,
-                "error": f"cannot cancel via MCP while in phase {phase!r}",
+                "error": (
+                    f"cannot cancel via MCP — job is in phase {phase!r}. "
+                    "Only 'pending' jobs can be cancelled via MCP; running "
+                    "jobs must be killed from the web UI."
+                ),
             }
         job = store.cancel_pending(job_id)
         return _job_to_status(job, phase="history")
+
+
+# ----------------------------------------------------------------------------
+# list_targets
+
+def _register_list_targets(mcp: FastMCP, cfg: JobsConfig) -> None:
+    @mcp.tool(
+        name="list_targets",
+        description=(
+            "List the configured scheduler targets and their backends. "
+            "Returns `{targets: [{name, backend}, ...]}`. Use this for "
+            "discovery instead of scraping the `submit_*` tool descriptions."
+        ),
+    )
+    def list_targets() -> dict[str, Any]:
+        return {
+            "targets": [
+                {"name": name, "backend": tgt.backend}
+                for name, tgt in sorted(cfg.targets.items())
+            ]
+        }
 
 
 # ----------------------------------------------------------------------------
@@ -371,6 +398,10 @@ def _submit(
         description=(description or "").strip(),
         status="pending",
     )
+    try:
+        validate_submission(job)
+    except BackendError as e:
+        return {"error": str(e)}
     try:
         store.submit(job)
     except OSError as e:
@@ -447,6 +478,13 @@ def _submit_mongo(
         status="pending",
     )
     try:
+        validate_submission(job)
+    except BackendError as e:
+        return {"error": str(e)}
+    csv_check = _csv_pipeline_warning(output_filename, pipeline)
+    if csv_check is not None:
+        return {"error": csv_check}
+    try:
         store.submit(job)
     except OSError as e:
         return {"error": f"failed to queue job: {e}"}
@@ -455,6 +493,59 @@ def _submit_mongo(
         job.job_id, target, resolved_db, collection,
     )
     return {"job_id": job.job_id, "status": "pending"}
+
+
+# Stages whose output *can* be a flat-scalar document for CSV. A pipeline
+# whose terminal stage is one of these is allowed through the submit-time
+# pre-check; the runner's flat-scalars guard remains the source of truth and
+# fires later if the actual output still has nested values.
+_CSV_TERMINAL_STAGES: frozenset[str] = frozenset({
+    "$project",
+    "$replaceRoot",
+    "$replaceWith",
+    "$group",
+    "$bucket",
+    "$bucketAuto",
+    "$sortByCount",
+    "$count",
+    "$facet",
+    "$unset",
+    "$addFields",  # may flatten by overwriting nested fields
+    "$set",        # alias of $addFields
+})
+
+
+def _csv_pipeline_warning(
+    output_filename: str, pipeline: list[dict]
+) -> str | None:
+    """If output is .csv, require the terminal stage to be one that *can* yield
+    flat scalars. This catches the most common foot-gun (a bare ``$limit`` /
+    ``$match`` / ``$sort`` with no projection) before it reaches the runner.
+    Returns an error string for ``{"error": ...}``, or None to accept.
+    """
+    if not output_filename.lower().endswith(".csv"):
+        return None
+    if not pipeline:
+        return (
+            "CSV output requires a terminal stage that flattens the document "
+            "(e.g. $project). Pipeline is empty — use .ndjson, or add a "
+            "$project stage."
+        )
+    last = pipeline[-1]
+    if not isinstance(last, dict) or not last:
+        return (
+            "CSV output requires a terminal stage that flattens the document "
+            "(e.g. $project). Last stage is malformed — use .ndjson, or add "
+            "a $project stage."
+        )
+    last_name = next(iter(last))
+    if last_name not in _CSV_TERMINAL_STAGES:
+        return (
+            f"CSV output requires a terminal stage that flattens the "
+            f"document (e.g. $project). Got {last_name!r} — use .ndjson, or "
+            "add a $project stage at the end of the pipeline."
+        )
+    return None
 
 
 def _job_to_status(job: Job, *, phase: str) -> dict[str, Any]:

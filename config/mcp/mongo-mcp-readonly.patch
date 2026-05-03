@@ -1,0 +1,49 @@
+--- a/src/schemas/call.ts
++++ b/src/schemas/call.ts
+@@ -177,7 +177,7 @@
+ function checkReadOnlyMode(operation: string, isReadOnlyMode: boolean): void {
+   if (isReadOnlyMode && WRITE_OPERATIONS.includes(operation)) {
+     throw new Error(
+-      `ReadonlyError: Operation '${operation}' is not allowed in read-only mode`,
++      `ReadonlyError: Operation '${operation}' is not allowed in read-only mode (started with --read-only or MCP_MONGODB_READONLY=true)`,
+     );
+   }
+ }
+--- a/src/schemas/tools.ts
++++ b/src/schemas/tools.ts
+@@ -1,6 +1,12 @@
+ import type { ListToolsRequest } from "@modelcontextprotocol/sdk/types.js";
+ import type { Db, MongoClient } from "mongodb";
+ 
++// Operations that mutate data. Hidden from the tool list when the server is
++// running in read-only mode so agents don't waste a call on something the
++// server will refuse anyway. Refusal in checkReadOnlyMode() (call.ts) remains
++// in place as defense-in-depth.
++const WRITE_TOOL_NAMES = new Set(["insert", "update", "createIndex"]);
++
+ export async function handleListToolsRequest({
+   request,
+   client,
+@@ -12,8 +18,7 @@
+   db: Db;
+   isReadOnlyMode: boolean;
+ }) {
+-  return {
+-    tools: [
++  const allTools = [
+       {
+         name: "query",
+         description:
+@@ -369,6 +374,10 @@
+           },
+         },
+       },
+-    ],
+-  };
++    ];
++
++  const tools = isReadOnlyMode
++    ? allTools.filter((t) => !WRITE_TOOL_NAMES.has(t.name))
++    : allTools;
++  return { tools };
+ }

@@ -41,3 +41,13 @@ _fastapi.HTTPException = type("HTTPException", (Exception,), {
 _fastapi.Request = MagicMock
 sys.modules.setdefault("fastapi", _fastapi)
 sys.modules.setdefault("fastapi.responses", MagicMock())
+
+# mcp SDK is imported by jobs/mcp_tools.py for tool registration. Tests that
+# need real registration behavior must run inside the jobs container; the
+# stubs here only let pure-helper tests (like the CSV pre-check) import the
+# module without dragging in the SDK.
+_mcp = MagicMock()
+sys.modules.setdefault("mcp", _mcp)
+sys.modules.setdefault("mcp.server", MagicMock())
+sys.modules.setdefault("mcp.server.fastmcp", MagicMock())
+sys.modules.setdefault("mcp.server.transport_security", MagicMock())
