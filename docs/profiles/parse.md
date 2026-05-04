@@ -5,7 +5,7 @@ The parse profile decompresses compressed data dumps (`.zst`, `.gz`, `.xz`, `.ta
 ## Running
 
 ```bash
-python sdp.py run parse [--source <name>] [--filter <pattern>]
+python sdp.py run parse [--source <name>] [--filter <pattern>] [--skip-lingua-files]
 ```
 
 > [!NOTE]
@@ -109,6 +109,18 @@ Output format is controlled by `file_format` in `platform.yaml` (default: `parqu
 - Skips compressed files that already have a corresponding JSON file in `EXTRACTED_PATH/<source>/`
 - Skips JSON files that already have a corresponding output file (`.parquet` or `.csv`) in `PARSED_PATH/<source>/`
 - To reprocess: delete the output file (or JSON) file
+
+### `--skip-lingua-files` (parse → lingua workflows)
+
+Pass `--skip-lingua-files` to add a third skip signal: parse will skip any compressed/extracted/parquet input file whose ID already has a lingua output at `OUTPUT_PATH/<source>/lingua/<data_type>/<id>_lingua.{csv,parquet}`.
+
+```bash
+python sdp.py run parse --source reddit --skip-lingua-files
+```
+
+Use case: in a `parse → lingua` pipeline, the parsed file is only an intermediate — once lingua has consumed it, you can delete `EXTRACTED_PATH/<source>/<data_type>/<id>` and `PARSED_PATH/<source>/<data_type>/<id>.{csv,parquet}` to reclaim disk. Without the flag, parse would re-extract and re-parse those files on the next run (since both signals are now absent). With the flag, parse uses the surviving lingua output as proof that the file was already processed and leaves it alone.
+
+The lingua suffix is hardcoded as `_lingua` (the project default). The flag composes with `--filter` and is rejected outside the parse profile.
 
 ## Watch Mode
 

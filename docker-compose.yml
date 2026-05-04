@@ -49,6 +49,7 @@ services:
       - PLATFORM=${PLATFORM:-reddit}
       - SOURCE=${SOURCE:-}
       - FILE_FILTER=${FILE_FILTER:-}
+      - SKIP_LINGUA_FILES=${SKIP_LINGUA_FILES:-}
       - PYTHONUNBUFFERED=1
 
   # ==========================================================================

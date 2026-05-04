@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 from social_data_pipeline.orchestrators.parse import (
+    _detect_lingua_done,
     detect_dump_files,
     detect_json_files,
     detect_parsed_files,
@@ -224,3 +225,42 @@ class TestGetFileIdentifier:
         # strip_compression_extension: "data.csv.gz" -> "data.csv"
         # then .csv is stripped -> "data"
         assert get_file_identifier("/path/to/data.csv.gz") == "data"
+
+
+# ============================================================================
+# _detect_lingua_done
+# ============================================================================
+
+
+class TestDetectLinguaDone:
+    def test_finds_lingua_outputs(self, tmp_path):
+        (tmp_path / "lingua" / "submissions").mkdir(parents=True)
+        (tmp_path / "lingua" / "comments").mkdir()
+        (tmp_path / "lingua" / "submissions" / "RS_2024-01_lingua.parquet").touch()
+        (tmp_path / "lingua" / "comments" / "RC_2023-12_lingua.csv").touch()
+
+        result = _detect_lingua_done(str(tmp_path))
+        assert result == {("submissions", "RS_2024-01"), ("comments", "RC_2023-12")}
+
+    def test_ignores_files_without_lingua_suffix(self, tmp_path):
+        (tmp_path / "lingua" / "submissions").mkdir(parents=True)
+        (tmp_path / "lingua" / "submissions" / "RS_2024-01.parquet").touch()
+        (tmp_path / "lingua" / "submissions" / "RS_2024-02_lingua.parquet").touch()
+
+        result = _detect_lingua_done(str(tmp_path))
+        assert result == {("submissions", "RS_2024-02")}
+
+    def test_ignores_unsupported_extensions(self, tmp_path):
+        (tmp_path / "lingua" / "submissions").mkdir(parents=True)
+        (tmp_path / "lingua" / "submissions" / "RS_2024-01_lingua.json").touch()
+        (tmp_path / "lingua" / "submissions" / "RS_2024-02_lingua.csv").touch()
+
+        result = _detect_lingua_done(str(tmp_path))
+        assert result == {("submissions", "RS_2024-02")}
+
+    def test_returns_empty_when_lingua_dir_missing(self, tmp_path):
+        assert _detect_lingua_done(str(tmp_path)) == set()
+
+    def test_returns_empty_when_lingua_dir_empty(self, tmp_path):
+        (tmp_path / "lingua").mkdir()
+        assert _detect_lingua_done(str(tmp_path)) == set()

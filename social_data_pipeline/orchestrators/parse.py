@@ -220,6 +220,27 @@ def detect_parsed_files(parsed_dir: str, data_types: List[str], file_patterns: D
     return [(f[0], f[1], f[2]) for f in files]
 
 
+def _detect_lingua_done(output_dir: str) -> set:
+    """Return {(data_type, file_id)} for files that already have a lingua output.
+
+    Scans <output_dir>/lingua/<data_type>/<file_id>_lingua.{csv,parquet}.
+    Suffix is hardcoded to '_lingua' (the project default).
+    """
+    done = set()
+    lingua_root = Path(output_dir) / "lingua"
+    if not lingua_root.is_dir():
+        return done
+    for dt_dir in lingua_root.iterdir():
+        if not dt_dir.is_dir():
+            continue
+        for f in dt_dir.iterdir():
+            if f.suffix not in (".csv", ".parquet"):
+                continue
+            if f.stem.endswith("_lingua"):
+                done.add((dt_dir.name, f.stem[: -len("_lingua")]))
+    return done
+
+
 def get_file_identifier(filepath: str) -> str:
     """Extract identifier from filepath, stripping compression extensions.
 
@@ -278,6 +299,7 @@ def run_pipeline(config_dir: str = "/app/config"):
     dumps_dir = "/data/dumps"
     extracted_dir = "/data/extracted"
     parsed_dir = "/data/parsed"
+    output_dir = "/data/output"
 
     # Phase 1: Detect input sources
     print("\n" + "="*60)
@@ -326,6 +348,19 @@ def run_pipeline(config_dir: str = "/app/config"):
         pending_dumps = [(p, dt) for p, dt in pending_dumps if fnmatch(get_file_identifier(p), file_filter)]
         pending_json = [(p, fid, dt) for p, fid, dt in pending_json if fnmatch(fid, file_filter)]
         pending_parquet = [(p, fid, dt) for p, fid, dt in pending_parquet if fnmatch(fid, file_filter)]
+
+    # Optionally skip files that already have a lingua output (--skip-lingua-files)
+    skip_lingua = bool(os.environ.get('SKIP_LINGUA_FILES', '').strip())
+    lingua_done = set()
+    if skip_lingua:
+        lingua_done = _detect_lingua_done(output_dir)
+        print(f"[sdp] --skip-lingua-files: {len(lingua_done)} files already have lingua output")
+        pending_dumps = [(p, dt) for p, dt in pending_dumps
+                         if (dt, get_file_identifier(p)) not in lingua_done]
+        pending_json = [(p, fid, dt) for p, fid, dt in pending_json
+                        if (dt, fid) not in lingua_done]
+        pending_parquet = [(p, fid, dt) for p, fid, dt in pending_parquet
+                           if (dt, fid) not in lingua_done]
 
     print(f"[sdp] Pending: {len(pending_dumps)} compressed, {len(pending_json)} JSON", end="")
     if pending_parquet:
@@ -381,6 +416,10 @@ def run_pipeline(config_dir: str = "/app/config"):
     # Apply file filter to Phase 3 as well (list is rebuilt from re-detection)
     if file_filter:
         files_to_parse = [(p, fid, dt) for p, fid, dt in files_to_parse if fnmatch(fid, file_filter)]
+
+    if skip_lingua and lingua_done:
+        files_to_parse = [(p, fid, dt) for p, fid, dt in files_to_parse
+                          if (dt, fid) not in lingua_done]
 
     if files_to_parse:
         print("\n" + "="*60)

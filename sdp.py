@@ -3033,6 +3033,10 @@ def cmd_run(args):
         print(f"  Valid profiles: {', '.join(VALID_PROFILES)}")
         return 1
 
+    if getattr(args, "skip_lingua_files", False) and profile != "parse":
+        print(f"  Error: --skip-lingua-files only applies to the 'parse' profile (got '{profile}').")
+        return 1
+
     # Resolve source (auto-selects if only one exists)
     source = resolve_source(args.source)
     source_config = load_source_config(source)
@@ -3102,6 +3106,9 @@ def cmd_run(args):
     if args.filter:
         env_overrides["FILE_FILTER"] = args.filter
 
+    if getattr(args, "skip_lingua_files", False):
+        env_overrides["SKIP_LINGUA_FILES"] = "1"
+
     # Set env vars for docker compose
     for key, value in env_overrides.items():
         os.environ[key] = value
@@ -3115,6 +3122,8 @@ def cmd_run(args):
     print(f"  Source: {source} (platform: {platform})")
     if args.filter:
         print(f"  Filter: {args.filter}")
+    if getattr(args, "skip_lingua_files", False):
+        print("  Skip-lingua-files: enabled")
     result = docker_compose(*compose_args)
     return result.returncode
 
@@ -3241,6 +3250,11 @@ def build_parser():
     run_parser.add_argument("--build", action="store_true", help="Rebuild Docker image")
     run_parser.add_argument("--filter", "-f", dest="filter",
                             help="Filter files by pattern (fnmatch glob on file ID, e.g. '*2024*', 'RS_2024-*')")
+    run_parser.add_argument("--skip-lingua-files", action="store_true",
+                            dest="skip_lingua_files",
+                            help="Parse only: also skip files that already have a lingua output "
+                                 "(<OUTPUT_PATH>/lingua/<data_type>/<id>_lingua.{csv,parquet}). "
+                                 "Lets you delete old extracted/parsed files after lingua has consumed them.")
     run_parser.set_defaults(func=cmd_run)
 
     return parser

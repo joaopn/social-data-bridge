@@ -39,6 +39,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 | `HF_TOKEN` | HuggingFace authentication token | (none) |
 | `CLASSIFIER` | Run a single GPU classifier by name | (all enabled) |
 | `FILE_FILTER` | Only process files matching this fnmatch pattern (set by `--filter`) | (all files) |
+| `SKIP_LINGUA_FILES` | Parse profile only: skip files that already have a lingua output (set by `--skip-lingua-files`) | (unset) |
 | `PROFILE` | Internal: set automatically by docker-compose | (auto) |
 | `POSTGRES_AUTH_ENABLED` | Enable PostgreSQL authentication | (unset) |
 | `MONGO_AUTH_ENABLED` | Enable MongoDB authentication | (unset) |
@@ -62,6 +63,7 @@ All environment variables are set in the `.env` file at the project root. Docker
 > - `SOURCE` controls which source config directory is loaded. When running via `sdp.py run`, it is set automatically (auto-selects if only one source configured, or via `--source`).
 > - `CLASSIFIER` is used with the `ml` profile to run only one GPU classifier instead of all enabled classifiers.
 > - `FILE_FILTER` is set automatically by `sdp.py run --filter`. It applies fnmatch glob matching on file IDs (e.g. `*2024*`, `RS_2024-*`) to restrict which files are processed. Works with all profiles.
+> - `SKIP_LINGUA_FILES` is set automatically by `sdp.py run parse --skip-lingua-files`. When set, parse skips files for which `<OUTPUT_PATH>/lingua/<data_type>/<id>_lingua.{csv,parquet}` already exists, so users running a `parse → lingua` workflow can delete old extracted/parsed files without parse re-decompressing them on the next run. Parse profile only.
 > - `PROFILE` is set internally by docker-compose service definitions (`lingua` or `ml`). Do not set this manually.
 > - `HF_TOKEN` is optional but recommended to avoid rate limits and to access private models. Obtain one at https://huggingface.co/settings/tokens.
 > - `PARSED_PATH` and `OUTPUT_PATH` are used by `sdp.py run` for per-source container mounts and as fallback mounts for the PostgreSQL server in `docker-compose.yml`. `sdp db start` auto-generates per-source volume mounts in `docker-compose.override.yml` so the PG server can access files for all sources regardless of filesystem layout.
