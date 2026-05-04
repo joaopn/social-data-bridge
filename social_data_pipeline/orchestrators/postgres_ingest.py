@@ -27,7 +27,7 @@ from ..core.config import (
     ConfigurationError,
 )
 from ..db.postgres.ingest import (
-    ingest_csv, create_index, table_has_pk, analyze_table,
+    ingest_csv, create_index, table_exists, table_has_pk, analyze_table,
     ensure_database_exists, ensure_schema_exists, ensure_tablespaces, resolve_tablespace,
     ensure_pg_parquet,
     # Fast initial load functions
@@ -342,7 +342,53 @@ def run_pipeline(config_dir: str = "/app/config"):
         has_work = bool(pending_parsed_files)
     else:
         has_work = pending_zst_files or json_files or pending_parsed_files
-    
+
+    # Repair pre-pass: re-finalize tables left without PK by an interrupted
+    # fast-load. State recovery from DISTINCT dataset re-marks the in-flight
+    # file as processed, so an orphan with no new data would otherwise sit
+    # un-repaired (has_work=False, early-exit). dedup + ADD PRIMARY KEY are
+    # idempotent on existing rows; healthy tables short-circuit at the
+    # table_has_pk check.
+    if pk_column:
+        for data_type in data_types:
+            if not table_exists(data_type, db_config['schema'], db_config['name'],
+                                db_config['host'], db_config['port'],
+                                db_config['user'], password):
+                continue
+            if table_has_pk(data_type, db_config['schema'], db_config['name'],
+                            db_config['host'], db_config['port'],
+                            db_config['user'], password):
+                continue
+            full_table = f"{db_config['schema']}.{data_type}"
+            print(f"[sdp] Detected orphan no-PK table {full_table} — repairing")
+            secondary_cols = [
+                c for c in platform_config.get('mandatory_fields', [])
+                if c != pk_column and c != order_field
+            ]
+            delete_duplicates(
+                table=data_type,
+                schema=db_config['schema'],
+                dbname=db_config['name'],
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                password=password,
+                pk_column=pk_column,
+                order_column=order_field,
+                secondary_order_columns=secondary_cols,
+            )
+            finalize_fast_load_table(
+                table=data_type,
+                schema=db_config['schema'],
+                dbname=db_config['name'],
+                host=db_config['host'],
+                port=db_config['port'],
+                user=db_config['user'],
+                pk_column=pk_column,
+                tablespace=get_tablespace(data_type),
+                password=password,
+            )
+
     if not has_work:
         print("\n[sdp] No files to process. Exiting.")
         return
