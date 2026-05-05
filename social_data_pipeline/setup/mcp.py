@@ -7,6 +7,7 @@ Requires databases to be configured first via `sdp db setup`.
 """
 
 import sys
+from pathlib import Path
 
 try:
     import yaml
@@ -19,6 +20,32 @@ from social_data_pipeline.setup.utils import (
     ask_int, ask_bool,
     section_header, write_files, update_env_file, load_db_setup,
 )
+
+
+# (db_name, auth flag in db_setup, ro-username flag in db_setup, env var, default).
+# Single source of truth for "where does each DB's .ro_credentials live."
+_RO_CRED_LOOKUP = (
+    ("postgres",  "postgres_auth",  "postgres_ro_username",  "PGDATA_PATH",      "./data/database/postgres"),
+    ("mongo",     "mongo_auth",     "mongo_ro_username",     "MONGO_DATA_PATH",  "./data/database/mongo"),
+    ("starrocks", "starrocks_auth", "starrocks_ro_username", "STARROCKS_DATA_PATH", "./data/database/starrocks"),
+)
+
+
+def _missing_ro_cred_files(db_setup, env_vars):
+    """Return [(db_name, expected_path), ...] for every auth+RO-user DB
+    whose `.ro_credentials` file is absent on disk."""
+    missing = []
+    for db, auth_key, user_key, env_key, default in _RO_CRED_LOOKUP:
+        if not db_setup.get(auth_key) or not db_setup.get(user_key):
+            continue
+        data_path_str = env_vars.get(env_key, default)
+        data_path = Path(data_path_str)
+        if not data_path.is_absolute():
+            data_path = ROOT / data_path
+        cred_file = data_path / ".ro_credentials"
+        if not cred_file.exists():
+            missing.append((db, str(cred_file)))
+    return missing
 
 
 # ============================================================================
@@ -236,17 +263,32 @@ def main():
     # .ro_credentials inside the DB data volume (host-owned, password-only).
     has_auth = db_setup.get("postgres_auth") or db_setup.get("mongo_auth") or db_setup.get("starrocks_auth")
     if has_auth:
-        missing = []
+        missing_users = []
         if db_setup.get("postgres_auth") and not db_setup.get("postgres_ro_username"):
-            missing.append("PostgreSQL")
+            missing_users.append("PostgreSQL")
         if db_setup.get("mongo_auth") and not db_setup.get("mongo_ro_username"):
-            missing.append("MongoDB")
+            missing_users.append("MongoDB")
         if db_setup.get("starrocks_auth") and not db_setup.get("starrocks_ro_username"):
-            missing.append("StarRocks")
-        if missing:
-            print(f"  Error: No read-only user configured for: {', '.join(missing)}")
+            missing_users.append("StarRocks")
+        if missing_users:
+            print(f"  Error: No read-only user configured for: {', '.join(missing_users)}")
             print("  MCP servers require a read-only database user.")
             print("  Re-run: python sdp.py db setup  (enable authentication with a read-only user)")
+            sys.exit(1)
+
+        # MCP servers also require the RO password file to exist on disk —
+        # without it the entrypoint scripts can't authenticate. Refuse to
+        # write mcp.yaml that points at a missing credential file rather
+        # than letting the operator hit a 401 at MCP boot.
+        env_vars = _load_env_vars()
+        missing_files = _missing_ro_cred_files(db_setup, env_vars)
+        if missing_files:
+            print("  Error: RO credential file(s) missing for enabled databases:")
+            for db, path in missing_files:
+                print(f"    - {db}: {path}")
+            print()
+            print("  MCP servers read these files at startup. Regenerate them with:")
+            print("    python sdp.py db recover-password --regenerate-ro")
             sys.exit(1)
 
     settings = run_questionnaire(db_setup)

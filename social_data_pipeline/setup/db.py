@@ -21,12 +21,24 @@ except ImportError:
     print("Error: PyYAML is required. Install with: pip install pyyaml")
     sys.exit(1)
 
+from social_data_pipeline.core.config import ConfigurationError
 from social_data_pipeline.setup.utils import (
     ROOT, CONFIG_DIR,
     detect_hardware, load_env,
     ask, ask_int, ask_bool, ask_choice, ask_multi_select, ask_multi_line,
     section_header, write_files,
 )
+
+
+# Map of db name → settings key that holds the data path on the host.
+# Used by both the per-DB write loop and the MCP credential precheck so
+# the symbolic db_name is the single point of truth, not three sprinkled
+# `if "pgdata_path" in settings` chains.
+DB_DATA_PATH_KEYS = {
+    "postgres": "pgdata_path",
+    "mongo": "mongo_data_path",
+    "starrocks": "starrocks_data_path",
+}
 
 
 def ask_password(label: str, tag=None) -> str:
@@ -878,26 +890,67 @@ def print_summary(settings, files_to_write):
 # Credential writing
 # ============================================================================
 
-def _write_ro_credentials(settings):
-    """Write read-only user password to database data volumes.
+def _write_ro_password_for(db_name: str, data_path, password: str) -> str:
+    """Atomically write the RO password for a single database to its data volume.
 
-    Creates .ro_credentials files (chmod 600) in the database data paths.
-    Format: single-line `{password}\\n`. The username is authoritative in
-    config/db/<db>.yaml — this file holds only the password. Called during
-    db setup when a read-only user is configured with auth enabled.
+    The file (`.ro_credentials`) is single-line `{password}\\n`, mode 0600,
+    host-owned. Atomicity: writes a sibling `.ro_credentials.tmp`, chmods it,
+    then renames over `.ro_credentials`. On any failure mid-write the `.tmp`
+    is unlinked and the original file (if any) is left intact.
+
+    Args:
+        db_name: "postgres" | "mongo" | "starrocks" — used only in error text.
+        data_path: host directory that holds (or will hold) `.ro_credentials`.
+        password: RO user password (no leading/trailing whitespace).
+
+    Returns:
+        Absolute path of the written `.ro_credentials` (string).
+
+    Raises:
+        ConfigurationError: when the file cannot be written even via the
+            docker-shell PermissionError fallback. Always cleans up the
+            temp file before raising.
     """
-    ro_password = settings["ro_password"]
-    payload = ro_password + "\n"
-    written = []
+    data_path = Path(data_path)
+    cred_file = data_path / ".ro_credentials"
+    tmp_file = data_path / ".ro_credentials.tmp"
+    payload = password + "\n"
 
-    def _write_cred_file(data_path: Path):
-        cred_file = data_path / ".ro_credentials"
-        cred_file.parent.mkdir(parents=True, exist_ok=True)
+    data_path.mkdir(parents=True, exist_ok=True)
+
+    def _atomic_host_write():
+        # Best-effort cleanup of any stale .tmp from a prior crashed write.
+        if tmp_file.exists():
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass
+        tmp_file.write_text(payload)
+        os.chmod(tmp_file, 0o600)
         try:
-            cred_file.write_text(payload)
+            os.replace(tmp_file, cred_file)
+        except OSError:
+            # Rename failed — clean up so we don't leave a half-written file.
+            try:
+                tmp_file.unlink()
+            except OSError:
+                pass
+            raise
+        # Defensive post-rename mode assertion; chmod again if filesystems
+        # silently strip mode bits on rename (rare, but cheap to enforce).
+        actual_mode = os.stat(cred_file).st_mode & 0o777
+        if actual_mode != 0o600:
             os.chmod(cred_file, 0o600)
-        except PermissionError:
-            abs_parent = cred_file.resolve().parent
+
+    try:
+        _atomic_host_write()
+    except PermissionError:
+        # Migration fallback for legacy installs where the data dir is owned
+        # by the in-container UID (pre-Commit-1 chown). Best-effort and not
+        # atomic, but only fires when the host can't write directly. After
+        # this lands, fresh installs always use the atomic host path.
+        abs_parent = cred_file.resolve().parent
+        try:
             subprocess.run(
                 ["docker", "run", "--rm", "-i",
                  "-v", f"{abs_parent}:/data",
@@ -906,15 +959,30 @@ def _write_ro_credentials(settings):
                 input=payload.encode(),
                 check=True, capture_output=True,
             )
-        written.append(str(cred_file))
+        except (OSError, subprocess.CalledProcessError) as e:
+            raise ConfigurationError(
+                f"Failed to write {cred_file} for {db_name} (host write blocked, "
+                f"docker fallback also failed): {e}"
+            ) from e
 
-    if "pgdata_path" in settings:
-        _write_cred_file(Path(settings["pgdata_path"]))
-    if "mongo_data_path" in settings:
-        _write_cred_file(Path(settings["mongo_data_path"]))
-    if "starrocks_data_path" in settings:
-        _write_cred_file(Path(settings["starrocks_data_path"]))
+    return str(cred_file)
 
+
+def _write_ro_credentials(settings):
+    """Write the RO password to every configured database's data volume.
+
+    Per-DB symmetry: this is just a loop over `DB_DATA_PATH_KEYS` that calls
+    `_write_ro_password_for` for each database whose data path is in
+    `settings`. Both the full `setup_databases` flow and the `--add` flow
+    use this so neither silently skips a DB.
+    """
+    ro_password = settings["ro_password"]
+    written = []
+    for db_name, path_key in DB_DATA_PATH_KEYS.items():
+        if path_key in settings:
+            written.append(_write_ro_password_for(
+                db_name, settings[path_key], ro_password
+            ))
     return written
 
 
@@ -929,8 +997,19 @@ def _read_existing_ro_password(existing):
     config/db/<db>.yaml. Migrates legacy `username:password` files in-place
     by rewriting them in the new password-only format on first read.
 
-    Returns the password string, or None when no readable file is present.
+    Returns the password string, or None when no readable file is present
+    (including the auth-disabled case where a missing file is normal).
+
+    Raises:
+        ConfigurationError: when `existing["auth_enabled"]` is True and a
+            cred file exists but cannot be read (`OSError` on read), or
+            cannot be parsed (empty / missing post-migration password).
+            This replaces the silent-`None` behavior on host-side failure
+            so setup-time drift is loud, not deferred to the next DB start.
     """
+    auth_on = bool(existing.get("auth_enabled"))
+    last_unreadable: tuple[Path, OSError] | None = None
+
     for path_key in ("pgdata_path", "mongo_data_path", "starrocks_data_path"):
         data_path = existing.get(path_key)
         if not data_path:
@@ -940,9 +1019,15 @@ def _read_existing_ro_password(existing):
             continue
         try:
             content = cred_file.read_text().strip()
-        except OSError:
+        except OSError as e:
+            last_unreadable = (cred_file, e)
             continue
         if not content:
+            if auth_on:
+                raise ConfigurationError(
+                    f"{cred_file} exists but is empty. Run "
+                    "'sdp db recover-password --regenerate-ro' to rewrite it."
+                )
             continue
         if ":" in content:
             # Legacy format: username:password — convert in-place.
@@ -954,8 +1039,23 @@ def _read_existing_ro_password(existing):
                 except OSError:
                     pass
                 return password
+            if auth_on:
+                raise ConfigurationError(
+                    f"{cred_file} is in legacy username:password format but "
+                    "the password segment is empty. Run "
+                    "'sdp db recover-password --regenerate-ro' to rewrite it."
+                )
             continue
         return content
+
+    if auth_on and last_unreadable is not None:
+        cred_file, err = last_unreadable
+        raise ConfigurationError(
+            f"Cannot read {cred_file} ({err}). The file should be host-owned "
+            "and mode 0600 — if it was chowned to a container UID by an old "
+            "install, run 'sudo chown $(id -u):$(id -g) <file>' or "
+            "'sdp db recover-password --regenerate-ro'."
+        )
     return None
 
 

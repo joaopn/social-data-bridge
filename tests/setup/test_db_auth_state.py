@@ -5,12 +5,18 @@ config/db/<db>.yaml. Earlier versions stored `username:password` on a single
 line; this file pins:
 
 - the new write format (password-only, mode 0600),
+- atomicity (write goes through `.tmp` + rename; rename failure leaves the
+  original file intact and the temp removed),
 - the read helper that returns just the password,
-- in-place migration from the legacy `username:password` format.
+- in-place migration from the legacy `username:password` format,
+- loud failure: when yaml says `auth_enabled=true`, an unreadable / empty /
+  malformed cred file raises `ConfigurationError` instead of silently
+  returning `None` (Commit 3).
 
 Bug class: silent drift between yaml and the file (returning the wrong
-username) and chown-induced unreadability of the host file. Migration must
-not fail loudly on legacy installs — the file is rewritten on first read.
+username), chown-induced unreadability of the host file, and partial-write
+states left behind by a crashed setup run. Migration must not fail loudly
+on legacy installs — the file is rewritten on first read.
 """
 
 from __future__ import annotations
@@ -18,9 +24,13 @@ from __future__ import annotations
 import os
 import stat
 
+import pytest
+
+from social_data_pipeline.core.config import ConfigurationError
 from social_data_pipeline.setup.db import (
     _read_existing_ro_password,
     _write_ro_credentials,
+    _write_ro_password_for,
 )
 
 
@@ -109,12 +119,12 @@ def test_read_migrates_legacy_username_password_format(tmp_path):
     assert second == "s3cret-pw"
 
 
-def test_read_skips_empty_files(tmp_path):
-    """An empty `.ro_credentials` is treated as no readable file.
+def test_read_skips_empty_files_when_auth_off(tmp_path):
+    """Empty `.ro_credentials` returns None when auth is not enabled.
 
-    Loud-failure for empty files is added in Commit 3. Here we just pin
-    that the function does not return a stray empty string from a truncated
-    file (which would let the caller proceed thinking it had a password).
+    The auth-off case stays silent — the operator may simply have an old
+    truncated file lying around from a prior unsetup. Loud-failure under
+    auth is exercised in `test_read_raises_on_empty_file_when_auth_on`.
     """
     cred_file = tmp_path / ".ro_credentials"
     cred_file.write_text("")
@@ -159,3 +169,176 @@ def test_write_creates_files_for_each_data_path(tmp_path):
     assert len(written) == 3
     for p in (pg_path, mongo_path, sr_path):
         assert (p / ".ro_credentials").read_text() == "shared-pw\n"
+
+
+# ── Commit 3: per-DB atomic write ──────────────────────────────────────────
+
+
+def test_write_per_db_atomic_no_tmp_left_behind(tmp_path):
+    """`_write_ro_password_for` leaves no `.tmp` after a successful write."""
+    _write_ro_password_for("postgres", tmp_path, "pw")
+
+    assert (tmp_path / ".ro_credentials").read_text() == "pw\n"
+    # Atomic step's temp file must not survive a successful write.
+    assert not (tmp_path / ".ro_credentials.tmp").exists()
+
+
+def test_write_per_db_atomic_rollback_on_rename_failure(tmp_path, monkeypatch):
+    """Rename failure mid-write: original (if any) intact, .tmp cleaned up.
+
+    Pins atomicity: the function must not leave a half-written `.tmp`
+    behind that would either confuse a future `db setup` (stale temp seen
+    as "in flight") or get picked up as the real cred file by mistake.
+    """
+    cred_file = tmp_path / ".ro_credentials"
+    tmp_file = tmp_path / ".ro_credentials.tmp"
+
+    # Pre-existing valid file that must survive the failed rename.
+    cred_file.write_text("original-pw\n")
+    os.chmod(cred_file, 0o600)
+
+    def _failing_replace(src, dst):
+        raise OSError("simulated rename failure")
+
+    monkeypatch.setattr("os.replace", _failing_replace)
+
+    with pytest.raises(OSError, match="simulated rename failure"):
+        _write_ro_password_for("postgres", tmp_path, "new-pw")
+
+    # Original file untouched.
+    assert cred_file.read_text() == "original-pw\n"
+    # Temp cleaned up — no half-written state visible to future runs.
+    assert not tmp_file.exists()
+
+
+def test_write_per_db_repairs_mode_after_rename(tmp_path, monkeypatch):
+    """Post-rename mode assertion re-applies 0600 if the FS strips it.
+
+    Some filesystems and overlays silently strip mode bits during rename.
+    The function must verify the destination's final mode and chmod again
+    if it doesn't already match — defense-in-depth, cheap to test.
+    """
+    real_replace = os.replace
+
+    def _replace_then_clobber_mode(src, dst):
+        real_replace(src, dst)
+        # Simulate a filesystem that drops the chmod.
+        os.chmod(dst, 0o644)
+
+    monkeypatch.setattr("os.replace", _replace_then_clobber_mode)
+
+    _write_ro_password_for("postgres", tmp_path, "pw")
+
+    cred_file = tmp_path / ".ro_credentials"
+    mode = stat.S_IMODE(os.stat(cred_file).st_mode)
+    assert mode == 0o600
+
+
+def test_write_per_db_cleans_stale_tmp(tmp_path):
+    """A stale `.ro_credentials.tmp` from a crashed prior run is removed.
+
+    Pins that the function does not refuse / fail when an orphan `.tmp` is
+    sitting in the data dir from a prior crash — it overwrites it as part
+    of the new atomic write.
+    """
+    stale = tmp_path / ".ro_credentials.tmp"
+    stale.write_text("garbage from a crashed run\n")
+
+    _write_ro_password_for("postgres", tmp_path, "pw")
+
+    assert (tmp_path / ".ro_credentials").read_text() == "pw\n"
+    assert not stale.exists()
+
+
+# ── Commit 3: read raises loud under auth ──────────────────────────────────
+
+
+def test_read_raises_on_empty_file_when_auth_on(tmp_path):
+    """Empty `.ro_credentials` raises `ConfigurationError` under auth.
+
+    Bug class: silent-None on read let setup proceed with auth_enabled=True
+    but never re-write the file, leaving the entrypoints to fail at boot.
+    Now it fails at setup time with a fix hint.
+    """
+    cred_file = tmp_path / ".ro_credentials"
+    cred_file.write_text("")
+
+    with pytest.raises(ConfigurationError, match="empty"):
+        _read_existing_ro_password({
+            "auth_enabled": True,
+            "pgdata_path": str(tmp_path),
+        })
+
+
+def test_read_raises_on_oserror_when_auth_on(tmp_path, monkeypatch):
+    """Unreadable `.ro_credentials` raises `ConfigurationError` under auth.
+
+    Simulates the chown-trap class of failures: file exists but the host
+    cannot read it (permission, IO error). Under auth the read MUST fail
+    loudly so the operator can run `recover-password --regenerate-ro`
+    instead of silently proceeding with no creds.
+    """
+    cred_file = tmp_path / ".ro_credentials"
+    cred_file.write_text("real-pw\n")
+
+    real_read = type(cred_file).read_text
+
+    def _failing_read(self, *args, **kwargs):
+        if self == cred_file:
+            raise PermissionError("simulated chown trap")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr("pathlib.Path.read_text", _failing_read)
+
+    with pytest.raises(ConfigurationError, match="Cannot read"):
+        _read_existing_ro_password({
+            "auth_enabled": True,
+            "pgdata_path": str(tmp_path),
+        })
+
+
+def test_read_silent_none_on_oserror_when_auth_off(tmp_path, monkeypatch):
+    """Same OSError, but auth disabled → silent None (legacy / pre-auth)."""
+    cred_file = tmp_path / ".ro_credentials"
+    cred_file.write_text("real-pw\n")
+
+    real_read = type(cred_file).read_text
+
+    def _failing_read(self, *args, **kwargs):
+        if self == cred_file:
+            raise PermissionError("simulated chown trap")
+        return real_read(self, *args, **kwargs)
+
+    monkeypatch.setattr("pathlib.Path.read_text", _failing_read)
+
+    # No auth_enabled flag → silent skip path. The function neither raises
+    # nor returns garbage; the operator just doesn't get a password.
+    result = _read_existing_ro_password({"pgdata_path": str(tmp_path)})
+    assert result is None
+
+
+def test_read_raises_on_legacy_empty_password_when_auth_on(tmp_path):
+    """Legacy `username:` (no password segment) raises under auth."""
+    cred_file = tmp_path / ".ro_credentials"
+    cred_file.write_text("readonly:\n")
+
+    with pytest.raises(ConfigurationError, match="legacy"):
+        _read_existing_ro_password({
+            "auth_enabled": True,
+            "pgdata_path": str(tmp_path),
+        })
+
+
+def test_read_no_file_returns_none_even_with_auth_on(tmp_path):
+    """When no `.ro_credentials` exists at all, the read silently returns None.
+
+    The "no creds yet" case is legitimate during initial `db setup --add`
+    where the file will be written immediately after the read attempts to
+    seed `settings["ro_password"]` from existing creds. Loud-failure here
+    is the wrong shape; the loud-failure case is "file exists but unusable."
+    """
+    result = _read_existing_ro_password({
+        "auth_enabled": True,
+        "pgdata_path": str(tmp_path),
+    })
+    assert result is None
