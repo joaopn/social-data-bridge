@@ -495,12 +495,36 @@ def run_questionnaire(hw):
                 ro_username = ask("Read-only username", existing.get("ro_username", "readonly"), tag="db_ro_username")
                 settings["ro_username"] = ro_username
                 print()
-                if ask_bool("Auto-generate read-only password?", True, tag="db_ro_auto_password"):
-                    settings["ro_password"] = secrets.token_urlsafe(24)
-                else:
-                    settings["ro_password"] = ask_password("Read-only password", tag="db_ro_password")
+                settings["ro_password"] = _resolve_ro_password(ro_username, existing)
 
     return settings
+
+
+def _resolve_ro_password(ro_username, existing):
+    """Decide the RO password to use during full `db setup` reconfigure.
+
+    Defaults to **keeping** the existing password whenever there is one to
+    keep — the previous default (always auto-generate on every re-run)
+    silently rotated the password and broke any client with cached
+    credentials. The keep-existing prompt is only offered when the
+    username matches the prior one; a different username is a different
+    DB role and needs its own password.
+
+    Returns the chosen password string.
+    """
+    existing_ro_password = None
+    if ro_username == existing.get("ro_username"):
+        try:
+            existing_ro_password = _read_existing_ro_password(existing)
+        except ConfigurationError:
+            existing_ro_password = None
+    if existing_ro_password and ask_bool(
+        "Keep existing read-only password?", True, tag="db_ro_keep_existing"
+    ):
+        return existing_ro_password
+    if ask_bool("Auto-generate read-only password?", True, tag="db_ro_auto_password"):
+        return secrets.token_urlsafe(24)
+    return ask_password("Read-only password", tag="db_ro_password")
 
 
 # ============================================================================

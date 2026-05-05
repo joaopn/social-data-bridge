@@ -32,6 +32,7 @@ Usage:
 import argparse
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -275,6 +276,42 @@ def _set_auth_env(password):
     os.environ["POSTGRES_PASSWORD"] = password
     os.environ["MONGO_ADMIN_PASSWORD"] = password
     os.environ["STARROCKS_ROOT_PASSWORD"] = password
+
+
+_DB_DATA_PATH_ENV = {
+    "postgres": "PGDATA_PATH",
+    "mongo": "MONGO_DATA_PATH",
+    "starrocks": "STARROCKS_DATA_PATH",
+}
+
+
+def _regenerate_ro_credentials_for(target_dbs, password=None):
+    """Generate (or use given) RO password and write `.ro_credentials` to each
+    target DB's data path atomically (mode 0600). Returns the password.
+
+    Raises:
+        ConfigurationError: when a target DB's data path env var is missing
+            or empty in `.env`, or when the atomic write fails. No silent
+            fallback to a default path — drift between `.env` and the actual
+            data location must surface here, not write `.ro_credentials`
+            into the wrong directory.
+    """
+    from social_data_pipeline.core.config import ConfigurationError
+    from social_data_pipeline.setup.db import _write_ro_password_for
+
+    env = load_env()
+    new_pw = password or secrets.token_urlsafe(24)
+    for db in target_dbs:
+        env_key = _DB_DATA_PATH_ENV[db]
+        data_path = env.get(env_key)
+        if not data_path:
+            raise ConfigurationError(
+                f"Missing {env_key} in .env — cannot write .ro_credentials for {db}. "
+                f"Re-run 'sdp db setup --add {db}' to repair the .env."
+            )
+        cred_path = _write_ro_password_for(db, data_path, new_pw)
+        print(f"  Written: {cred_path} (chmod 600)")
+    return new_pw
 
 
 # ============================================================================
@@ -1654,12 +1691,20 @@ def cmd_db_unsetup(args):
 # ============================================================================
 
 def cmd_db_recover_password(args):
-    """Reset database admin password by temporarily using trust auth."""
+    """Reset database admin password by temporarily using trust auth.
+
+    With `--regenerate-ro`, also writes a fresh `.ro_credentials` per DB
+    before each branch's final restart. The DB entrypoint syncs the RO
+    user from that file on startup, so the new RO password takes effect
+    on the same restart cycle that re-applies admin auth.
+    """
     env = load_env()
 
-    if not _is_auth_enabled():
+    if not _needs_admin_password():
         print("\n  Authentication is not enabled. Nothing to recover.\n")
         return 0
+
+    regenerate_ro = bool(getattr(args, "regenerate_ro", False))
 
     print()
     print("  Social Data Pipeline - Password Recovery")
@@ -1667,6 +1712,8 @@ def cmd_db_recover_password(args):
     print()
     print("  This will temporarily restart PostgreSQL with trust auth,")
     print("  set a new admin password, and restore scram-sha-256 auth.")
+    if regenerate_ro:
+        print("  --regenerate-ro: also rewriting .ro_credentials with a fresh password.")
     print()
 
     _tag = lambda t: f"[{t}] " if os.environ.get('SDP_TAGGED_MODE') else ""
@@ -1678,6 +1725,15 @@ def cmd_db_recover_password(args):
     if new_password != confirm:
         print("  Error: Passwords do not match.")
         return 1
+
+    # Set auth env up front. The PG entrypoint's auth-init block runs
+    # ALTER USER postgres WITH PASSWORD '${POSTGRES_PASSWORD}' on every
+    # start under AUTH_ENABLED=true; without this, intermediate restarts
+    # would silently set the admin password to the empty string before
+    # the explicit psql ALTER below could correct it.
+    _set_auth_env(new_password)
+
+    new_ro_password = secrets.token_urlsafe(24) if regenerate_ro else None
 
     configured = _get_configured_db_services()
 
@@ -1737,9 +1793,18 @@ def cmd_db_recover_password(args):
             shutil.copy2(pg_hba_backup, pg_hba_local)
             pg_hba_backup.unlink(missing_ok=True)
 
-            # Restart with proper auth
+            # Rewrite .ro_credentials so the entrypoint's RO sync block
+            # picks up the new password on the final restart.
+            if new_ro_password and pg_config.get("ro_username"):
+                _regenerate_ro_credentials_for(["postgres"], password=new_ro_password)
+
+            # Down + up -d (was 'restart'; mongo/sr already use this pattern)
+            # so the new POSTGRES_PASSWORD env var is applied via container
+            # recreation rather than an in-place restart that may not pick
+            # up env changes consistently.
             print("  Restoring scram-sha-256 auth and restarting...")
-            docker_compose("--profile", "postgres", "restart")
+            docker_compose("--profile", "postgres", "down", "--timeout", "30")
+            docker_compose("--profile", "postgres", "up", "-d")
             print("  PostgreSQL password updated successfully.")
 
     # --- MongoDB recovery ---
@@ -1807,6 +1872,11 @@ def cmd_db_recover_password(args):
 
             print("  MongoDB password updated successfully.")
 
+            # Rewrite .ro_credentials so the entrypoint's RO sync block
+            # picks up the new password on the restart below.
+            if new_ro_password and mongo_config.get("ro_username"):
+                _regenerate_ro_credentials_for(["mongo"], password=new_ro_password)
+
             # Restart mongo with auth
             print("  Restarting MongoDB with auth...")
             os.environ["MONGO_ADMIN_PASSWORD"] = new_password
@@ -1859,6 +1929,12 @@ def cmd_db_recover_password(args):
                 fe_conf_backup.unlink(missing_ok=True)
                 docker_compose("--profile", "starrocks", "down", "--timeout", "120")
                 return 1
+
+            # Rewrite .ro_credentials so the inline RO sync below (and the
+            # entrypoint's own sync block on the final restart) both pick up
+            # the new password.
+            if new_ro_password and sr_config.get("ro_username"):
+                _regenerate_ro_credentials_for(["starrocks"], password=new_ro_password)
 
             # Sync RO user if credentials exist. Username is authoritative
             # in config/db/starrocks.yaml; .ro_credentials holds only the password.
@@ -3270,6 +3346,12 @@ def build_parser():
     db_unsetup_jobs_p.set_defaults(func=cmd_db_unsetup_jobs)
 
     db_recover_p = db_sub.add_parser("recover-password", help="Reset database admin password")
+    db_recover_p.add_argument(
+        "--regenerate-ro", dest="regenerate_ro", action="store_true",
+        help="Also rewrite .ro_credentials with a fresh password (orthogonal "
+             "to admin recovery; combinable). Use this when .ro_credentials "
+             "is missing, lost, or known-leaked.",
+    )
     db_recover_p.set_defaults(func=cmd_db_recover_password)
 
     db_indexes_p = db_sub.add_parser("create-indexes", help="Interactively create database indexes")

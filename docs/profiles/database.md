@@ -283,6 +283,17 @@ When auth is enabled, two database users are created per database:
 
 The admin password is **never stored on disk** — it is prompted each time `sdp db start` is run with auth enabled. If forgotten, use `sdp db recover-password` to reset it. The read-only user password is auto-generated during `sdp db setup` and stored in `.ro_credentials` (chmod 600) in each database data volume.
 
+### Recovering Credentials
+
+| Scenario | Command |
+|----------|---------|
+| Lost admin password | `sdp db recover-password` |
+| Lost or known-leaked RO password | `sdp db recover-password --regenerate-ro` (also resets admin) |
+
+`recover-password --regenerate-ro` writes a fresh `.ro_credentials` for every database with auth + RO user before each branch's final restart; the database entrypoint applies the new password as part of the same restart cycle.
+
+Re-running `sdp db setup` on an existing install now defaults to **keeping** the existing RO password; the previous default (always auto-generate) silently rotated it on every re-run and broke any client with cached credentials.
+
 ### How It Works
 
 - **PostgreSQL**: `pg_hba.local.conf` uses `scram-sha-256` for remote connections and `trust` for local socket. Existing databases are migrated via temporary trust start in the entrypoint.
