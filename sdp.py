@@ -514,6 +514,67 @@ def _resolve_server_data_mounts(services):
     override_path.write_text(content)
 
 
+def _exited_services_after_up(profile_args):
+    """Return list of service names in `Exited` state after a `compose up -d`.
+
+    Belt-and-suspenders for the J2 failure shape ("up -d returns 0 on a
+    crashed container"). `up -d --wait` should already catch it, but
+    docker compose has been racy historically — this ps probe runs
+    immediately after and catches anything `--wait` missed.
+
+    Returns a list of (service_name, exit_code) tuples; empty list when
+    everything is running. Internal `docker compose ps` failure is treated
+    as "no exited services found" (we don't want a transient ps failure
+    to mask a successful `up`).
+    """
+    args = list(profile_args) + ["ps", "--all", "--format", "json"]
+    result = subprocess.run(
+        ["docker", "compose", *args],
+        cwd=ROOT, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return []
+
+    out = result.stdout.strip()
+    rows = []
+    if not out:
+        return []
+    if out.startswith("["):
+        try:
+            rows = json.loads(out)
+        except json.JSONDecodeError:
+            return []
+    else:
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    exited = []
+    for row in rows:
+        state = (row.get("State") or "").lower()
+        if state != "exited":
+            continue
+        name = row.get("Service") or row.get("Name") or "<unknown>"
+        exited.append((name, row.get("ExitCode")))
+    return exited
+
+
+def _print_exited_services(exited):
+    """Render the "[ERROR] '<svc>' exited (code=N). See: docker compose logs <svc>"
+    block. Used by both the bundled and standalone MCP startup paths."""
+    for name, code in exited:
+        code_part = f" (code={code})" if code is not None else ""
+        print(
+            f"  [ERROR] Service '{name}' exited{code_part}. "
+            f"See: docker compose logs {name}"
+        )
+
+
 def cmd_db_start(args):
     """Start configured database server(s)."""
     configured = _get_configured_db_services()
@@ -540,9 +601,17 @@ def cmd_db_start(args):
         if _is_auth_enabled():
             password = _prompt_db_password(tag="sdp_db_password")
             _set_auth_env(password)
-        # Start only the MCP profile (init container runs first via depends_on)
-        mcp_args = ["--profile", parent_db, "--profile", mcp_profile, "up", "-d"]
+        # Start only the MCP profile (init container runs first via depends_on).
+        # `--wait` blocks until services are running and (where defined) healthy;
+        # the post-launch ps probe surfaces any race-condition exits that
+        # `--wait` may have missed.
+        profile_flags = ["--profile", parent_db, "--profile", mcp_profile]
+        mcp_args = profile_flags + ["up", "-d", "--wait"]
         result = docker_compose(*mcp_args)
+        exited = _exited_services_after_up(profile_flags)
+        if exited:
+            _print_exited_services(exited)
+            return 1
         return result.returncode
 
     # jobs scheduler target
@@ -596,15 +665,22 @@ def cmd_db_start(args):
     if result.returncode != 0:
         return result.returncode
 
-    # Start MCP servers (init containers handle user creation via depends_on)
+    # Start MCP servers (init containers handle user creation via depends_on).
+    # `--wait` blocks until MCPs are running; the post-launch ps probe surfaces
+    # any race-condition exits that `--wait` may have missed (J2 failure
+    # shape: `up -d` returns 0 on a crashed container).
     if mcp_targets:
-        mcp_args = []
+        profile_flags = []
         for svc in targets:
-            mcp_args += ["--profile", svc]
+            profile_flags += ["--profile", svc]
         for mp in mcp_targets:
-            mcp_args += ["--profile", mp]
-        mcp_args += ["up", "-d"]
+            profile_flags += ["--profile", mp]
+        mcp_args = profile_flags + ["up", "-d", "--wait"]
         result = docker_compose(*mcp_args)
+        exited = _exited_services_after_up(profile_flags)
+        if exited:
+            _print_exited_services(exited)
+            return 1
         if result.returncode != 0:
             return result.returncode
 
