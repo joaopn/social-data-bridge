@@ -29,6 +29,9 @@ python sdp.py run postgres_ingest --filter "*2024*"   # Only ingest 2024 months
 > [!IMPORTANT]
 > Database servers must be running before ingestion profiles can connect. `sdp.py db start` starts all databases configured during `sdp.py db setup`. Use `sdp.py db start postgres`, `sdp.py db start mongo`, or `sdp.py db start starrocks` to start a specific one.
 
+> [!NOTE]
+> PostgreSQL and StarRocks read parsed/output files server-side via per-source bind mounts that are generated when `db start` is invoked. If you add or remove a source while a server is already running, that server's mount set is stale until you restart it with `sdp.py db stop <service> && sdp.py db start <service>`. `source add` and `source remove` warn when this happens, and `sdp.py run *_ingest` / `*_ml` fail-fast at the CLI rather than letting the orchestrator container die deep in `pg_parquet` / `FILES()`.
+
 ---
 
 ## postgres Profile (Server)

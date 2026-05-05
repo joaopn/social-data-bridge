@@ -463,6 +463,187 @@ def cmd_db_unsetup_mcp(args):
 # sdp db start / stop
 # ============================================================================
 
+def _collect_source_info():
+    """Snapshot all configured sources for mount-coherence helpers.
+
+    Returns a list of dicts ``{name, profiles, paths}`` — the input shape
+    consumed by ``setup.mount_sync.expected_source_mounts`` and
+    ``compute_mount_drift``.
+    """
+    from social_data_pipeline.setup.utils import (
+        list_sources, load_source_config, get_source_profiles,
+    )
+    out = []
+    for source in list_sources():
+        cfg = load_source_config(source) or {}
+        out.append({
+            "name": source,
+            "profiles": list(get_source_profiles(source)),
+            "paths": cfg.get("paths", {}) or {},
+        })
+    return out
+
+
+def _read_override_yaml():
+    """Parse docker-compose.override.yml; return {} if missing or unreadable."""
+    import yaml
+    override_path = ROOT / "docker-compose.override.yml"
+    if not override_path.exists():
+        return {}
+    try:
+        return yaml.safe_load(override_path.read_text()) or {}
+    except yaml.YAMLError:
+        return {}
+
+
+def _running_services():
+    """Set of compose service names currently in `running` state."""
+    result = subprocess.run(
+        ["docker", "compose", "ps", "--format", "json", "--filter", "status=running"],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    services = set()
+    if result.returncode != 0 or not result.stdout.strip():
+        return services
+    out = result.stdout.strip()
+    rows = []
+    if out.startswith("["):
+        try:
+            rows = json.loads(out)
+        except json.JSONDecodeError:
+            return services
+    else:
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    for row in rows:
+        svc = row.get("Service")
+        if svc:
+            services.add(svc)
+    return services
+
+
+def _warn_mount_drift_after_source_change():
+    """Warn the operator after `source add`/`remove` if a running PG/SR
+    container's mount set is now stale.
+
+    Compares the configured sources (post-change) to the override file. The
+    file is the closest cheap proxy for the running container's mounts —
+    `cmd_db_start` regenerates it just before `up -d`, so override =
+    container after each start. If override is now out of sync with the
+    sources, the running container is too. The fix is the existing two-step
+    `db stop && db start` of the affected service; emit it verbatim so the
+    user can copy-paste.
+    """
+    from social_data_pipeline.setup.mount_sync import compute_mount_drift
+
+    running = _running_services()
+    relevant = running & {"postgres", "starrocks"}
+    if not relevant:
+        return
+
+    override = _read_override_yaml()
+    sources_info = _collect_source_info()
+    drift = compute_mount_drift(override, sources_info, services=tuple(sorted(relevant)))
+    if not drift:
+        return
+
+    print("\n  [WARN] Mount drift: running DB container does not match the configured sources.")
+    for svc in sorted(drift):
+        d = drift[svc]
+        if d["missing"]:
+            print(f"    {svc}: missing source mount(s)")
+            for m in d["missing"]:
+                print(f"      - {m}")
+        if d["extra"]:
+            print(f"    {svc}: stale source mount(s)")
+            for m in d["extra"]:
+                print(f"      - {m}")
+        print(f"    Fix: python sdp.py db stop {svc} && python sdp.py db start {svc}")
+    print()
+
+
+def _container_mounts(service):
+    """Return the live container's Mounts list for `service`, or None.
+
+    Uses `docker compose ps -q <service>` to resolve the container ID, then
+    `docker inspect` to read its mount set. Returns None when the service
+    isn't running or the inspection fails — the caller treats that as
+    "nothing to validate" rather than an error (the user may legitimately
+    invoke `sdp run` before `db start`; compose will start the container
+    fresh with the current override).
+    """
+    ps = subprocess.run(
+        ["docker", "compose", "ps", "-q", service],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    if ps.returncode != 0:
+        return None
+    cid = ps.stdout.strip().splitlines()[0].strip() if ps.stdout.strip() else ""
+    if not cid:
+        return None
+    inspect = subprocess.run(
+        ["docker", "inspect", cid],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    if inspect.returncode != 0 or not inspect.stdout.strip():
+        return None
+    try:
+        data = json.loads(inspect.stdout)
+    except json.JSONDecodeError:
+        return None
+    if not data:
+        return None
+    return data[0].get("Mounts") or []
+
+
+def _validate_run_mounts(profile, source_name, source_paths):
+    """Fail-fast guard for `cmd_run`: PG/SR container must already mount the
+    source's parsed/output paths before we launch the ingest orchestrator.
+
+    Returns 0 on coherence (or when the target service isn't running, in
+    which case `docker compose run` will start it fresh with the current
+    override). Returns 1 with an actionable hint when the live container
+    is missing one or more expected mounts. The error names the exact
+    `db stop && db start` line that re-generates the override and restarts
+    with the new mount set.
+    """
+    from social_data_pipeline.setup.mount_sync import (
+        PROFILE_TO_SERVICE, runtime_mount_drift,
+    )
+
+    service = PROFILE_TO_SERVICE.get(profile)
+    if service is None:
+        return 0
+    if service not in _running_services():
+        return 0
+
+    actual = _container_mounts(service)
+    if actual is None:
+        return 0
+
+    missing = runtime_mount_drift(actual, source_name, source_paths or {})
+    if not missing:
+        return 0
+
+    print(
+        f"  Error: running '{service}' container is missing mount(s) for source "
+        f"'{source_name}':"
+    )
+    for dst in missing:
+        print(f"    - {dst}")
+    print(
+        "  The container was started before this source's paths were registered.\n"
+        f"  Fix: python sdp.py db stop {service} && python sdp.py db start {service}"
+    )
+    return 1
+
+
 def _resolve_server_data_mounts(services):
     """Add per-source data volume mounts for database server containers.
 
@@ -475,59 +656,39 @@ def _resolve_server_data_mounts(services):
     (e.g. /mnt/data/parsed/reddit:/data/parsed/reddit:ro), and merges them
     into docker-compose.override.yml alongside any existing tablespace/storage mounts.
     """
-    from social_data_pipeline.setup.utils import list_sources, load_source_config, get_source_profiles
+    from social_data_pipeline.setup.mount_sync import expected_source_mounts
 
-    sources = list_sources()
-    if not sources:
+    sources_info = _collect_source_info()
+    if not sources_info:
         return
 
-    # Which profiles qualify a source for each server's data mounts
-    service_profiles = {
-        "postgres": {"postgres_ingest", "postgres_ml"},
-        "starrocks": {"sr_ingest", "sr_ml"},
+    # Build the per-source mount set for every service we're starting. Shared
+    # helper so source-add/remove drift detection and override regeneration
+    # stay in lock-step.
+    service_mounts = {
+        svc: sorted(expected_source_mounts(sources_info, svc))
+        for svc in services
     }
-
-    # Collect per-source mounts, keyed by service
-    service_mounts = {svc: [] for svc in services}
-    for source in sources:
-        cfg = load_source_config(source)
-        if not cfg:
-            continue
-        source_profiles = set(get_source_profiles(source))
-        paths = cfg.get("paths", {})
-        mounts = []
-        for key, container_base in (("parsed", "/data/parsed"), ("output", "/data/output")):
-            host_path = paths.get(key, "")
-            if host_path:
-                mounts.append(f"{host_path}:{container_base}/{source}:ro")
-        if mounts:
-            for svc in services:
-                if source_profiles & service_profiles.get(svc, set()):
-                    service_mounts[svc].extend(mounts)
 
     if not any(service_mounts.values()):
         return
 
     # Read existing override, preserve setup-generated mounts (tablespaces, SR storage, jobs export)
-    import yaml
     override_path = ROOT / "docker-compose.override.yml"
+    override_data = _read_override_yaml()
     preserved = {"postgres": [], "starrocks": []}
-    if override_path.exists():
-        try:
-            data = yaml.safe_load(override_path.read_text()) or {}
-            for svc_name in preserved:
-                svc = data.get("services", {}).get(svc_name, {})
-                for vol in svc.get("volumes", []):
-                    # Keep tablespace, SR storage, and jobs export mounts.
-                    # Per-source data mounts are regenerated from scratch below.
-                    if (
-                        "/data/tablespace/" in vol
-                        or "/data/deploy/starrocks/" in vol
-                        or ":/jobs_export" in str(vol)
-                    ):
-                        preserved[svc_name].append(vol)
-        except yaml.YAMLError:
-            pass
+    for svc_name in preserved:
+        svc = (override_data.get("services") or {}).get(svc_name) or {}
+        for vol in svc.get("volumes") or []:
+            # Keep tablespace, SR storage, and jobs export mounts.
+            # Per-source data mounts are regenerated from scratch below.
+            v = str(vol)
+            if (
+                "/data/tablespace/" in v
+                or "/data/deploy/starrocks/" in v
+                or ":/jobs_export" in v
+            ):
+                preserved[svc_name].append(vol)
 
     # Build override content
     content = (
@@ -2625,6 +2786,7 @@ def cmd_source_add(args):
     """Add a new source (interactive setup)."""
     from social_data_pipeline.setup.source import main as source_main
     source_main(source_name=args.name, hf_dataset_id=getattr(args, 'hf_dataset', None))
+    _warn_mount_drift_after_source_change()
     return 0
 
 
@@ -2787,6 +2949,7 @@ def cmd_source_remove(args):
     shutil.rmtree(source_dir)
     print(f"\n  Removed config/sources/{args.name}/")
     print("  Note: Data files (dumps, csv, output) were NOT removed.\n")
+    _warn_mount_drift_after_source_change()
     return 0
 
 
@@ -3223,6 +3386,15 @@ def cmd_run(args):
             print(f"  Run 'sdp source configure {source}' to add it, "
                   f"or 'sdp source add {source}' to reconfigure profiles.")
             return 1
+
+    # Server-side mount validation: PG/SR ingest profiles read parsed/output
+    # files via bind mounts on the DB server. If `source add` happened after
+    # `db start`, the running container's mount set is stale and pg_parquet /
+    # FILES() will die with an opaque "no such file" error. Probe live
+    # container mounts and fail-fast with the recovery line instead.
+    rc = _validate_run_mounts(profile, source, (source_config or {}).get("paths", {}))
+    if rc != 0:
+        return rc
 
     # Prompt for admin password if auth enabled for the target database
     _profile_auth = {
