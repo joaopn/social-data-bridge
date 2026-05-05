@@ -195,6 +195,10 @@ services:
     mem_limit: ${MONGO_MEM_LIMIT:-0}
     restart: "no"
     stop_grace_period: 5m
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     ports:
       - "${MONGO_PORT:-27017}:27017"
     volumes:
@@ -416,6 +420,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.mongo
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     command: ["bash", "-c", "umask 0000 && exec python -m social_data_pipeline.orchestrators.mongo_ingest"]
     environment:
       - PYTHONUNBUFFERED=1

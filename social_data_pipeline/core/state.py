@@ -161,6 +161,10 @@ class PipelineState:
         """Mark a file as successfully processed."""
         if filename not in self.state["processed"]:
             self.state["processed"].append(filename)
+        self.state["failed"] = [
+            f for f in self.state["failed"]
+            if f["filename"] != filename
+        ]
         self.state["in_progress"] = None
         self._save_state()
         print(f"[sdp] Completed: {filename}")
