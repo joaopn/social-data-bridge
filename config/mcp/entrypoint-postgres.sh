@@ -12,10 +12,12 @@
 set -e
 
 if [ -n "${POSTGRES_MCP_USER:-}" ]; then
-    # Read password from credentials file in mounted data volume
+    # Read password from credentials file in mounted data volume.
+    # File format: single-line {password}\n (chmod 600). Username is
+    # authoritative in config/db/postgres.yaml, mirrored to POSTGRES_MCP_USER.
     CRED_FILE="/data/database/.ro_credentials"
     if [ -f "$CRED_FILE" ]; then
-        MCP_PASSWORD=$(cut -d: -f2- "$CRED_FILE")
+        MCP_PASSWORD=$(cat "$CRED_FILE")
     fi
 
     if [ -n "${MCP_PASSWORD:-}" ]; then

@@ -109,10 +109,8 @@ def run_questionnaire(db_setup):
     settings["starrocks_auth"] = db_setup.get("starrocks_auth", False)
 
     # Carry per-DB read-only usernames from db_setup (sourced from
-    # config/db/<db>.yaml). We deliberately read the username from the YAML
-    # rather than .ro_credentials because the postgres entrypoint chowns the
-    # credentials file to the in-container postgres user, which makes it
-    # unreadable from the host once the DB has been started.
+    # config/db/<db>.yaml). The yaml is authoritative for the username;
+    # .ro_credentials is the password store only.
     settings["postgres_ro_username"] = db_setup.get("postgres_ro_username")
     settings["mongo_ro_username"] = db_setup.get("mongo_ro_username")
     settings["starrocks_ro_username"] = db_setup.get("starrocks_ro_username")
@@ -235,8 +233,7 @@ def main():
 
     # Check that RO usernames are present when auth is enabled. The username
     # lives in config/db/<db>.yaml (host-readable); the password lives in
-    # .ro_credentials inside the DB data volume (which postgres chowns to its
-    # in-container user, so we deliberately don't try to read it from here).
+    # .ro_credentials inside the DB data volume (host-owned, password-only).
     has_auth = db_setup.get("postgres_auth") or db_setup.get("mongo_auth") or db_setup.get("starrocks_auth")
     if has_auth:
         missing = []

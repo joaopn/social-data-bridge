@@ -1784,14 +1784,15 @@ def cmd_db_recover_password(args):
                 docker_compose("--profile", "starrocks", "down", "--timeout", "120")
                 return 1
 
-            # Sync RO user if credentials exist
+            # Sync RO user if credentials exist. Username is authoritative
+            # in config/db/starrocks.yaml; .ro_credentials holds only the password.
             sr_data_path = env.get("STARROCKS_DATA_PATH", "./data/database/starrocks")
             ro_creds = Path(sr_data_path) / ".ro_credentials"
             if not ro_creds.is_absolute():
                 ro_creds = ROOT / ro_creds
-            if ro_creds.exists():
-                creds = ro_creds.read_text().strip()
-                ro_user, ro_pass = creds.split(":", 1)
+            ro_user = sr_config.get("ro_username")
+            if ro_creds.exists() and ro_user:
+                ro_pass = ro_creds.read_text().strip()
                 ro_sql = (
                     f"CREATE USER IF NOT EXISTS '{ro_user}' IDENTIFIED BY '{ro_pass}';"
                     f"ALTER USER '{ro_user}' IDENTIFIED BY '{ro_pass}';"

@@ -100,10 +100,12 @@ else
 fi
 
 # --- Create/sync read-only user from .ro_credentials ---
+# Username comes from $STARROCKS_RO_USER (mirrored from yaml via .env).
+# Password comes from .ro_credentials, which holds only the password.
 RO_CREDS_FILE="/data/starrocks/.ro_credentials"
-if [ -f "$RO_CREDS_FILE" ]; then
-    RO_USER=$(cut -d: -f1 "$RO_CREDS_FILE")
-    RO_PASS=$(cut -d: -f2- "$RO_CREDS_FILE")
+if [ -f "$RO_CREDS_FILE" ] && [ -n "${STARROCKS_RO_USER:-}" ]; then
+    RO_USER="$STARROCKS_RO_USER"
+    RO_PASS=$(cat "$RO_CREDS_FILE")
 
     echo "[sdp] Syncing read-only user: $RO_USER"
     # shellcheck disable=SC2086

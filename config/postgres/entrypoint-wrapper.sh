@@ -20,11 +20,18 @@ fi
 # --- Export directory permissions ---
 [ -d /export ] && chown -R postgres:postgres /export
 
-# --- RO credentials permissions ---
-# The credentials file is created on the host (chmod 600, host uid).
-# The initdb scripts run as the postgres user and need to read it.
+# --- RO credentials passthrough ---
+# The credentials file is created on the host (chmod 600, host uid) and stays
+# host-owned. The wrapper runs as root in the container, so it can read the
+# file via the bind mount and pass the password to downstream init scripts
+# (which run as the postgres user) via an env var. This avoids chowning the
+# file to a container UID, which would make the host unable to read or
+# refresh it on subsequent setup/recover-password runs.
 RO_CRED_FILE="/data/database/.ro_credentials"
-[ -f "$RO_CRED_FILE" ] && chown postgres:postgres "$RO_CRED_FILE"
+if [ -f "$RO_CRED_FILE" ]; then
+    SDP_RO_PASSWORD=$(cat "$RO_CRED_FILE")
+    export SDP_RO_PASSWORD
+fi
 
 # --- PostgreSQL 18 PGDATA path ---
 PGDATA=/var/lib/postgresql/18/docker
@@ -48,10 +55,10 @@ if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ]; then
 fi
 
 # --- Read-only user sync (every start) ---
-RO_CRED_FILE="/data/database/.ro_credentials"
-if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -f "$RO_CRED_FILE" ] && [ -f "$PGDATA/PG_VERSION" ]; then
-    RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
-    RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
+if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -n "${SDP_RO_PASSWORD:-}" ] \
+        && [ -n "${POSTGRES_RO_USER:-}" ] && [ -f "$PGDATA/PG_VERSION" ]; then
+    RO_USER="$POSTGRES_RO_USER"
+    RO_PWD="$SDP_RO_PASSWORD"
     echo "[CONFIG] Syncing read-only user: $RO_USER"
     RO_INIT_PORT=54321
     su postgres -c "pg_ctl start -D $PGDATA \

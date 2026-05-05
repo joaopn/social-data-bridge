@@ -228,21 +228,45 @@ def wait_mcp_alive(url, timeout=60):
 
 
 def read_ro_credentials(data_path):
-    """Read .ro_credentials from a database data directory.
+    """Read RO credentials for a database.
 
-    Format on disk is `username:password` (single line, chmod 600). Written
-    by `_write_ro_credentials` in setup/db.py during `sdp db setup` when
-    auth is enabled with a read-only user.
+    Username is authoritative in `config/db/<db>.yaml` (read here from the
+    yaml that lives at `<data_path>.parent.parent / "config" / "db" / <db>.yaml`
+    when invoked from an E2E workspace; falls back to walking up to a `config`
+    dir if a non-standard layout is used). Password is read from
+    `<data_path>/.ro_credentials` (single-line, chmod 600).
 
     Args:
         data_path: pathlib.Path to the data directory (e.g. workspace /
             "data" / "database" / "postgres").
 
     Returns:
-        (username, password) tuple.
+        (username, password) tuple. Returns ("", password) when the yaml
+        cannot be located — leaves it to the caller to assert.
     """
-    cred = (data_path / ".ro_credentials").read_text().strip()
-    user, _, pwd = cred.partition(":")
+    import yaml as _yaml
+
+    db_name = data_path.name
+    pwd = (data_path / ".ro_credentials").read_text().strip()
+
+    cur = data_path
+    yaml_path = None
+    for _ in range(6):
+        candidate = cur / "config" / "db" / f"{db_name}.yaml"
+        if candidate.exists():
+            yaml_path = candidate
+            break
+        if cur.parent == cur:
+            break
+        cur = cur.parent
+
+    user = ""
+    if yaml_path:
+        try:
+            data = _yaml.safe_load(yaml_path.read_text()) or {}
+            user = data.get("ro_username", "") or ""
+        except (OSError, _yaml.YAMLError):
+            pass
     return user, pwd
 
 

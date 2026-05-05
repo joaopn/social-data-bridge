@@ -16,10 +16,12 @@ PORT="${MCP_PORT:-9000}"
 
 # Build credentials: use credentials file if MCP user is set, otherwise root with no password
 if [ -n "${STARROCKS_MCP_USER:-}" ]; then
-    # Read password from credentials file in mounted data volume
+    # Read password from credentials file in mounted data volume.
+    # File format: single-line {password}\n (chmod 600). Username is
+    # authoritative in config/db/starrocks.yaml, mirrored to STARROCKS_MCP_USER.
     CRED_FILE="/data/starrocks/.ro_credentials"
     if [ -f "$CRED_FILE" ]; then
-        STARROCKS_MCP_PASSWORD=$(cut -d: -f2- "$CRED_FILE")
+        STARROCKS_MCP_PASSWORD=$(cat "$CRED_FILE")
     fi
 
     if [ -n "${STARROCKS_MCP_PASSWORD:-}" ]; then

@@ -879,22 +879,22 @@ def print_summary(settings, files_to_write):
 # ============================================================================
 
 def _write_ro_credentials(settings):
-    """Write read-only user credentials to database data volumes.
+    """Write read-only user password to database data volumes.
 
     Creates .ro_credentials files (chmod 600) in the database data paths.
-    Format: username:password (single line). Called during db setup when
-    a read-only user is configured with auth enabled.
+    Format: single-line `{password}\\n`. The username is authoritative in
+    config/db/<db>.yaml — this file holds only the password. Called during
+    db setup when a read-only user is configured with auth enabled.
     """
-    ro_username = settings["ro_username"]
     ro_password = settings["ro_password"]
-    credentials = f"{ro_username}:{ro_password}"
+    payload = ro_password + "\n"
     written = []
 
     def _write_cred_file(data_path: Path):
         cred_file = data_path / ".ro_credentials"
         cred_file.parent.mkdir(parents=True, exist_ok=True)
         try:
-            cred_file.write_text(credentials + "\n")
+            cred_file.write_text(payload)
             os.chmod(cred_file, 0o600)
         except PermissionError:
             abs_parent = cred_file.resolve().parent
@@ -903,7 +903,7 @@ def _write_ro_credentials(settings):
                  "-v", f"{abs_parent}:/data",
                  "alpine", "sh", "-c",
                  "cat > /data/.ro_credentials && chmod 600 /data/.ro_credentials"],
-                input=(credentials + "\n").encode(),
+                input=payload.encode(),
                 check=True, capture_output=True,
             )
         written.append(str(cred_file))
@@ -922,21 +922,41 @@ def _write_ro_credentials(settings):
 # Add a single database (--add)
 # ============================================================================
 
-def _read_existing_ro_credentials(existing):
-    """Read RO credentials from an existing database's .ro_credentials file."""
+def _read_existing_ro_password(existing):
+    """Read the RO password from an existing database's .ro_credentials file.
+
+    The file is the password store only — username is authoritative in
+    config/db/<db>.yaml. Migrates legacy `username:password` files in-place
+    by rewriting them in the new password-only format on first read.
+
+    Returns the password string, or None when no readable file is present.
+    """
     for path_key in ("pgdata_path", "mongo_data_path", "starrocks_data_path"):
         data_path = existing.get(path_key)
-        if data_path:
-            cred_file = Path(data_path) / ".ro_credentials"
-            if cred_file.exists():
+        if not data_path:
+            continue
+        cred_file = Path(data_path) / ".ro_credentials"
+        if not cred_file.exists():
+            continue
+        try:
+            content = cred_file.read_text().strip()
+        except OSError:
+            continue
+        if not content:
+            continue
+        if ":" in content:
+            # Legacy format: username:password — convert in-place.
+            _, _, password = content.partition(":")
+            if password:
                 try:
-                    content = cred_file.read_text().strip()
-                    if ":" in content:
-                        username, password = content.split(":", 1)
-                        return username, password
+                    cred_file.write_text(password + "\n")
+                    os.chmod(cred_file, 0o600)
                 except OSError:
                     pass
-    return None, None
+                return password
+            continue
+        return content
+    return None
 
 
 def _update_override_volumes(service_name, volume_lines):
@@ -1229,9 +1249,11 @@ def add_database(db_name):
     section_header("Authentication")
     if auth_already_enabled:
         settings["auth_enabled"] = True
-        ro_user, ro_pass = _read_existing_ro_credentials(existing)
+        ro_user = existing.get("ro_username")
+        ro_pass = _read_existing_ro_password(existing)
         if ro_user:
             settings["ro_username"] = ro_user
+        if ro_pass:
             settings["ro_password"] = ro_pass
 
         print("  Authentication is enabled on existing databases.")

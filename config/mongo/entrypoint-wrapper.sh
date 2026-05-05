@@ -63,10 +63,12 @@ EOJS
     fi
 
     # --- Read-only user sync (every start of existing DB) ---
+    # Username comes from $MONGO_RO_USER (mirrored from yaml via .env).
+    # Password comes from .ro_credentials, which holds only the password.
     RO_CRED_FILE="/data/mongo/.ro_credentials"
-    if [ -e "/data/db/WiredTiger" ] && [ -f "$RO_CRED_FILE" ]; then
-        RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
-        RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
+    if [ -e "/data/db/WiredTiger" ] && [ -f "$RO_CRED_FILE" ] && [ -n "${MONGO_RO_USER:-}" ]; then
+        RO_USER="$MONGO_RO_USER"
+        RO_PWD=$(cat "$RO_CRED_FILE")
         ADMIN_USER="${MONGO_ADMIN_USER:-admin}"
         ADMIN_PWD="${MONGO_INITDB_ROOT_PASSWORD}"
         echo "[CONFIG] Syncing read-only user: $RO_USER"
@@ -116,9 +118,9 @@ EOJS
     if [ ! -e "/data/db/WiredTiger" ] && [ ! -f "/data/db/.sdb_auth_initialized" ]; then
         # Write post-init scripts for RO user and marker
         mkdir -p /docker-entrypoint-initdb.d
-        if [ -f "$RO_CRED_FILE" ]; then
-            RO_USER=$(cut -d: -f1 "$RO_CRED_FILE")
-            RO_PWD=$(cut -d: -f2- "$RO_CRED_FILE")
+        if [ -f "$RO_CRED_FILE" ] && [ -n "${MONGO_RO_USER:-}" ]; then
+            RO_USER="$MONGO_RO_USER"
+            RO_PWD=$(cat "$RO_CRED_FILE")
             cat > /docker-entrypoint-initdb.d/01-sdp-ro-user.js <<EOJS
 db = db.getSiblingDB('admin');
 try {
