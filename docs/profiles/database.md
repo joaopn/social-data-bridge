@@ -32,6 +32,16 @@ python sdp.py run postgres_ingest --filter "*2024*"   # Only ingest 2024 months
 > [!NOTE]
 > PostgreSQL and StarRocks read parsed/output files server-side via per-source bind mounts that are generated when `db start` is invoked. If you add or remove a source while a server is already running, that server's mount set is stale until you restart it with `sdp.py db stop <service> && sdp.py db start <service>`. `source add` and `source remove` warn when this happens, and `sdp.py run *_ingest` / `*_ml` fail-fast at the CLI rather than letting the orchestrator container die deep in `pg_parquet` / `FILES()`.
 
+### Drift detection: `db verify`
+
+Use `sdp.py db verify` as the operator preflight: it checks every drift surface in one shot and exits non-zero on any finding. Categories covered: auth coherence (`config/db/<db>.yaml` ↔ `.env` ↔ `.ro_credentials`), credential file mode + ownership, container env / health (when running), per-source mounts in `docker-compose.override.yml`, MCP / jobs cross-references. Output modes:
+
+- default — human-readable findings list, each line names the recovery command.
+- `--json` — machine-readable for CI / scripts (the structure is stable and includes per-DB `ok` flags + a typed `findings[]` array per check).
+- `--db <name>` — restrict to one database; cross-cutting MCP / jobs findings still surface because they may name the filtered DB.
+
+Recommended usage as a pipeline preflight: `python sdp.py db verify && python sdp.py run postgres_ingest --source <name>`. The `db status` command also prints a drift section using the same checks (without container probes), but always exits 0 since it's an informational summary.
+
 ---
 
 ## postgres Profile (Server)

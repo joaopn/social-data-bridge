@@ -34,6 +34,7 @@ import json
 import os
 import secrets
 import shutil
+import stat
 import subprocess
 import sys
 from getpass import getpass
@@ -284,6 +285,61 @@ _DB_DATA_PATH_ENV = {
     "starrocks": "STARROCKS_DATA_PATH",
 }
 
+# Jobs scheduler backend names → the db name `_get_configured_db_services`
+# uses. Mongo is the odd one out: jobs config calls it "mongodb" but the
+# DB service is "mongo".
+_DB_TO_JOBS_BACKEND = {
+    "postgres": "postgres",
+    "mongo": "mongodb",
+    "starrocks": "starrocks",
+}
+
+
+def _read_sr_storage_paths():
+    """Read StarRocks extra-disk paths from config/db/starrocks.yaml.
+
+    Returns a dict ``{storage_0: host_path, storage_1: ...}`` mirroring the
+    container-side mount layout used by `db setup`. Empty dict when the SR
+    yaml is missing, malformed, or has no `storage_paths` list — callers
+    treat that as "no extra disks to clean up," not a failure.
+    """
+    sr_db_config = CONFIG_DIR / "db" / "starrocks.yaml"
+    if not sr_db_config.exists():
+        return {}
+    try:
+        import yaml
+        cfg = yaml.safe_load(sr_db_config.read_text()) or {}
+    except Exception:
+        return {}
+    paths = cfg.get("storage_paths")
+    if not isinstance(paths, list):
+        return {}
+    return {
+        f"storage_{i}": p
+        for i, p in enumerate(paths)
+        if isinstance(p, str) and p
+    }
+
+
+def _orphaned_jobs_targets_for(db_name):
+    """Names of jobs scheduler targets pointing at the DB being removed.
+
+    Used by `_unsetup_single_db` to warn before tearing down a DB whose
+    targets are still wired into the jobs config — those routes will fail
+    on the next jobs run otherwise.
+    """
+    if not _is_jobs_configured():
+        return []
+    target_backend = _DB_TO_JOBS_BACKEND.get(db_name)
+    if target_backend is None:
+        return []
+    cfg = _load_jobs_config()
+    return [
+        tname
+        for tname, spec in (cfg.get("targets") or {}).items()
+        if (spec or {}).get("backend") == target_backend
+    ]
+
 
 def _regenerate_ro_credentials_for(target_dbs, password=None):
     """Generate (or use given) RO password and write `.ro_credentials` to each
@@ -455,7 +511,11 @@ def cmd_db_unsetup_mcp(args):
         env_path.write_text("\n".join(new_lines) + "\n")
         print("  Updated:   .env")
 
-    print("\n  MCP configuration removed. Databases are not affected.\n")
+    print("\n  MCP configuration removed. Databases are not affected.")
+    # The locally built / pulled MCP images stay on disk after `compose down`
+    # — no automatic prune (would remove unrelated images on a shared host).
+    # Surface the manual cleanup line so the user knows the option exists.
+    print("  Note: MCP images remain on disk. Run 'docker image prune' to reclaim.\n")
     return 0
 
 
@@ -1149,8 +1209,249 @@ def cmd_db_status(args):
         running_n = len(list((jobs_dir / "running").glob("*.json"))) if (jobs_dir / "running").exists() else 0
         print(f"    Queue:        pending={pending_n} approved={approved_n} running={running_n}")
 
+    # Drift section (local-files only — running-container probes are reserved
+    # for `sdp db verify`, which has the matching exit-code contract).
+    drift_findings = _drift_findings(probe_containers=False)
+    if drift_findings and not _is_drift_clean(drift_findings):
+        print()
+        _print_drift_findings(drift_findings, header="Drift")
+        print("  Run 'sdp db verify' for a per-DB exit-code-aware report.")
+
     print()
     return 0
+
+
+# ============================================================================
+# sdp db verify
+# ============================================================================
+
+def _resolve_cred_state(db, env):
+    """Build the cred_file_state dict the verify module expects.
+
+    Handles the legitimate "auth not configured / data path not set" cases
+    by returning ``{exists: False, path: ""}`` — the verify rule decides
+    whether that's drift based on yaml-auth + env-auth flags. No hardcoded
+    default path: a missing env var produces ``path=""`` and the auth check
+    surfaces it as drift only when the DB actually claims auth is on.
+    """
+    state = {
+        "path": "",
+        "exists": False,
+        "mode": None,
+        "host_owned": None,
+        "readable": False,
+    }
+    env_key = _DB_DATA_PATH_ENV.get(db)
+    if not env_key:
+        return state
+    raw = (env or {}).get(env_key, "")
+    if not raw:
+        return state
+    dp = Path(raw)
+    if not dp.is_absolute():
+        dp = ROOT / dp
+    cred_path = dp / ".ro_credentials"
+    state["path"] = str(cred_path)
+    if not cred_path.exists():
+        return state
+    state["exists"] = True
+    try:
+        st = cred_path.stat()
+        state["mode"] = stat.S_IMODE(st.st_mode)
+        state["host_owned"] = st.st_uid == os.getuid()
+    except OSError:
+        state["mode"] = None
+        state["host_owned"] = None
+    try:
+        cred_path.read_text()
+        state["readable"] = True
+    except OSError:
+        state["readable"] = False
+    return state
+
+
+def _probe_container_state(service):
+    """Best-effort probe of a running DB container for `db verify`.
+
+    Returns ``None`` when the container is not running (no probe to do)
+    or when the docker calls fail (verify treats absence as "no signal,"
+    not as drift). Otherwise returns a dict with ``running`` (always True),
+    ``healthy``, and ``env_auth`` (the ``<DB>_AUTH_ENABLED`` value the
+    container itself was started with).
+    """
+    if service not in _running_services():
+        return None
+    state = {"running": True, "healthy": None, "env_auth": None}
+
+    ps = subprocess.run(
+        ["docker", "compose", "ps", "-q", service],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    cid = ""
+    if ps.returncode == 0 and ps.stdout.strip():
+        cid = ps.stdout.strip().splitlines()[0].strip()
+    if not cid:
+        return state
+
+    inspect = subprocess.run(
+        ["docker", "inspect", cid],
+        capture_output=True, text=True, cwd=ROOT,
+    )
+    if inspect.returncode != 0 or not inspect.stdout.strip():
+        return state
+    try:
+        data = json.loads(inspect.stdout)
+    except json.JSONDecodeError:
+        return state
+    if not data:
+        return state
+
+    info = data[0]
+    health = ((info.get("State") or {}).get("Health") or {}).get("Status")
+    if health:
+        state["healthy"] = health == "healthy"
+
+    env_key = f"{service.upper()}_AUTH_ENABLED"
+    cfg_env = (info.get("Config") or {}).get("Env") or []
+    for entry in cfg_env:
+        if isinstance(entry, str) and entry.startswith(env_key + "="):
+            state["env_auth"] = entry.split("=", 1)[1] == "true"
+            break
+    return state
+
+
+def _build_verify_context(*, env, probe_containers):
+    """Assemble the ctx dict that ``setup.verify.compute_drift`` consumes."""
+    configured = _get_configured_db_services()
+    db_yamls = {db: _load_db_yaml(db) for db in configured}
+    cred_states = {db: _resolve_cred_state(db, env) for db in configured}
+    sources_info = _collect_source_info()
+    override_data = _read_override_yaml()
+    mcp_config = _load_mcp_config()
+    jobs_config = _load_jobs_config() if _is_jobs_configured() else {}
+    container_states = {}
+    if probe_containers:
+        for db in configured:
+            container_states[db] = _probe_container_state(db)
+    return {
+        "env": env,
+        "configured_dbs": configured,
+        "db_yamls": db_yamls,
+        "cred_file_states": cred_states,
+        "sources_info": sources_info,
+        "override_data": override_data,
+        "mcp_config": mcp_config,
+        "jobs_config": jobs_config,
+        "container_states": container_states,
+    }
+
+
+def _drift_findings(*, probe_containers):
+    """Wrapper that loads .env + builds the ctx + runs compute_drift."""
+    from social_data_pipeline.setup.verify import compute_drift
+    env = load_env()
+    ctx = _build_verify_context(env=env, probe_containers=probe_containers)
+    return compute_drift(ctx)
+
+
+def _is_drift_clean(findings_by_name):
+    return all(not findings for findings in findings_by_name.values())
+
+
+def _print_drift_findings(findings_by_name, header="Drift"):
+    """Render findings in `db status` / `db verify` text mode.
+
+    `findings_by_name` is the dict from compute_drift. Names are db names
+    (`postgres`, `mongo`, `starrocks`) plus optional cross-cutting
+    `mcp` / `jobs` keys; rendering preserves insertion order.
+    """
+    print(f"  {header}:")
+    any_drift = False
+    for name in findings_by_name:
+        findings = findings_by_name[name]
+        if not findings:
+            continue
+        any_drift = True
+        n = len(findings)
+        print(f"    {name}: DRIFT ({n} issue{'s' if n != 1 else ''})")
+        for f in findings:
+            print(f"      [{f.category}] {f.message}")
+            print(f"        Fix: {f.fix}")
+    if not any_drift:
+        print("    All databases coherent.")
+
+
+def cmd_db_verify(args):
+    """Operator preflight: exit non-zero on any drift across config / env /
+    creds / containers / mounts / mcp / jobs.
+
+    Two output modes:
+
+    - default human text — same finding format as ``db status``'s drift
+      section, but exhaustive and exit-code-bound.
+    - ``--json`` — machine-readable for CI / scripts; structure is stable
+      across releases.
+
+    ``--db <name>`` filters to a single database (cross-cutting MCP / jobs
+    sections are still emitted because their findings can name that DB).
+    """
+    from social_data_pipeline.setup.verify import compute_drift
+
+    env = load_env()
+    configured = _get_configured_db_services()
+    if not configured:
+        msg = "No databases configured. Run: python sdp.py db setup"
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, "exit_code": 0, "message": msg, "results": {}}))
+        else:
+            print(f"\n  {msg}\n")
+        return 0
+
+    ctx = _build_verify_context(env=env, probe_containers=True)
+    findings_by_name = compute_drift(ctx)
+
+    db_filter = getattr(args, "db", None)
+    if db_filter:
+        # Keep the filtered DB plus cross-cutting checks (mcp / jobs); drop
+        # other DBs. Cross-cutting findings can mention the filtered DB,
+        # so silencing them would hide drift the user would want to see.
+        findings_by_name = {
+            name: findings for name, findings in findings_by_name.items()
+            if name == db_filter or name in ("mcp", "jobs")
+        }
+
+    clean = _is_drift_clean(findings_by_name)
+    exit_code = 0 if clean else 1
+
+    if getattr(args, "json", False):
+        payload = {
+            "ok": clean,
+            "exit_code": exit_code,
+            "results": {
+                name: {
+                    "ok": not findings,
+                    "findings": [f.to_dict() for f in findings],
+                }
+                for name, findings in findings_by_name.items()
+            },
+        }
+        print(json.dumps(payload, indent=2))
+        return exit_code
+
+    print()
+    print("  Social Data Pipeline - Database Verify")
+    print("  =====================================")
+    print()
+    _print_drift_findings(findings_by_name, header="Findings")
+    print()
+    if clean:
+        print("  OK")
+    else:
+        n_drift = sum(1 for v in findings_by_name.values() if v)
+        n_total = len(findings_by_name)
+        print(f"  Exit: 1 (drift in {n_drift} of {n_total} check group(s))")
+    print()
+    return exit_code
 
 
 def _load_classifier_suffixes():
@@ -1396,6 +1697,17 @@ def _unsetup_single_db(db_name, env):
             except Exception:
                 pass
 
+    # Read SR storage_paths (extra disks, parity with PG tablespaces) before
+    # configs are removed. The list is positional in the yaml, so we name
+    # them storage_0, storage_1, ... — matches the container path layout
+    # written to docker-compose.override.yml at setup time.
+    sr_storage_paths = _read_sr_storage_paths() if db_name == "starrocks" else {}
+
+    # Read jobs targets that point at the DB being removed (C4 — surface the
+    # orphaned target so the operator knows the jobs scheduler will start
+    # failing routes after this command lands).
+    orphaned_jobs_targets = _orphaned_jobs_targets_for(db_name)
+
     # --- Inventory ---
     print(f"  This will remove {db_label} completely:")
     print()
@@ -1421,7 +1733,20 @@ def _unsetup_single_db(db_name, env):
                 print("  Tablespace directories:")
                 for ts_name, ts_path in tablespace_paths.items():
                     print(f"    {ts_name}: {ts_path}")
+            if sr_storage_paths:
+                print("  Extra storage directories:")
+                for sp_name, sp_path in sr_storage_paths.items():
+                    print(f"    {sp_name}: {sp_path}")
             print()
+
+    if orphaned_jobs_targets:
+        print(
+            f"  [WARN] Jobs scheduler has target(s) pointing at {db_label}: "
+            f"{', '.join(orphaned_jobs_targets)}"
+        )
+        print("         These will fail at next run. After this unsetup,")
+        print("         run 'sdp db unsetup-jobs' or 'sdp db setup-jobs' to fix.")
+        print()
 
     # --- Double confirmation ---
     confirm1 = input(
@@ -1456,7 +1781,7 @@ def _unsetup_single_db(db_name, env):
         # tablespace directory itself. Can't be recursive because a parent may
         # contain sibling DB dirs (e.g. a starrocks dir) we must not touch.
         non_recursive = []
-        ts_mounts = []  # for the rmtree pass
+        ts_mounts = []  # for the rmtree pass (PG tablespaces and SR extra storage)
         if db_name == "postgres":
             for ts_name, ts_path in tablespace_paths.items():
                 ts_dir = Path(ts_path)
@@ -1470,6 +1795,21 @@ def _unsetup_single_db(db_name, env):
                     volume_args += ["-v", f"{ts_parent}:{ts_parent_mount}"]
                     non_recursive.append(ts_parent_mount)
                     ts_mounts.append((ts_name, ts_dir))
+        if db_name == "starrocks":
+            # SR extra disks: same chown / rmtree shape as PG tablespaces;
+            # mount under /tablespace/ to reuse the existing chown command.
+            for sp_name, sp_path in sr_storage_paths.items():
+                sp_dir = Path(sp_path)
+                if not sp_dir.is_absolute():
+                    sp_dir = ROOT / sp_dir
+                if sp_dir.exists():
+                    volume_args += ["-v", f"{sp_dir.resolve()}:/tablespace/{sp_name}"]
+                    recursive.append(f"/tablespace/{sp_name}")
+                    sp_parent = sp_dir.resolve().parent
+                    sp_parent_mount = f"/tsparent_{sp_name}"
+                    volume_args += ["-v", f"{sp_parent}:{sp_parent_mount}"]
+                    non_recursive.append(sp_parent_mount)
+                    ts_mounts.append((sp_name, sp_dir))
         uid_gid = f"{os.getuid()}:{os.getgid()}"
         chown_cmd = f"chown -R {uid_gid} {' '.join(recursive)}"
         if non_recursive:
@@ -1481,9 +1821,10 @@ def _unsetup_single_db(db_name, env):
         )
         print(f"  Removing {data_path}...")
         shutil.rmtree(data_path)
+        extra_label = "tablespace" if db_name == "postgres" else "extra storage"
         for ts_name, ts_dir in ts_mounts:
             if ts_dir.exists():
-                print(f"  Removing tablespace '{ts_name}' at {ts_dir}...")
+                print(f"  Removing {extra_label} '{ts_name}' at {ts_dir}...")
                 shutil.rmtree(ts_dir)
         print(f"  {db_label} data removed.")
         print()
@@ -1646,6 +1987,8 @@ def cmd_db_unsetup(args):
                 tablespace_paths.update(ts)
     except Exception:
         pass
+    # SR storage_paths via the shared helper (parity with PG tablespaces).
+    sr_storage_paths = _read_sr_storage_paths()
 
     if pgdata_path:
         pgdata = Path(pgdata_path)
@@ -1751,6 +2094,10 @@ def cmd_db_unsetup(args):
             sr_data = ROOT / sr_data
         if sr_data.exists():
             print(f"  StarRocks data directory: {sr_data_path}")
+            if sr_storage_paths:
+                print("  Extra storage directories:")
+                for sp_name, sp_path in sr_storage_paths.items():
+                    print(f"    {sp_name}: {sp_path}")
             print()
             confirm1 = input("  Delete the StarRocks data? This CANNOT be undone [y/N]: ").strip().lower()
             if confirm1 in ("y", "yes"):
@@ -1759,15 +2106,40 @@ def cmd_db_unsetup(args):
                     print()
                     print("  Fixing directory permissions...")
                     sr_parent = sr_data.resolve().parent
+                    volume_args = ["-v", f"{sr_parent}:/dbparent"]
+                    recursive = ["/dbparent"]
+                    # Extra-storage parents need non-recursive chown so we can
+                    # unlink the storage dir itself — can't recurse, they may
+                    # contain sibling data we must not touch (parity with PG
+                    # tablespace handling above).
+                    non_recursive = []
+                    sp_mounts = []
+                    for sp_name, sp_path in sr_storage_paths.items():
+                        sp_dir = Path(sp_path)
+                        if not sp_dir.is_absolute():
+                            sp_dir = ROOT / sp_dir
+                        if sp_dir.exists():
+                            volume_args += ["-v", f"{sp_dir.resolve()}:/storage/{sp_name}"]
+                            recursive.append(f"/storage/{sp_name}")
+                            sp_parent_mount = f"/spparent_{sp_name}"
+                            volume_args += ["-v", f"{sp_dir.resolve().parent}:{sp_parent_mount}"]
+                            non_recursive.append(sp_parent_mount)
+                            sp_mounts.append((sp_name, sp_dir))
                     uid_gid = f"{os.getuid()}:{os.getgid()}"
+                    chown_cmd = f"chown -R {uid_gid} {' '.join(recursive)}"
+                    if non_recursive:
+                        chown_cmd += f" && chown {uid_gid} {' '.join(non_recursive)}"
                     subprocess.run(
-                        ["docker", "run", "--rm",
-                         "-v", f"{sr_parent}:/dbparent",
-                         "starrocks/allin1-ubuntu", "chown", "-R", uid_gid, "/dbparent"],
+                        ["docker", "run", "--rm"] + volume_args +
+                        ["starrocks/allin1-ubuntu", "sh", "-c", chown_cmd],
                         cwd=ROOT,
                     )
                     print(f"  Removing {sr_data}...")
                     shutil.rmtree(sr_data)
+                    for sp_name, sp_dir in sp_mounts:
+                        if sp_dir.exists():
+                            print(f"  Removing extra storage '{sp_name}' at {sp_dir}...")
+                            shutil.rmtree(sp_dir)
                     sr_removed = True
                     print("  StarRocks data removed.")
                 else:
@@ -1835,6 +2207,8 @@ def cmd_db_unsetup(args):
             sr_data = ROOT / sr_data
         if sr_data.exists():
             data_paths["StarRocks data"] = sr_data_path
+            for sp_name, sp_path in sr_storage_paths.items():
+                data_paths[f"StarRocks {sp_name}"] = sp_path
 
     if data_paths:
         print()
@@ -3502,6 +3876,20 @@ def build_parser():
 
     db_status_p = db_sub.add_parser("status", help="Show database status")
     db_status_p.set_defaults(func=cmd_db_status)
+
+    db_verify_p = db_sub.add_parser(
+        "verify",
+        help="Check config / env / creds / containers / mounts coherence; exits 1 on drift",
+    )
+    db_verify_p.add_argument(
+        "--db", choices=["postgres", "mongo", "starrocks"],
+        help="Verify a single database (cross-cutting MCP / jobs checks still apply)",
+    )
+    db_verify_p.add_argument(
+        "--json", action="store_true",
+        help="Emit machine-readable JSON for CI / scripts",
+    )
+    db_verify_p.set_defaults(func=cmd_db_verify)
 
     db_unsetup_p = db_sub.add_parser("unsetup", help="Remove database configuration")
     db_unsetup_p.add_argument("--db", choices=["postgres", "mongo", "starrocks"],

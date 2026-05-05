@@ -192,6 +192,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py db start [service]` | Start services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp\|jobs` (all if unspecified) |
 | `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp\|jobs` (all if unspecified) |
 | `sdp.py db status` | Show database config, health, MCP, and jobs scheduler status |
+| `sdp.py db verify [--db <name>] [--json]` | Check config / env / creds / mounts / MCP / jobs coherence; exits 1 on drift. Use as a CI / pre-pipeline preflight |
 | `sdp.py db recover-password [--regenerate-ro]` | Reset database admin password (requires auth enabled). With `--regenerate-ro`, also rewrite `.ro_credentials` with a fresh password |
 | `sdp.py db create-indexes [--source <name>]` | Interactively create database indexes |
 | `sdp.py db unsetup` | Remove database config; data deletion behind double confirmation |
