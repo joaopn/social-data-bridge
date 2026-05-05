@@ -15,6 +15,16 @@ if [ -f "$STAGED_BE" ]; then
     cp "$STAGED_BE" /data/deploy/starrocks/be/conf/be.conf
 fi
 
+# --- Auth precondition guard ---
+# When auth is on, refuse to start without a root password. Without this
+# guard, `docker compose up` (bypassing `sdp db start`'s env injection)
+# would let StarRocks come up with no password set even though
+# STARROCKS_AUTH_ENABLED=true — silently weakening auth.
+if [ "${STARROCKS_AUTH_ENABLED:-}" = "true" ] && [ -z "${STARROCKS_ROOT_PASSWORD:-}" ]; then
+    echo "[ERROR] STARROCKS_AUTH_ENABLED=true but STARROCKS_ROOT_PASSWORD is empty. Start StarRocks via 'sdp db start' (which prompts for the admin password) or 'sdp db recover-password'." >&2
+    exit 1
+fi
+
 # --- Fresh install detection ---
 # On fresh installs with auth, the allin1 director tries to register BE
 # using MYSQL_PWD. But FE has no password yet, so connecting WITH a password
@@ -102,22 +112,35 @@ fi
 # --- Create/sync read-only user from .ro_credentials ---
 # Username comes from $STARROCKS_RO_USER (mirrored from yaml via .env).
 # Password comes from .ro_credentials, which holds only the password.
+# RO user is optional under auth — when STARROCKS_RO_USER is empty, no RO
+# user was configured at setup time, so skip silently. When it IS set, the
+# password file MUST be present — otherwise that's setup/state drift and
+# we refuse so the failure is visible at `db start` time rather than
+# letting the healthcheck pass with broken auth. Sync SQL failure is
+# also fatal (was warn-and-continue before).
 RO_CREDS_FILE="/data/starrocks/.ro_credentials"
-if [ -f "$RO_CREDS_FILE" ] && [ -n "${STARROCKS_RO_USER:-}" ]; then
+if [ -n "${STARROCKS_RO_USER:-}" ]; then
+    if [ ! -f "$RO_CREDS_FILE" ]; then
+        echo "[ERROR] STARROCKS_RO_USER='${STARROCKS_RO_USER}' but no password found at $RO_CREDS_FILE. Re-run 'sdp db setup --add starrocks' or 'sdp db recover-password' to regenerate." >&2
+        exit 1
+    fi
     RO_USER="$STARROCKS_RO_USER"
     RO_PASS=$(cat "$RO_CREDS_FILE")
 
     echo "[sdp] Syncing read-only user: $RO_USER"
     # shellcheck disable=SC2086
-    mysql -h 127.0.0.1 -P 9030 $MYSQL_AUTH -e "
+    if ! mysql -h 127.0.0.1 -P 9030 $MYSQL_AUTH -e "
         CREATE USER IF NOT EXISTS '${RO_USER}' IDENTIFIED BY '${RO_PASS}';
         ALTER USER '${RO_USER}' IDENTIFIED BY '${RO_PASS}';
         CREATE ROLE IF NOT EXISTS 'sdp_readonly';
         GRANT SELECT ON ALL TABLES IN ALL DATABASES TO ROLE 'sdp_readonly';
         GRANT 'sdp_readonly' TO '${RO_USER}';
         SET DEFAULT ROLE 'sdp_readonly' TO '${RO_USER}';
-    " 2>/dev/null && echo "[sdp] Read-only user synced: $RO_USER" \
-                  || echo "[sdp] WARNING: Failed to sync read-only user"
+    "; then
+        echo "[ERROR] Failed to sync read-only user '${RO_USER}'. Check 'sdp db status' and StarRocks logs." >&2
+        exit 1
+    fi
+    echo "[sdp] Read-only user synced: $RO_USER"
 fi
 
 echo "[sdp] Auth setup complete"

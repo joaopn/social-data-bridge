@@ -54,9 +54,19 @@ if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ]; then
     fi
 fi
 
-# --- Read-only user sync (every start) ---
-if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -n "${SDP_RO_PASSWORD:-}" ] \
-        && [ -n "${POSTGRES_RO_USER:-}" ] && [ -f "$PGDATA/PG_VERSION" ]; then
+# --- Read-only user sync (every start of existing DB) ---
+# RO user is optional under auth (the user may have declined "Create a
+# read-only user?" at setup time). When the username is empty we skip the
+# sync silently. When it IS set, the password file MUST be present —
+# otherwise that's setup/state drift and we refuse to start so the failure
+# is visible at `db start` time instead of letting the healthcheck pass
+# with broken auth.
+if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ] && [ -f "$PGDATA/PG_VERSION" ] \
+        && [ -n "${POSTGRES_RO_USER:-}" ]; then
+    if [ -z "${SDP_RO_PASSWORD:-}" ]; then
+        echo "[ERROR] POSTGRES_RO_USER='${POSTGRES_RO_USER}' but no password found in $RO_CRED_FILE. Re-run 'sdp db setup --add postgres' or 'sdp db recover-password' to regenerate." >&2
+        exit 1
+    fi
     RO_USER="$POSTGRES_RO_USER"
     RO_PWD="$SDP_RO_PASSWORD"
     echo "[CONFIG] Syncing read-only user: $RO_USER"

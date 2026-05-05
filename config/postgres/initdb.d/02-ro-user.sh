@@ -6,8 +6,20 @@
 # wrapper after reading the host-owned .ro_credentials file as root). The
 # RO username comes from $POSTGRES_RO_USER (mirrored from the yaml via .env).
 
-if [ -z "${SDP_RO_PASSWORD:-}" ] || [ -z "${POSTGRES_RO_USER:-}" ]; then
-    echo '[INITDB] No RO password/username in env — skipping RO user creation'
+# RO user is optional under auth — when the username is empty, no RO user
+# was configured at setup time, so skip silently. When it IS set under auth,
+# the password MUST be present — otherwise that's setup/state drift.
+if [ -z "${POSTGRES_RO_USER:-}" ]; then
+    echo '[INITDB] No RO username in env — skipping RO user creation'
+    exit 0
+fi
+
+if [ -z "${SDP_RO_PASSWORD:-}" ]; then
+    if [ "${POSTGRES_AUTH_ENABLED:-}" = "true" ]; then
+        echo "[ERROR] POSTGRES_RO_USER='${POSTGRES_RO_USER}' but no password in /data/database/.ro_credentials. Re-run 'sdp db setup --add postgres' or 'sdp db recover-password' to regenerate." >&2
+        exit 1
+    fi
+    echo '[INITDB] No RO password in env — skipping RO user creation'
     exit 0
 fi
 

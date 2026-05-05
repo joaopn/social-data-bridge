@@ -65,8 +65,17 @@ EOJS
     # --- Read-only user sync (every start of existing DB) ---
     # Username comes from $MONGO_RO_USER (mirrored from yaml via .env).
     # Password comes from .ro_credentials, which holds only the password.
+    # RO user is optional under auth — when MONGO_RO_USER is empty, no RO
+    # user was configured at setup time, so skip silently. When it IS set,
+    # the password file MUST be present — otherwise that's setup/state drift
+    # and we refuse to start so the failure is visible at `db start` time
+    # instead of letting the healthcheck pass with broken auth.
     RO_CRED_FILE="/data/mongo/.ro_credentials"
-    if [ -e "/data/db/WiredTiger" ] && [ -f "$RO_CRED_FILE" ] && [ -n "${MONGO_RO_USER:-}" ]; then
+    if [ -e "/data/db/WiredTiger" ] && [ -n "${MONGO_RO_USER:-}" ]; then
+        if [ ! -f "$RO_CRED_FILE" ]; then
+            echo "[ERROR] MONGO_RO_USER='${MONGO_RO_USER}' but no password found at $RO_CRED_FILE. Re-run 'sdp db setup --add mongo' or 'sdp db recover-password' to regenerate." >&2
+            exit 1
+        fi
         RO_USER="$MONGO_RO_USER"
         RO_PWD=$(cat "$RO_CRED_FILE")
         ADMIN_USER="${MONGO_ADMIN_USER:-admin}"
@@ -116,9 +125,18 @@ EOJS
     # it detects MONGO_INITDB_ROOT_USERNAME/PASSWORD, creates the user,
     # and adds --auth automatically. We just need to mark it done afterward.
     if [ ! -e "/data/db/WiredTiger" ] && [ ! -f "/data/db/.sdb_auth_initialized" ]; then
-        # Write post-init scripts for RO user and marker
+        # Fresh-DB init: official docker-entrypoint.sh creates the admin user;
+        # we install a post-init script that creates the RO user. RO user is
+        # optional under auth — when MONGO_RO_USER is empty, skip the RO
+        # post-init script. When it IS set, the password file MUST be
+        # present — otherwise that's setup/state drift and we refuse so the
+        # failure surfaces at `db start`, not later via a 401 from MCP.
+        if [ -n "${MONGO_RO_USER:-}" ] && [ ! -f "$RO_CRED_FILE" ]; then
+            echo "[ERROR] MONGO_RO_USER='${MONGO_RO_USER}' but no password found at $RO_CRED_FILE. Re-run 'sdp db setup' to regenerate." >&2
+            exit 1
+        fi
         mkdir -p /docker-entrypoint-initdb.d
-        if [ -f "$RO_CRED_FILE" ] && [ -n "${MONGO_RO_USER:-}" ]; then
+        if [ -n "${MONGO_RO_USER:-}" ]; then
             RO_USER="$MONGO_RO_USER"
             RO_PWD=$(cat "$RO_CRED_FILE")
             cat > /docker-entrypoint-initdb.d/01-sdp-ro-user.js <<EOJS
