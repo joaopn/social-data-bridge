@@ -789,6 +789,36 @@ def _resolve_server_data_mounts(services):
         for svc in services
     }
 
+    # Out-of-parent (multi-disk) sources mount their host path at
+    # `/data/<parsed|output>/<source>` — a sub-path of the read-only parent
+    # mount the postgres/starrocks compose blocks already bind. Docker has
+    # to create the mountpoint inside the rootfs before applying the bind,
+    # but the parent mount is `:ro`, so `mkdirat` fails with
+    # "read-only file system" and the container refuses to start.
+    # Pre-creating an empty placeholder dir at the parent's host path
+    # gives docker an existing mountpoint to bind over. The placeholder
+    # is shadowed by the per-source bind inside the container, so this
+    # doesn't change what data the DB sees.
+    for svc_mounts in service_mounts.values():
+        for mount in svc_mounts:
+            parts = mount.split(":")
+            if len(parts) < 2:
+                continue
+            container_path = parts[1]
+            if container_path.startswith("/data/parsed/"):
+                parent_key, sub_name = "parsed", container_path[len("/data/parsed/"):]
+            elif container_path.startswith("/data/output/"):
+                parent_key, sub_name = "output", container_path[len("/data/output/"):]
+            else:
+                continue
+            parent_host = parent_paths.get(parent_key)
+            if not parent_host or not sub_name:
+                continue
+            placeholder = Path(parent_host)
+            if not placeholder.is_absolute():
+                placeholder = ROOT / placeholder
+            (placeholder / sub_name).mkdir(parents=True, exist_ok=True)
+
     # Read existing override, preserve setup-generated mounts (tablespaces, SR storage, jobs export)
     override_path = ROOT / "docker-compose.override.yml"
     override_data = _read_override_yaml()
