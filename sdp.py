@@ -2410,32 +2410,61 @@ def cmd_db_recover_password(args):
 
             # Restart postgres with trust auth
             print("  Restarting PostgreSQL with trust auth...")
-            docker_compose("--profile", "postgres", "restart")
+            restart_result = docker_compose("--profile", "postgres", "restart")
+            if restart_result.returncode != 0:
+                shutil.copy2(pg_hba_backup, pg_hba_local)
+                pg_hba_backup.unlink(missing_ok=True)
+                print("  Error: trust-auth restart failed; pg_hba restored.")
+                return 1
 
-            # Wait for healthy
-            print("  Waiting for PostgreSQL to be ready...")
+            # `docker compose restart` returns when the container is in
+            # state 'running' (entrypoint executing), not when PG is
+            # accepting connections. Poll pg_isready until it succeeds —
+            # without this, the next psql ALTER hits "no response" mid-
+            # restart, swallows the failure path, and recover-password
+            # exits in a half-applied state.
+            import time
+            print("  Waiting for PostgreSQL to accept connections...")
             port = env.get("POSTGRES_PORT", "5432")
             db_name = env.get("DB_NAME", "datasets")
-            subprocess.run(
-                ["docker", "compose", "exec", "postgres",
-                 "pg_isready", "-U", "postgres", "-d", db_name, "-p", port, "--timeout=30"],
-                cwd=ROOT,
-            )
+            deadline = time.time() + 60
+            ready = False
+            while time.time() < deadline:
+                probe = subprocess.run(
+                    ["docker", "compose", "exec", "-T", "postgres",
+                     "pg_isready", "-U", "postgres", "-d", db_name, "-p", port],
+                    cwd=ROOT, capture_output=True,
+                )
+                if probe.returncode == 0:
+                    ready = True
+                    break
+                time.sleep(2)
+            if not ready:
+                shutil.copy2(pg_hba_backup, pg_hba_local)
+                pg_hba_backup.unlink(missing_ok=True)
+                print("  Error: PostgreSQL did not accept connections within 60s.")
+                return 1
 
-            # Set new password (use PGPASSWORD env to avoid shell interpolation of password)
+            # Set new password (PGPASSWORD env avoids shell interpolation of password).
             escaped_pw = new_password.replace("'", "''")
             alter_cmd = f"ALTER USER postgres WITH PASSWORD '{escaped_pw}'"
             result = subprocess.run(
-                ["docker", "compose", "exec", "postgres",
+                ["docker", "compose", "exec", "-T", "postgres",
                  "psql", "-U", "postgres", "-p", port, "-c", alter_cmd],
-                cwd=ROOT,
+                cwd=ROOT, capture_output=True, text=True,
             )
             if result.returncode != 0:
-                print("  Error: Failed to set new password.")
-                # Restore backup
+                # Fail loud — the previous "restart on error" branch hung
+                # indefinitely under compose because the trust restart had
+                # already left the container in a state that didn't tolerate
+                # a second restart cleanly. Restore pg_hba and return.
                 shutil.copy2(pg_hba_backup, pg_hba_local)
                 pg_hba_backup.unlink(missing_ok=True)
-                docker_compose("--profile", "postgres", "restart")
+                print(
+                    "  Error: Failed to set new password.\n"
+                    f"  psql stderr: {result.stderr.strip()}\n"
+                    "  pg_hba restored. Run 'sdp db stop postgres' and 'sdp db start postgres' to return to scram-sha-256."
+                )
                 return 1
 
             # Restore original pg_hba
