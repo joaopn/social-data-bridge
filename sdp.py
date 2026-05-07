@@ -876,10 +876,10 @@ def _resolve_server_data_mounts(services):
 def _exited_services_after_up(profile_args):
     """Return list of service names in `Exited` state after a `compose up -d`.
 
-    Belt-and-suspenders for the J2 failure shape ("up -d returns 0 on a
-    crashed container"). `up -d --wait` should already catch it, but
-    docker compose has been racy historically — this ps probe runs
-    immediately after and catches anything `--wait` missed.
+    Belt-and-suspenders for the failure shape where `up -d --wait`
+    returns 0 on a container that immediately crashed. `--wait` should
+    already catch it, but docker compose has been racy historically —
+    this ps probe runs immediately after and catches what `--wait` missed.
 
     Returns a list of (service_name, exit_code) tuples; empty list when
     everything is running. Internal `docker compose ps` failure is treated
@@ -1034,9 +1034,9 @@ def cmd_db_start(args):
         return result.returncode
 
     # Start MCP servers (init containers handle user creation via depends_on).
-    # `--wait` blocks until MCPs are running; the post-launch ps probe surfaces
-    # any race-condition exits that `--wait` may have missed (J2 failure
-    # shape: `up -d` returns 0 on a crashed container).
+    # `--wait` blocks until MCPs are running; the post-launch ps probe
+    # surfaces any race-condition exits that `--wait` may have missed
+    # (the `up -d` returns 0 on a crashed container failure shape).
     if mcp_targets:
         profile_flags = []
         for svc in targets:
@@ -1817,9 +1817,9 @@ def _unsetup_single_db(db_name, env):
     # written to docker-compose.override.yml at setup time.
     sr_storage_paths = _read_sr_storage_paths() if db_name == "starrocks" else {}
 
-    # Read jobs targets that point at the DB being removed (C4 — surface the
-    # orphaned target so the operator knows the jobs scheduler will start
-    # failing routes after this command lands).
+    # Read jobs targets that point at the DB being removed so we can
+    # surface them: the operator needs to know the jobs scheduler will
+    # start failing routes after this unsetup lands.
     orphaned_jobs_targets = _orphaned_jobs_targets_for(db_name)
 
     # --- Inventory ---

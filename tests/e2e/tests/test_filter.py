@@ -3,8 +3,8 @@
 Bug class: the `--filter` flag is a 1-line `fnmatch(fid, FILE_FILTER)`
 copy-pasted into 5 orchestrators (parse, postgres_ingest, postgres_ml,
 sr_ingest, sr_ml). The risk is one of those copies being missing or
-buggy. Phase B4 deferred unit testing because fnmatch is stdlib; the
-real risk is integration ("did we wire it everywhere?") and only one
+buggy. Unit testing was skipped because fnmatch is stdlib; the real
+risk is integration ("did we wire it everywhere?") and only one
 orchestrator needs to be exercised here — wiring is uniform.
 
 Flow:

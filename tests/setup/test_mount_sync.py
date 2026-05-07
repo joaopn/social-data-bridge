@@ -1,4 +1,4 @@
-"""Tests for mount-coherence helpers (Commit 6).
+"""Tests for mount-coherence helpers.
 
 The helpers in `social_data_pipeline.setup.mount_sync` answer the
 question "is the running DB container's mount set in sync with the
@@ -653,9 +653,9 @@ class TestExpectedSourceMountsWithParents:
         assert out == {"/mnt/big/output/reddit:/data/output/reddit:ro"}
 
     def test_no_parent_paths_legacy_behavior(self):
-        # parent_paths=None preserves the C6 behavior — emit every per-source
-        # mount unconditionally. Lets older callers (and the legacy override
-        # regen path) still get full mount sets.
+        # parent_paths=None preserves the legacy behavior — emit every
+        # per-source mount unconditionally. Lets older callers (and the
+        # legacy override regen path) still get full mount sets.
         sources = [{
             "name": "reddit",
             "profiles": ["postgres_ingest"],
@@ -712,7 +712,7 @@ class TestParseOverrideWithParents:
 
 class TestComputeMountDriftWithParents:
     def test_in_parent_source_no_drift_even_without_override(self):
-        # The bug we're closing: with the C6-only behavior, this combination
+        # The bug we're closing: without parent_paths, this combination
         # would produce a "missing source mount" finding. With parent_paths,
         # the parent mount in docker-compose.yml covers it and drift is empty.
         sources = [{

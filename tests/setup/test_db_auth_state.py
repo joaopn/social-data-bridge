@@ -11,7 +11,7 @@ line; this file pins:
 - in-place migration from the legacy `username:password` format,
 - loud failure: when yaml says `auth_enabled=true`, an unreadable / empty /
   malformed cred file raises `ConfigurationError` instead of silently
-  returning `None` (Commit 3).
+  returning `None`.
 
 Bug class: silent drift between yaml and the file (returning the wrong
 username), chown-induced unreadability of the host file, and partial-write
@@ -83,9 +83,10 @@ def test_read_returns_password_string_for_new_format(tmp_path):
 def test_read_returns_none_when_file_missing(tmp_path):
     """When no `.ro_credentials` is present anywhere, return None.
 
-    Loud-failure behavior is added in Commit 3 (host-side); this commit
-    preserves the silent-None contract for callers that can cope with a
-    missing file (e.g., reconfigure paths where the password is re-prompted).
+    Loud-failure behavior is reserved for callers that have already
+    asserted auth is enabled; this helper preserves the silent-None
+    contract for callers that can cope with a missing file (e.g.,
+    reconfigure paths where the password is re-prompted).
     """
     result = _read_existing_ro_password({"pgdata_path": str(tmp_path)})
     assert result is None
@@ -171,7 +172,7 @@ def test_write_creates_files_for_each_data_path(tmp_path):
         assert (p / ".ro_credentials").read_text() == "shared-pw\n"
 
 
-# ── Commit 3: per-DB atomic write ──────────────────────────────────────────
+# ── Per-DB atomic write ────────────────────────────────────────────────────
 
 
 def test_write_per_db_atomic_no_tmp_left_behind(tmp_path):
@@ -250,7 +251,7 @@ def test_write_per_db_cleans_stale_tmp(tmp_path):
     assert not stale.exists()
 
 
-# ── Commit 3: read raises loud under auth ──────────────────────────────────
+# ── Read raises loud under auth ────────────────────────────────────────────
 
 
 def test_read_raises_on_empty_file_when_auth_on(tmp_path):

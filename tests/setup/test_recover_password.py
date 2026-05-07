@@ -1,11 +1,11 @@
 """Tests for `db recover-password --regenerate-ro` and the keep-existing
 RO password default on setup reconfigure.
 
-These close the "lost RO credentials" gap from the auth-robustness
-sweep: prior to this commit, the only recovery path for a missing or
-known-leaked `.ro_credentials` was a full `db unsetup` + `db setup` cycle.
+These close the "lost RO credentials" gap: without an RO regeneration
+path, the only recovery for a missing or known-leaked `.ro_credentials`
+was a full `db unsetup` + `db setup` cycle.
 
-Pinned behavior (Commit 5):
+Pinned behavior:
 - `_regenerate_ro_credentials_for` writes a fresh password atomically to
   every target DB's data path (one shared password — same model as setup).
 - `cmd_db_recover_password --regenerate-ro` writes new cred files inside

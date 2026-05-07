@@ -1,5 +1,5 @@
 """Tests for the drift-detection helpers in social_data_pipeline.setup.verify
-and the `db verify` CLI wiring (Commit 7).
+and the `db verify` CLI wiring.
 
 The verify module is the source of truth for "is the DB install internally
 consistent?". Two callers consume it: ``sdp db verify`` (exit non-zero on

@@ -11,8 +11,8 @@ doesn't clobber the others. Silent regressions here look like "I ran
   present in the file.
 
 The unsetup symmetric trim logic (`db unsetup <db>`) is inlined inside
-`_unsetup_single_db` and is covered indirectly by the Phase C3 E2E auth
-lifecycle test. Not refactored just for testability.
+`_unsetup_single_db` and is covered indirectly by the auth full-cycle
+E2E test. Not refactored just for testability.
 """
 
 from __future__ import annotations

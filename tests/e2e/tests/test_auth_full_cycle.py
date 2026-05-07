@@ -1,13 +1,12 @@
-"""E2E: full PostgreSQL credential lifecycle (H7).
+"""E2E: full PostgreSQL credential lifecycle.
 
 Layered failure mode: setup writes auth state into four locations (yaml,
 .env, ``.ro_credentials``, container env). ``test_auth_postgres.py``
 covers the setup → start → enforce path; this test extends to setup →
-start → recover-password --regenerate-ro → restart → ingest, which is
-the contract that drove C1–C5 of the auth-robustness sweep. Without
-this test, a regression in any one of those four storage locations can
-silently survive into a release because the setup and migration paths
-both still work in isolation.
+start → recover-password --regenerate-ro → restart → ingest, exercising
+the credential surface end-to-end so a regression in any one of the
+four storage locations can't silently survive into a release the way
+isolated setup and migration paths still might.
 
 Specifically pinned:
   - .ro_credentials mode 0600 + host-uid ownership preserved across

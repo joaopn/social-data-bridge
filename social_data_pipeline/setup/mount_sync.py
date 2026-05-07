@@ -69,7 +69,7 @@ _NON_SOURCE_MOUNT_MARKERS = (
 # and ``${OUTPUT_PATH:-...}`` lines). Sources whose host paths fall under
 # these don't need per-source override entries — the parent mount already
 # exposes them. Out-of-parent sources still need per-source mounts and are
-# what the C6 source-add warning / drift detection covers.
+# what the source-add drift warning + cmd_run drift validation cover.
 PARSED_PATH_COMPOSE_DEFAULT = "./data/parsed"
 OUTPUT_PATH_COMPOSE_DEFAULT = "./data/output"
 

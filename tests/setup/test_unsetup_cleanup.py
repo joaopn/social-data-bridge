@@ -1,13 +1,13 @@
-"""Tests for unsetup-symmetry cleanups (Commit 7: C1/C2/C3/C4).
+"""Tests for unsetup-symmetry cleanups.
 
-The plan's symmetry cleanups close gaps that the prior commits exposed:
+Four contracts pinned here:
 
-- C1/C2: ``db unsetup --db starrocks`` and full ``db unsetup`` enumerate
+- ``db unsetup --db starrocks`` and full ``db unsetup`` enumerate
   ``storage_paths`` from ``config/db/starrocks.yaml`` and rmtree them
   alongside the primary data dir, mirroring how PG handles tablespaces.
-- C3: ``db unsetup-mcp`` notes that locally-built / pulled MCP images
+- ``db unsetup-mcp`` notes that locally-built / pulled MCP images
   remain on disk so the operator knows the manual prune line exists.
-- C4: ``_unsetup_single_db`` checks the jobs-scheduler config for targets
+- ``_unsetup_single_db`` checks the jobs-scheduler config for targets
   pointing at the DB being removed and warns inline; the user runs
   ``db unsetup-jobs`` (or edits the config) to clean up.
 
@@ -27,7 +27,7 @@ import sdp
 
 
 # ---------------------------------------------------------------------------
-# C1/C2 — `_read_sr_storage_paths` is the source of truth.
+# `_read_sr_storage_paths` is the source of truth for SR cleanup.
 # ---------------------------------------------------------------------------
 
 
@@ -83,7 +83,7 @@ class TestReadSrStoragePaths:
 
 
 # ---------------------------------------------------------------------------
-# C4 — orphaned-jobs-target detection.
+# Orphaned-jobs-target detection.
 # ---------------------------------------------------------------------------
 
 
@@ -131,7 +131,7 @@ class TestOrphanedJobsTargets:
 
 
 # ---------------------------------------------------------------------------
-# C3 — MCP-image-note shows up in cmd_db_unsetup_mcp output.
+# MCP-image-note shows up in cmd_db_unsetup_mcp output.
 # ---------------------------------------------------------------------------
 
 

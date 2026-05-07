@@ -1,9 +1,9 @@
-"""Tests for the `db start` post-launch ps probe (Commit 4).
+"""Tests for the `db start` post-launch ps probe.
 
 `cmd_db_start` runs `docker compose up -d --wait` for MCP services and
 then probes `docker compose ps --all --format json`. Any service in the
 `Exited` state is reported with an actionable error block, and the
-overall exit code becomes non-zero. This catches the J2 failure shape
+overall exit code becomes non-zero. This catches the failure shape
 where `--wait` returns 0 on a container that crashed during startup.
 
 The integration with `cmd_db_start` is a thin call to the helper, so

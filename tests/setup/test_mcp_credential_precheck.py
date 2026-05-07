@@ -1,4 +1,4 @@
-"""Tests for the MCP credential-file precheck (Commit 3).
+"""Tests for the MCP credential-file precheck.
 
 `db setup-mcp` must refuse to write `mcp.yaml` if any enabled DB has
 `auth: true` + an `ro_username` configured but no `.ro_credentials` file

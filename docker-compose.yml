@@ -128,8 +128,8 @@ services:
       # ${PARSED_PATH}/${OUTPUT_PATH} (the default-disk case) — no restart
       # needed when adding a source under these. Sources on a different
       # filesystem still get per-source mounts in docker-compose.override.yml
-      # via 'sdp db start' (and the C6 drift warning fires if the user adds
-      # one of those out-of-parent sources to a running DB).
+      # via 'sdp db start' (and the source-add drift warning fires if the
+      # user adds one of those out-of-parent sources to a running DB).
       - ${PARSED_PATH:-./data/parsed}:/data/parsed:ro
       - ${OUTPUT_PATH:-./data/output}:/data/output:ro
       - ${PGDATA_PATH:-./data/database/postgres}:/data/database

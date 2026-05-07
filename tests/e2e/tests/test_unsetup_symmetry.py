@@ -1,16 +1,17 @@
 """E2E: db unsetup --db <name> symmetry with db setup.
 
-Two contracts are pinned here, both surfaced as bug classes by the
-auth-robustness sweep where each had unit-test coverage but no
-end-to-end proof:
+Two contracts pinned here, each previously covered only by unit tests
+on the readable input / printed output edges and never by an end-to-end
+proof of the actual cleanup / warning firing:
 
-H5 — StarRocks ``storage_paths`` cleanup. The chown + rmtree dance via
-``docker run`` happens behind ``input()`` prompts and isn't unit-testable
-cleanly. The unit tests pin ``_read_sr_storage_paths`` (the helper that
-reads the yaml); they do not pin that the actual cleanup fires.
+- StarRocks ``storage_paths`` cleanup. The chown + rmtree dance via
+  ``docker run`` happens behind ``input()`` prompts and isn't unit-
+  testable cleanly. The unit tests pin ``_read_sr_storage_paths`` (the
+  helper that reads the yaml); they do not pin that the actual cleanup
+  fires.
 
-H6 — Jobs scheduler orphaned-target warning. The warning text is stdout
-only and easy to silently regress when refactoring ``_unsetup_single_db``.
+- Jobs scheduler orphaned-target warning. The warning text is stdout
+  only and easy to silently regress when refactoring ``_unsetup_single_db``.
 """
 
 import shutil
@@ -19,7 +20,7 @@ from tests.e2e.helpers.sdp import SDPSession, run_sdp, wait_for_healthy, WORKSPA
 
 
 # ---------------------------------------------------------------------------
-# H5 — SR storage_paths chown + rmtree on `db unsetup --db starrocks`
+# SR storage_paths chown + rmtree on `db unsetup --db starrocks`
 # ---------------------------------------------------------------------------
 
 # Single extra storage path. The SDPSession answer dict is keyed by tag,
@@ -57,8 +58,9 @@ def test_sr_storage_paths_removed_on_db_unsetup(workspace):
     of the chown + rmtree dance without anything failing in CI.
     """
     # Pre-create the storage path as the host user. Without this, docker
-    # auto-creates the bind-mount source dir as root when SR starts (H1
-    # failure shape), and the test would conflate H1 with H5.
+    # auto-creates the bind-mount source dir as root when SR starts, and
+    # the test would conflate root-owned-bind-mount-source failures with
+    # the cleanup contract this test pins.
     extra_dir = WORKSPACE / "extra" / "sr_disk"
     extra_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,7 +86,7 @@ def test_sr_storage_paths_removed_on_db_unsetup(workspace):
     # exercise the bug class.
     assert any(extra_dir.iterdir()), (
         f"SR did not populate {extra_dir} during start; chown+rmtree "
-        f"would be a no-op and the test wouldn't pin H5."
+        f"would be a no-op and the test wouldn't exercise the cleanup."
     )
 
     # Single-DB unsetup: yes/yes through both confirmation prompts.
@@ -117,7 +119,7 @@ def test_sr_storage_paths_removed_on_db_unsetup(workspace):
 
 
 # ---------------------------------------------------------------------------
-# H6 — Jobs scheduler orphaned-target warning on `db unsetup --db <name>`
+# Jobs scheduler orphaned-target warning on `db unsetup --db <name>`
 # ---------------------------------------------------------------------------
 
 PG_SR_SETUP_NO_AUTH = {
@@ -166,7 +168,8 @@ def test_jobs_target_warning_on_db_unsetup(workspace):
     The warning is stdout only and advisory, not auto-remediation. We
     assert the text shape (label + target name + recovery hint) without
     asserting that the targets are auto-removed — auto-remediation is a
-    separate feature and pinning it would scope-creep beyond H6.
+    separate feature and pinning it would scope-creep beyond the
+    warning contract this test exists for.
     """
     rc, output = SDPSession(PG_SR_SETUP_NO_AUTH).run_interactive("db setup")
     assert rc == 0, f"db setup failed:\n{output}"
@@ -189,7 +192,7 @@ def test_jobs_target_warning_on_db_unsetup(workspace):
     # `db start`), so no chown / rmtree work happens regardless. The
     # warning text fires before the confirmations either way; declining
     # leaves the rest of the configuration intact, which keeps the test
-    # focused on H6 (warning shape) without dragging in cleanup paths.
+    # focused on the warning shape without dragging in cleanup paths.
     result = run_sdp("db unsetup --db postgres", input_text="n\n")
     assert result.returncode == 0, (
         f"db unsetup --db postgres exit code unexpected:\n"

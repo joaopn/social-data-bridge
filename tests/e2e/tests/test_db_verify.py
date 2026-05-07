@@ -1,9 +1,11 @@
 """E2E: `sdp db verify` exit code + JSON shape against a real workspace.
 
-`db verify` is the operator preflight introduced in Commit 7. The unit
-tests pin the per-finding logic with mocked ctx; this E2E test exercises
-the real CLI against a freshly-set-up workspace, including the cred-file
-probing the unit tests can't reasonably mock.
+`db verify` is the operator preflight that scans every drift surface
+(auth coherence, cred file mode/owner, container env / health, per-source
+mounts, MCP / jobs cross-references). The unit tests pin the per-finding
+logic with mocked ctx; this E2E test exercises the real CLI against a
+freshly-set-up workspace, including the cred-file probing the unit
+tests can't reasonably mock.
 
 Two scenarios on a postgres-only setup, no containers started (verify
 is supposed to work without a running DB so it's a useful preflight
