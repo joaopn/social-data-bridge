@@ -9,6 +9,12 @@ import pytest
 from tests.e2e.helpers.workspace import create_workspace, cleanup_workspace, teardown_compose, WORKSPACE
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "smoke: canonical end-to-end smoke run"
+    )
+
+
 @pytest.fixture(autouse=True)
 def workspace():
     """Create a fresh workspace before each test, teardown after."""

@@ -33,11 +33,15 @@ class SDPSession:
         self.answers = answers
         self.extra_env = extra_env or {}
 
-    def run_interactive(self, cmd):
+    def run_interactive(self, cmd, cwd=None):
         """Run an interactive sdp.py command, answering tagged prompts.
 
         Args:
             cmd: Command string after "python sdp.py --tag", e.g. "db setup"
+            cwd: Optional working dir override (defaults to WORKSPACE).
+                Used by tests that need to invoke sdp.py through a
+                symlinked path so the symlink-vs-canonical comparisons
+                in mount-coverage code get exercised.
 
         Returns:
             (exit_status, output_text)
@@ -48,7 +52,7 @@ class SDPSession:
         full_cmd = f"python sdp.py --tag {cmd}"
         child = pexpect.spawn(
             "/bin/bash", ["-c", full_cmd],
-            cwd=str(WORKSPACE),
+            cwd=str(cwd) if cwd is not None else str(WORKSPACE),
             env=env,
             timeout=INTERACTIVE_TIMEOUT,
             encoding="utf-8",
@@ -82,7 +86,7 @@ class SDPSession:
         return child.exitstatus, "".join(output_parts)
 
 
-def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT, input_text=None):
+def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT, input_text=None, cwd=None):
     """Run a non-interactive sdp.py command via subprocess.
 
     Args:
@@ -90,6 +94,8 @@ def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT, input_text=None):
         extra_env: Optional dict of extra environment variables.
         timeout: Command timeout in seconds.
         input_text: Optional string to feed to stdin (for prompts during pipeline runs).
+        cwd: Optional working dir override (defaults to WORKSPACE). Used by
+            tests that need to invoke sdp.py through a symlinked path.
 
     Returns:
         subprocess.CompletedProcess
@@ -100,7 +106,7 @@ def run_sdp(cmd, extra_env=None, timeout=PIPELINE_TIMEOUT, input_text=None):
 
     return subprocess.run(
         ["python", "sdp.py"] + cmd.split(),
-        cwd=WORKSPACE,
+        cwd=cwd if cwd is not None else WORKSPACE,
         env=env,
         capture_output=True,
         text=True,

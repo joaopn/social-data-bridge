@@ -4,8 +4,10 @@ Creates a fresh copy of the repo at /workspace for each test, so that
 generated configs, .env, and data directories don't leak between tests.
 """
 
+import contextlib
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 REPO = Path("/repo")
@@ -90,3 +92,22 @@ def teardown_compose():
         capture_output=True,
         timeout=120,
     )
+
+
+@contextlib.contextmanager
+def symlinked_workspace():
+    """Stage a /tmp symlink pointing at WORKSPACE; yield the symlink path.
+
+    Tests that exercise symlink-vs-canonical path comparisons should
+    invoke sdp.py via the symlink (cwd=link_path) while keeping
+    assertion-side reads against WORKSPACE itself. This pins the
+    realpath-canonicalization contract in `_validate_run_mounts` and
+    similar host↔container path-coverage checks, so a future refactor
+    that drops the canonicalization fails the test.
+    """
+    link = Path("/tmp") / f"sdp-link-{uuid.uuid4().hex[:8]}"
+    link.symlink_to(WORKSPACE)
+    try:
+        yield link
+    finally:
+        link.unlink(missing_ok=True)
