@@ -120,7 +120,10 @@ def test_recover_password_with_regenerate_ro_writes_cred_files(monkeypatch, tmp_
     # Simulate the user typing a fresh admin password.
     monkeypatch.setattr("sdp.getpass", lambda prompt="": "new-admin-pw")
     # Stub out compose + subprocess so we don't actually start containers.
-    monkeypatch.setattr(sdp, "docker_compose", lambda *a, **kw: 0)
+    monkeypatch.setattr(
+        sdp, "docker_compose",
+        lambda *a, **kw: subprocess.CompletedProcess(args=a, returncode=0),
+    )
     monkeypatch.setattr(
         subprocess, "run",
         lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="", stderr=""),
@@ -161,7 +164,10 @@ def test_recover_password_without_regenerate_ro_does_not_touch_cred(monkeypatch,
         lambda name: {"auth": True, "ro_username": "readonly"},
     )
     monkeypatch.setattr("sdp.getpass", lambda prompt="": "new-admin-pw")
-    monkeypatch.setattr(sdp, "docker_compose", lambda *a, **kw: 0)
+    monkeypatch.setattr(
+        sdp, "docker_compose",
+        lambda *a, **kw: subprocess.CompletedProcess(args=a, returncode=0),
+    )
     monkeypatch.setattr(
         subprocess, "run",
         lambda *a, **kw: subprocess.CompletedProcess(a, 0, stdout="", stderr=""),

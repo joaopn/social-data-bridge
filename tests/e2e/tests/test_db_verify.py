@@ -74,7 +74,7 @@ def test_db_verify_drift_exits_one(workspace):
     assert rc == 0, f"db setup failed:\n{output}"
 
     cred_file = WORKSPACE / "data" / "database" / "postgres" / ".ro_credentials"
-    assert cred_file.exists(), f".ro_credentials should exist after setup with auth"
+    assert cred_file.exists(), ".ro_credentials should exist after setup with auth"
     cred_file.unlink()
 
     # Text mode: exit 1, message names the missing file and the recovery line.

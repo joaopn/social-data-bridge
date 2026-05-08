@@ -13,8 +13,6 @@ Pins:
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from social_data_pipeline.setup import mcp as mcp_setup

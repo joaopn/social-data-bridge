@@ -25,7 +25,6 @@ here would silently bypass mount validation — the same failure mode
 from __future__ import annotations
 
 import sdp
-from social_data_pipeline.setup import mount_sync
 from social_data_pipeline.setup.mount_sync import (
     SERVICE_PROFILES,
     PROFILE_TO_SERVICE,

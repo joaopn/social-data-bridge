@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
-
 import sdp
 from social_data_pipeline.setup.verify import (
     Finding,
