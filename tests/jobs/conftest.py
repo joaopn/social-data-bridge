@@ -28,6 +28,9 @@ _pm_errors.ExecutionTimeout = type("ExecutionTimeout", (Exception,), {})
 _pm_errors.OperationFailure = type("OperationFailure", (Exception,), {})
 sys.modules.setdefault("pymongo.errors", _pm_errors)
 
+# sqlparse is imported by jobs/web.py for SQL pretty-printing in templates.
+sys.modules.setdefault("sqlparse", MagicMock())
+
 # fastapi is imported by jobs/auth.py for type references.
 _fastapi = MagicMock()
 _fastapi.HTTPException = type("HTTPException", (Exception,), {
@@ -41,6 +44,7 @@ _fastapi.HTTPException = type("HTTPException", (Exception,), {
 _fastapi.Request = MagicMock
 sys.modules.setdefault("fastapi", _fastapi)
 sys.modules.setdefault("fastapi.responses", MagicMock())
+sys.modules.setdefault("fastapi.templating", MagicMock())
 
 # mcp SDK is imported by jobs/mcp_tools.py for tool registration. Tests that
 # need real registration behavior must run inside the jobs container; the

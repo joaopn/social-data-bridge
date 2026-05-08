@@ -265,22 +265,8 @@ def build_router(
     async def auto_accept_target(request: Request, name: str):
         if name not in cfg.targets:
             raise HTTPException(status_code=404, detail=f"unknown target: {name}")
-        # Read the raw form rather than use Form(default=None): FastAPI +
-        # Pydantic v2 collapses ``enabled=`` (present with empty value)
-        # back to None, which is indistinguishable from "field absent" in
-        # the handler. We need the distinction — empty value means
-        # "switch off", absent means "no change". Multidict membership is
-        # the unambiguous signal.
         form = await request.form()
-        enabled_bool: bool | None = None
-        if "enabled" in form:
-            enabled_bool = bool(form["enabled"])  # "" → False, "on" → True
-        limit: int | None = None
-        if "limit" in form:
-            try:
-                limit = int(form["limit"])
-            except (TypeError, ValueError):
-                limit = None
+        enabled_bool, limit = _parse_auto_accept_form(form)
         auto_accept.set_target(name, enabled=enabled_bool, limit=limit)
         log.info(
             "auto-accept target %s set: enabled=%s limit=%s",
@@ -294,6 +280,29 @@ def build_router(
 
     router.include_router(protected)
     return router
+
+
+def _parse_auto_accept_form(form) -> tuple[bool | None, int | None]:
+    """Parse the auto-accept POST body into ``(enabled, limit)``.
+
+    Reads via multidict membership rather than ``Form(default=None)``:
+    Pydantic v2 collapses ``enabled=`` (present with empty value) back
+    to None, which is indistinguishable from "field absent". We need
+    the distinction — empty value means "switch off", absent means
+    "no change". A missing or non-numeric ``limit`` returns None
+    (no change) rather than raising — a stale tab posting garbage
+    shouldn't 500.
+    """
+    enabled: bool | None = None
+    if "enabled" in form:
+        enabled = bool(form["enabled"])  # "" → False, "on" → True
+    limit: int | None = None
+    if "limit" in form:
+        try:
+            limit = int(form["limit"])
+        except (TypeError, ValueError):
+            limit = None
+    return enabled, limit
 
 
 # ----------------------------------------------------------------------------

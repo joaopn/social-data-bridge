@@ -11,14 +11,11 @@
         <input type="range"
                id="aa-limit-{{ row.name }}"
                data-aa-target="{{ row.name }}"
-               min="0" max="{{ max_limit }}" value="{{ row.limit }}"
-               oninput="document.getElementById('aa-limit-out-{{ row.name }}').value = this.value"
-               onchange="aaSlider(this)">
+               min="0" max="{{ max_limit }}" value="{{ row.limit }}">
         <output id="aa-limit-out-{{ row.name }}" for="aa-limit-{{ row.name }}">{{ row.limit }}</output>
         <input type="checkbox" role="switch"
                aria-label="Enable auto-accept for {{ row.name }}"
                data-aa-target="{{ row.name }}"
-               onchange="aaToggle(this)"
                {% if row.enabled %}checked{% endif %}>
       {% endfor %}
     </div>

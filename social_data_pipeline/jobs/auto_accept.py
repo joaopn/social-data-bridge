@@ -26,8 +26,16 @@ from typing import Any
 
 @dataclass
 class TargetAutoAccept:
+    """Per-target auto-accept settings.
+
+    ``limit`` is required because there is no meaningful default: the
+    correct value depends on the runner's ``max_concurrent``. Callers
+    pass ``self.max_limit`` for first-touch (matching what the slider
+    pre-renders) or whatever the user dialed in.
+    """
+
+    limit: int
     enabled: bool = False
-    limit: int = 0  # populated with max_limit on first write per target
 
 
 @dataclass

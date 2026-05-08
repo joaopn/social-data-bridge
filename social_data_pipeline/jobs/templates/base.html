@@ -189,19 +189,14 @@
         if (window.Prism) window.Prism.highlightAll();
       });
 
-      // Per-target switch / slider handlers. Bypass HTMX entirely:
-      // htmx.ajax({values: ...}) with no `source` element silently
-      // dropped the form data in our setup, and hx-vals='js:...' in
-      // HTMX 2.x doesn't expose `event` to the JS expression. Plain
-      // fetch + URLSearchParams is the unambiguous form-urlencoded path
-      // FastAPI's Form() expects, with explicit innerHTML swap and
-      // open-state preservation in the same flow.
+      // Per-target switch / slider handlers. Plain fetch + URLSearchParams
+      // is the unambiguous form-urlencoded path FastAPI's request.form()
+      // expects; we swap the response HTML into the slot and re-wire.
       window.aaPostTarget = function (el, formValues) {
         var slot = el.closest('.auto-accept-slot');
-        if (!slot) { console.warn('[aa] no slot for', el); return; }
+        if (!slot) return;
         var name = el.dataset.aaTarget;
         var body = new URLSearchParams(formValues).toString();
-        console.log('[aa] POST target=', name, 'body=', body);
         var d = slot.querySelector('details.auto-accept-panel');
         var wasOpen = d ? d.open : false;
         fetch('/actions/auto_accept/target/' + encodeURIComponent(name), {
@@ -210,7 +205,6 @@
           body: body,
           credentials: 'same-origin',
         }).then(function (resp) {
-          console.log('[aa] response', resp.status);
           if (!resp.ok) throw new Error('auto-accept POST ' + resp.status);
           return resp.text();
         }).then(function (html) {
@@ -221,19 +215,17 @@
         }).catch(function (err) { console.error('[aa]', err); });
       };
       window.aaToggle = function (el) {
-        console.log('[aa] toggle', el.dataset.aaTarget, 'checked=', el.checked);
         window.aaPostTarget(el, { enabled: el.checked ? 'on' : '' });
       };
       window.aaSlider = function (el) {
-        console.log('[aa] slider', el.dataset.aaTarget, 'value=', el.value);
         var out = document.getElementById('aa-limit-out-' + el.dataset.aaTarget);
         if (out) out.value = el.value;
         window.aaPostTarget(el, { limit: el.value });
       };
-      // Defensive: also attach listeners programmatically in case inline
-      // onchange="..." is being filtered by a CSP, an extension, or
-      // anything else that strips inline event handlers. This runs after
-      // every fragment swap so the new switches/sliders are wired.
+      // Wires switches/sliders inside the auto-accept slot. Idempotent
+      // via _aaWired so re-calling after a fragment swap is safe. The
+      // `input` listener on the range only updates the visible <output>;
+      // the network call fires on `change` (drag end), not every pixel.
       window.aaWireSlot = function (slot) {
         if (!slot) return;
         slot.querySelectorAll('input[type="checkbox"][data-aa-target]').forEach(function (cb) {
