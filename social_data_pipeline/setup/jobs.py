@@ -88,7 +88,7 @@ def run_questionnaire(db_setup: dict) -> dict:
     )
     settings["max_concurrent"] = ask_int(
         "Max concurrent running jobs",
-        existing.get("max_concurrent", 5),
+        existing.get("max_concurrent", 20),
         tag="jobs_max_concurrent",
     )
     settings["history_retention"] = ask_int(

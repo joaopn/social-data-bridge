@@ -115,6 +115,20 @@ Other UI features:
 - **Results preview** — for done jobs, a small sample of the output file is rendered inline
 - **Disk usage panel** — shows bytes consumed by `<JOBS_RESULT_ROOT>` and free bytes on its filesystem
 - **SQL formatting** — submitted SQL is pretty-printed in the pending view
+- **Auto-accept** — opt-in panel for skipping the manual approve step on trusted targets (see below)
+
+## Auto-accept
+
+A pill next to the **SDP Jobs** title in the navbar. Click it to open a floating popover with a row per configured target. Each row has a slider (0..`max_concurrent`) and an enable switch. When a target's switch is on, the runner approves its pending jobs automatically up to the slider's value (FIFO).
+
+- **Per-target only** — there is no master toggle. A target with the switch off never auto-approves; a target with it on auto-approves up to the slider's value. Targets the user has never touched default to disabled.
+- **Default limit = `max_concurrent`** — first time you flip a target's switch, the slider is at its top (the runner's global cap). Lower it if you want to leave headroom for other targets.
+- **FIFO** — within a target, the oldest pending job is approved first (by submission time).
+- **Global cap still applies** — the runner's `max_concurrent` (config) gates the total number of jobs *executing* at once. Auto-accept just removes the human approval step; it doesn't bypass the worker pool. Slider values are clamped to `max_concurrent`.
+- **Slot accounting** — the cap counts `approved + running` for the target, so a backed-up approved queue doesn't sneak past the limit while the runner is busy on other targets.
+- **Persistence** — settings are stored in `data/jobs/auto_accept.json` (atomic writes). State survives container restarts; deleting the file resets every target to disabled.
+
+Settings update reactively — flipping a switch or releasing a slider posts the change immediately. There is no Save button.
 
 ## Per-backend timeouts
 
@@ -139,7 +153,7 @@ When `auth: true` (toggleable in `setup-jobs`), the UI prompts for the database 
 
 ## Concurrency and resume
 
-- `max_concurrent` (default 5) caps how many jobs run in parallel — each gets one thread from a `ThreadPoolExecutor`. Submissions beyond the cap stay in `approved/` until a slot frees up.
+- `max_concurrent` (default 20) caps how many jobs run in parallel — each gets one thread from a `ThreadPoolExecutor`. Submissions beyond the cap stay in `approved/` until a slot frees up.
 - The store on disk is the source of truth — if the container restarts, jobs in `pending/` and `approved/` resurface. Jobs caught mid-execution in `running/` are marked failed on next start (no automatic re-run; the agent can resubmit).
 
 ## Configuration reference
@@ -150,7 +164,7 @@ When `auth: true` (toggleable in `setup-jobs`), the UI prompts for the database 
 |-----|------|---------|---------|
 | `port` | int | 8050 | UI + MCP port (host-side via `JOBS_PORT` in `.env`) |
 | `result_root` | path | `./data/jobs/results` | Host directory where job output files land. Bind-mounted into PG/SR as `/jobs_export` and into the jobs container as `/data/jobs/results` |
-| `max_concurrent` | int | 5 | Worker pool size |
+| `max_concurrent` | int | 20 | Worker pool size |
 | `history_retention` | int | 500 | Number of completed jobs kept in `history/` |
 | `default_timeouts.postgres` | seconds | 0 | 0 = no limit |
 | `default_timeouts.mongodb` | seconds | 0 | 0 = no limit |

@@ -11,11 +11,12 @@ import shutil
 import threading
 
 import sqlparse
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from . import auth
+from .auto_accept import AutoAcceptStore
 from .config import JobsConfig
 from .runner import Runner
 from .store import Store
@@ -27,7 +28,12 @@ log = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
+def build_router(
+    cfg: JobsConfig,
+    store: Store,
+    runner: Runner,
+    auto_accept: AutoAcceptStore,
+) -> APIRouter:
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     templates.env.globals["relative_time"] = _relative_time
     templates.env.globals["absolute_time"] = _absolute_time
@@ -219,6 +225,72 @@ def build_router(cfg: JobsConfig, store: Store, runner: Runner) -> APIRouter:
                 name="_preview_result.html",
                 context={"columns": None, "rows": None, "error": f"{type(e).__name__}: {e}"},
             )
+
+    # --- Auto-accept controls --------------------------------------------
+
+    def _auto_accept_context(request: Request) -> dict:
+        state = auto_accept.get_state()
+        # Render rows for every configured target so the user sees a full
+        # list, including ones never toggled before. Untouched targets
+        # surface limit = max_limit so the slider renders at its top end
+        # (and matches what set_target writes on first toggle).
+        rows = []
+        for t in cfg.targets.values():
+            tstate = state.targets.get(t.name)
+            rows.append({
+                "name": t.name,
+                "backend": t.backend,
+                "database": t.database,
+                "enabled": bool(tstate.enabled) if tstate else False,
+                "limit": int(tstate.limit) if tstate else auto_accept.max_limit,
+            })
+        enabled_count = sum(1 for r in rows if r["enabled"])
+        return {
+            "request": request,
+            "max_limit": auto_accept.max_limit,
+            "rows": rows,
+            "enabled_count": enabled_count,
+            "total_targets": len(rows),
+        }
+
+    @protected.get("/fragments/auto_accept", response_class=HTMLResponse)
+    async def auto_accept_fragment(request: Request):
+        return templates.TemplateResponse(
+            request=request,
+            name="_auto_accept.html",
+            context=_auto_accept_context(request),
+        )
+
+    @protected.post("/actions/auto_accept/target/{name}", response_class=HTMLResponse)
+    async def auto_accept_target(request: Request, name: str):
+        if name not in cfg.targets:
+            raise HTTPException(status_code=404, detail=f"unknown target: {name}")
+        # Read the raw form rather than use Form(default=None): FastAPI +
+        # Pydantic v2 collapses ``enabled=`` (present with empty value)
+        # back to None, which is indistinguishable from "field absent" in
+        # the handler. We need the distinction — empty value means
+        # "switch off", absent means "no change". Multidict membership is
+        # the unambiguous signal.
+        form = await request.form()
+        enabled_bool: bool | None = None
+        if "enabled" in form:
+            enabled_bool = bool(form["enabled"])  # "" → False, "on" → True
+        limit: int | None = None
+        if "limit" in form:
+            try:
+                limit = int(form["limit"])
+            except (TypeError, ValueError):
+                limit = None
+        auto_accept.set_target(name, enabled=enabled_bool, limit=limit)
+        log.info(
+            "auto-accept target %s set: enabled=%s limit=%s",
+            name, enabled_bool, limit,
+        )
+        return templates.TemplateResponse(
+            request=request,
+            name="_auto_accept.html",
+            context=_auto_accept_context(request),
+        )
 
     router.include_router(protected)
     return router

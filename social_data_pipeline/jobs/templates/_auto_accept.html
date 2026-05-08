@@ -1,0 +1,29 @@
+<details class="auto-accept-panel">
+  <summary role="button" class="secondary outline">Auto-accept{% if enabled_count > 0 %} · {{ enabled_count }}/{{ total_targets }}{% endif %}</summary>
+  <div class="auto-accept-body">
+    {% if rows %}
+    <div class="auto-accept-targets">
+      {% for row in rows %}
+        <div>
+          <div class="target-name">{{ row.name }}</div>
+          <div class="target-meta">{{ row.backend }}{% if row.database %} · {{ row.database }}{% endif %}</div>
+        </div>
+        <input type="range"
+               id="aa-limit-{{ row.name }}"
+               data-aa-target="{{ row.name }}"
+               min="0" max="{{ max_limit }}" value="{{ row.limit }}"
+               oninput="document.getElementById('aa-limit-out-{{ row.name }}').value = this.value"
+               onchange="aaSlider(this)">
+        <output id="aa-limit-out-{{ row.name }}" for="aa-limit-{{ row.name }}">{{ row.limit }}</output>
+        <input type="checkbox" role="switch"
+               aria-label="Enable auto-accept for {{ row.name }}"
+               data-aa-target="{{ row.name }}"
+               onchange="aaToggle(this)"
+               {% if row.enabled %}checked{% endif %}>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="auto-accept-empty">No targets configured.</div>
+    {% endif %}
+  </div>
+</details>

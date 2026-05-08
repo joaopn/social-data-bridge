@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import auth
+from .auto_accept import AutoAcceptStore
 from .config import JobsConfig, load_config
 from .mcp_tools import build_mcp
 from .runner import Runner
@@ -32,7 +33,11 @@ def build_app(cfg: JobsConfig | None = None) -> FastAPI:
     auth.validate_startup(cfg.auth_enabled)
 
     store = Store(cfg.jobs_dir)
-    runner = Runner(cfg, store)
+    auto_accept = AutoAcceptStore(
+        state_path=cfg.jobs_dir / "auto_accept.json",
+        max_limit=cfg.max_concurrent,
+    )
+    runner = Runner(cfg, store, auto_accept)
     mcp = build_mcp(cfg, store, runner)
 
     @contextlib.asynccontextmanager
@@ -53,7 +58,7 @@ def build_app(cfg: JobsConfig | None = None) -> FastAPI:
 
     app.mount("/mcp", mcp.streamable_http_app())
 
-    app.include_router(build_router(cfg, store, runner))
+    app.include_router(build_router(cfg, store, runner, auto_accept))
 
     app.state.cfg = cfg
     app.state.store = store

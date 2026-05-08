@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from social_data_pipeline.jobs.auto_accept import AutoAcceptStore
 from social_data_pipeline.jobs.backends.base import (
     BackendError,
     ExecutionHandle,
@@ -98,10 +99,14 @@ def _cfg(tmp_path: Path, **overrides) -> JobsConfig:
     return JobsConfig(**base)
 
 
+def _auto_accept(tmp_path: Path, max_limit: int = 4) -> AutoAcceptStore:
+    return AutoAcceptStore(state_path=tmp_path / "auto_accept.json", max_limit=max_limit)
+
+
 def _runner_with_fake_backends(tmp_path):
     cfg = _cfg(tmp_path)
     store = Store(jobs_dir=tmp_path)
-    runner = Runner(cfg, store)
+    runner = Runner(cfg, store, _auto_accept(tmp_path))
     fakes = {key: FakeBackend() for key in runner._backends}
     runner._backends = fakes
     return runner, store, fakes
@@ -128,7 +133,7 @@ class TestBackendWiring:
     def test_builds_one_per_target(self, tmp_path):
         cfg = _cfg(tmp_path)
         store = Store(jobs_dir=tmp_path)
-        runner = Runner(cfg, store)
+        runner = Runner(cfg, store, _auto_accept(tmp_path))
         # Three targets → three backend instances, keyed by "<backend>:<target>".
         assert set(runner._backends.keys()) == {
             "postgres:warehouse",
@@ -271,7 +276,7 @@ class TestDrainOnce:
         so a single _drain_once() walks all approved jobs."""
         cfg = _cfg(tmp_path, max_concurrent=2)
         store = Store(jobs_dir=tmp_path)
-        runner = Runner(cfg, store)
+        runner = Runner(cfg, store, _auto_accept(tmp_path))
         runner._backends = {key: FakeBackend() for key in runner._backends}
 
         from concurrent.futures import Future
@@ -302,7 +307,7 @@ class TestDrainOnce:
         approved job stays in approved/ until the first frees a slot."""
         cfg = _cfg(tmp_path, max_concurrent=1)
         store = Store(jobs_dir=tmp_path)
-        runner = Runner(cfg, store)
+        runner = Runner(cfg, store, _auto_accept(tmp_path))
         runner._backends = {key: FakeBackend() for key in runner._backends}
 
         from concurrent.futures import Future
@@ -413,3 +418,126 @@ class TestListMongoDatabases:
         runner, _, _ = _runner_with_fake_backends(tmp_path)
         with pytest.raises(KeyError):
             runner.list_mongo_databases("ghost")
+
+
+# ── _auto_approve_eligible ──────────────────────────────────────────────────
+
+
+class TestAutoApproveEligible:
+    def test_no_target_enabled_is_noop(self, tmp_path):
+        # Default state: no targets in auto_accept.json → nothing approved.
+        runner, store, _ = _runner_with_fake_backends(tmp_path)
+        for i in range(3):
+            j = _job(job_id=f"pg_{i:08x}")
+            store.submit(j)
+
+        n = runner._auto_approve_eligible()
+
+        assert n == 0
+        assert len(list(store.pending.glob("*.json"))) == 3
+        assert len(list(store.approved.glob("*.json"))) == 0
+
+    def test_approves_up_to_limit_fifo(self, tmp_path):
+        runner, store, _ = _runner_with_fake_backends(tmp_path)
+        runner.auto_accept.set_target("warehouse", enabled=True, limit=2)
+
+        # Submit three jobs in order; the first two should auto-approve.
+        # mtime resolution is fine here — the loop sleeps long enough.
+        ids = []
+        for i in range(3):
+            j = _job(job_id=f"pg_{i:08x}")
+            store.submit(j)
+            ids.append(j.job_id)
+            time.sleep(0.01)
+
+        n = runner._auto_approve_eligible()
+
+        assert n == 2
+        approved_ids = {p.stem for p in store.approved.glob("*.json")}
+        # FIFO: oldest two are approved.
+        assert approved_ids == {ids[0], ids[1]}
+        # Third stays pending.
+        pending_ids = {p.stem for p in store.pending.glob("*.json")}
+        assert pending_ids == {ids[2]}
+
+    def test_running_jobs_consume_slots(self, tmp_path):
+        # If one job is already running for the target, only `limit - 1`
+        # more are auto-approved this tick.
+        runner, store, _ = _runner_with_fake_backends(tmp_path)
+        runner.auto_accept.set_target("warehouse", enabled=True, limit=2)
+
+        # Pre-populate one running job for warehouse.
+        running_job = _job(job_id="pg_running1")
+        store.submit(running_job)
+        store.approve(running_job.job_id)
+        store.claim_approved()
+        # Now there's exactly one running job.
+
+        for i in range(3):
+            j = _job(job_id=f"pg_pend_{i}")
+            store.submit(j)
+            time.sleep(0.01)
+
+        n = runner._auto_approve_eligible()
+
+        assert n == 1
+        # 1 running + 1 newly approved == limit
+        assert len(list(store.approved.glob("*.json"))) == 1
+
+    def test_disabled_target_is_skipped(self, tmp_path):
+        runner, store, _ = _runner_with_fake_backends(tmp_path)
+        runner.auto_accept.set_target("warehouse", enabled=False, limit=5)
+
+        store.submit(_job(job_id="pg_x"))
+        n = runner._auto_approve_eligible()
+
+        assert n == 0
+        assert len(list(store.pending.glob("*.json"))) == 1
+
+    def test_per_target_isolation(self, tmp_path):
+        # Auto-accept on for warehouse only; jobs for olap stay pending
+        # even when warehouse has spare slots.
+        runner, store, _ = _runner_with_fake_backends(tmp_path)
+        runner.auto_accept.set_target("warehouse", enabled=True, limit=5)
+
+        store.submit(_job(job_id="pg_a", target="warehouse", backend="postgres"))
+        time.sleep(0.01)
+        store.submit(_job(job_id="sr_b", target="olap", backend="starrocks"))
+
+        n = runner._auto_approve_eligible()
+
+        assert n == 1
+        approved_ids = {p.stem for p in store.approved.glob("*.json")}
+        assert approved_ids == {"pg_a"}
+        pending_ids = {p.stem for p in store.pending.glob("*.json")}
+        assert pending_ids == {"sr_b"}
+
+    def test_race_with_manual_approve_swallows_keyerror(self, tmp_path, monkeypatch):
+        # Simulate the race: auto-accept reads pending list; before it
+        # calls store.approve(), a manual approve has already moved the
+        # file. The KeyError must be swallowed and the loop continues
+        # for the next target's slots.
+        runner, store, _ = _runner_with_fake_backends(tmp_path)
+        runner.auto_accept.set_target("warehouse", enabled=True, limit=2)
+
+        store.submit(_job(job_id="pg_doomed"))
+        time.sleep(0.01)
+        store.submit(_job(job_id="pg_survivor"))
+
+        original_approve = store.approve
+        calls = {"n": 0}
+
+        def flaky_approve(job_id):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                # Simulate the file already being moved by a manual click.
+                raise KeyError(f"job {job_id} not in pending")
+            return original_approve(job_id)
+
+        monkeypatch.setattr(store, "approve", flaky_approve)
+
+        n = runner._auto_approve_eligible()
+
+        # First failed (KeyError swallowed), second succeeded.
+        assert n == 1
+        assert calls["n"] == 2

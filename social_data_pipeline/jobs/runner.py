@@ -9,6 +9,7 @@ import threading
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
+from .auto_accept import AutoAcceptStore
 from .backends import (
     Backend,
     BackendError,
@@ -33,9 +34,10 @@ class Runner:
 
     POLL_INTERVAL_SECONDS = 1.0
 
-    def __init__(self, cfg: JobsConfig, store: Store):
+    def __init__(self, cfg: JobsConfig, store: Store, auto_accept: AutoAcceptStore):
         self.cfg = cfg
         self.store = store
+        self.auto_accept = auto_accept
         self._stop = threading.Event()
         self._pool = ThreadPoolExecutor(max_workers=max(1, cfg.max_concurrent))
         self._poller: threading.Thread | None = None
@@ -105,10 +107,52 @@ class Runner:
     def _poll_loop(self) -> None:
         while not self._stop.is_set():
             try:
+                self._auto_approve_eligible()
+            except Exception:
+                log.exception("auto-accept poll error")
+            try:
                 self._drain_once()
             except Exception:
                 log.exception("runner poll error")
             self._stop.wait(self.POLL_INTERVAL_SECONDS)
+
+    def _auto_approve_eligible(self) -> int:
+        """Approve pending jobs for any target with available auto-accept slots.
+
+        Returns the number of jobs approved this tick. FIFO by submitted_at
+        (which is what ``list_phase("pending")`` already gives us via mtime
+        sort). Per-target slots are computed from the live counts of jobs in
+        ``approved/`` + ``running/`` so the cap holds even when the runner is
+        busy on other targets and the approved queue has built up.
+        """
+        running = self.store.list_phase("running")
+        approved = self.store.list_phase("approved")
+        running_counts: dict[str, int] = {}
+        approved_counts: dict[str, int] = {}
+        for j in running:
+            running_counts[j.target] = running_counts.get(j.target, 0) + 1
+        for j in approved:
+            approved_counts[j.target] = approved_counts.get(j.target, 0) + 1
+
+        slots = self.auto_accept.eligible_targets(running_counts, approved_counts)
+        if not slots:
+            return 0
+
+        approved_now = 0
+        for job in self.store.list_phase("pending"):
+            remaining = slots.get(job.target, 0)
+            if remaining <= 0:
+                continue
+            try:
+                self.store.approve(job.job_id)
+            except KeyError:
+                # Lost the race against a manual approve/reject — fine,
+                # just move on to the next pending job.
+                continue
+            slots[job.target] = remaining - 1
+            approved_now += 1
+            log.info("auto-approved %s target=%s", job.job_id, job.target)
+        return approved_now
 
     def _drain_once(self) -> None:
         while True:
