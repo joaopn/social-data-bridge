@@ -2501,12 +2501,22 @@ def cmd_db_recover_password(args):
             mongo_cache = env.get("MONGO_CACHE_SIZE_GB", "2")
 
             print("  Starting MongoDB without auth for recovery...")
+            # Match the storage layout the data was created with. The real
+            # mongo container reads config/mongo/mongod.conf which sets
+            # `storage.directoryPerDB: true`; mongod refuses to open an
+            # existing dataset with mismatched directoryPerDB, so we must
+            # pass --directoryperdb here too. Note: no --rm — we retain the
+            # container so `docker logs` can surface mongod errors if it
+            # fails to start. We `docker rm -f` it on every exit path.
+            subprocess.run(["docker", "rm", "-f", "sdp-mongo-recovery"],
+                           capture_output=True)
             result = subprocess.run(
-                ["docker", "run", "--rm", "-d",
+                ["docker", "run", "-d",
                  "--name", "sdp-mongo-recovery",
                  "-v", f"{mongo_data_path}/db:/data/db",
                  "mongo:8",
                  "mongod", "--bind_ip", "0.0.0.0",
+                 "--directoryperdb",
                  "--wiredTigerCacheSizeGB", mongo_cache],
                 cwd=ROOT, capture_output=True, text=True,
             )
@@ -2514,8 +2524,13 @@ def cmd_db_recover_password(args):
                 print(f"  Error: Failed to start recovery container: {result.stderr}")
                 return 1
 
-            # Wait for mongod to be ready
+            # Wait for mongod to be ready. If the container exits before it
+            # responds (e.g. storage-layout mismatch), `docker exec` keeps
+            # returning "no such container" and the loop would silently fall
+            # through to the password update with the same error. Detect a
+            # dead container early and surface its actual mongod logs.
             import time
+            ready = False
             for _ in range(15):
                 check = subprocess.run(
                     ["docker", "exec", "sdp-mongo-recovery",
@@ -2523,8 +2538,29 @@ def cmd_db_recover_password(args):
                     capture_output=True, text=True,
                 )
                 if check.returncode == 0:
+                    ready = True
+                    break
+                alive = subprocess.run(
+                    ["docker", "ps", "-q", "-f", "name=^sdp-mongo-recovery$"],
+                    capture_output=True, text=True,
+                )
+                if alive.stdout.strip() == "":
                     break
                 time.sleep(2)
+            if not ready:
+                logs = subprocess.run(
+                    ["docker", "logs", "--tail", "40", "sdp-mongo-recovery"],
+                    capture_output=True, text=True,
+                )
+                print("  Error: recovery mongod failed to come up.")
+                tail = (logs.stderr or logs.stdout).strip()
+                if tail:
+                    print("  --- mongod logs (tail) ---")
+                    for ln in tail.splitlines():
+                        print(f"  {ln}")
+                subprocess.run(["docker", "rm", "-f", "sdp-mongo-recovery"],
+                               capture_output=True)
+                return 1
 
             # Update password (escape single quotes for JS string literal)
             escaped_user = mongo_admin_user.replace("'", "\\'")
@@ -2540,9 +2576,9 @@ def cmd_db_recover_password(args):
                 cwd=ROOT,
             )
 
-            # Stop recovery container
-            subprocess.run(["docker", "stop", "sdp-mongo-recovery"],
-                         capture_output=True)
+            # Stop and remove recovery container (no --rm at create time).
+            subprocess.run(["docker", "rm", "-f", "sdp-mongo-recovery"],
+                           capture_output=True)
 
             if result.returncode != 0:
                 print("  Error: Failed to update MongoDB password.")
