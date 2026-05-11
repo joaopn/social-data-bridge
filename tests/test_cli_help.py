@@ -33,6 +33,7 @@ SUBCOMMANDS = [
     ["db", "stop", "--help"],
     ["db", "status", "--help"],
     ["db", "unsetup", "--help"],
+    ["db", "reset", "--help"],
     ["db", "unsetup-mcp", "--help"],
     ["db", "unsetup-jobs", "--help"],
     ["db", "recover-password", "--help"],

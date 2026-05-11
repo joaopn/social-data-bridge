@@ -307,6 +307,12 @@ The admin password is **never stored on disk** — it is prompted each time `sdp
 
 Re-running `sdp db setup` on an existing install now defaults to **keeping** the existing RO password; the previous default (always auto-generate) silently rotated it on every re-run and broke any client with cached credentials.
 
+### Wiping Data Without Losing Config
+
+`sdp db reset --db <postgres|mongo|starrocks>` wipes a single database's data while preserving every config surface: `config/db/<db>.yaml`, `config/sources/*/<db>.yaml`, `.env`, `docker-compose.override.yml`, `config/db/mcp.yaml`, and `.ro_credentials`. Reset stops the DB + its MCP, deletes only the server's own subdirectories under `<DB>_DATA_PATH` (`pgdata/`, `db/`, `fe/`+`be/`), plus host-side `state_tracking/` and mongo's `logs/`, plus the contents of PG tablespaces or SR `storage_paths`. After reset, `sdp db start <db>` brings the DB back up with the preserved `.ro_credentials` (the entrypoint re-creates the RO user from it), ready for `sdp run <db>_ingest`. Reset refuses to run while an ingest container is in flight against the target DB.
+
+Pick the right tool: `db reset` is for re-ingesting from scratch; `db unsetup --db <db>` removes the database entirely (config included); `db setup --add <db>` re-runs setup in place without losing data.
+
 ### How It Works
 
 - **PostgreSQL**: `pg_hba.local.conf` uses `scram-sha-256` for remote connections and `trust` for local socket. Existing databases are migrated via temporary trust start in the entrypoint.

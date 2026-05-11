@@ -11,6 +11,7 @@ Usage:
     sdp.py db stop [service]                 Stop services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
     sdp.py db status                         Show database config and health
     sdp.py db unsetup                        Remove database config (and optionally data)
+    sdp.py db reset --db <name>              Wipe one database's data (keeps config)
     sdp.py db unsetup-mcp                    Remove MCP configuration
     sdp.py db recover-password               Reset database admin password
     sdp.py db create-indexes [--source <name>] Interactively create database indexes
@@ -368,6 +369,72 @@ def _regenerate_ro_credentials_for(target_dbs, password=None):
         cred_path = _write_ro_password_for(db, data_path, new_pw)
         print(f"  Written: {cred_path} (chmod 600)")
     return new_pw
+
+
+# DB container image used by `_chown_db_data_for_host`. Each DB writes its
+# data dir as a non-host uid (postgres / mongodb / starrocks inside the
+# container), so we re-chown via a container with the matching image before
+# any host-side `shutil.rmtree`.
+_DB_CHOWN_IMAGE = {
+    "postgres": "postgres:18",
+    "mongo": "mongo:8",
+    "starrocks": "starrocks/allin1-ubuntu",
+}
+
+
+def _chown_db_data_for_host(db_name, data_path, extra_paths):
+    """Chown a DB's data + extra-storage tree to the host uid/gid via a throwaway container.
+
+    Required before host-side ``shutil.rmtree`` because the DB container
+    writes data files as a non-host uid. Mounts and chowns:
+      - the parent of ``data_path`` recursively (covers the data dir itself
+        plus host-side siblings like ``.ro_credentials`` and ``state_tracking/``)
+      - each ``extra_paths`` entry recursively (its contents)
+      - each ``extra_paths`` entry's parent non-recursively, so the entry
+        directory itself can be unlinked / its contents removed without
+        recursing into sibling dirs that may share the same disk
+
+    Args:
+        db_name: ``"postgres"`` | ``"mongo"`` | ``"starrocks"`` — selects the
+            container image.
+        data_path: resolved ``Path`` to the DB data dir (e.g. ``PGDATA_PATH``).
+        extra_paths: ``{name: host_path}`` for PG tablespaces or SR
+            ``storage_paths``. May be empty.
+
+    Returns:
+        ``[(name, resolved_path), ...]`` for every ``extra_paths`` entry that
+        existed on disk, in iteration order. Callers use this to drive a
+        post-chown rmtree / wipe pass without having to re-resolve paths.
+    """
+    chown_image = _DB_CHOWN_IMAGE[db_name]
+    parent = data_path.resolve().parent
+    volume_args = ["-v", f"{parent}:/dbparent"]
+    recursive = ["/dbparent"]
+    non_recursive = []
+    extra_mounts = []
+    for name, host_path in extra_paths.items():
+        ts_dir = Path(host_path)
+        if not ts_dir.is_absolute():
+            ts_dir = ROOT / ts_dir
+        if not ts_dir.exists():
+            continue
+        ts_resolved = ts_dir.resolve()
+        volume_args += ["-v", f"{ts_resolved}:/tablespace/{name}"]
+        recursive.append(f"/tablespace/{name}")
+        ts_parent_mount = f"/tsparent_{name}"
+        volume_args += ["-v", f"{ts_resolved.parent}:{ts_parent_mount}"]
+        non_recursive.append(ts_parent_mount)
+        extra_mounts.append((name, ts_resolved))
+    uid_gid = f"{os.getuid()}:{os.getgid()}"
+    chown_cmd = f"chown -R {uid_gid} {' '.join(recursive)}"
+    if non_recursive:
+        chown_cmd += f" && chown {uid_gid} {' '.join(non_recursive)}"
+    subprocess.run(
+        ["docker", "run", "--rm"] + volume_args +
+        [chown_image, "sh", "-c", chown_cmd],
+        cwd=ROOT,
+    )
+    return extra_mounts
 
 
 # ============================================================================
@@ -1764,11 +1831,6 @@ def _unsetup_single_db(db_name, env):
         "mongo": "MONGO_DATA_PATH",
         "starrocks": "STARROCKS_DATA_PATH",
     }[db_name]
-    chown_image = {
-        "postgres": "postgres:18",
-        "mongo": "mongo:8",
-        "starrocks": "starrocks/allin1-ubuntu",
-    }[db_name]
     env_keys_map = {
         "postgres": {"PGDATA_PATH", "DB_NAME", "POSTGRES_PORT", "POSTGRES_MEM_LIMIT",
                      "POSTGRES_AUTH_ENABLED", "POSTGRES_RO_USER",
@@ -1884,55 +1946,16 @@ def _unsetup_single_db(db_name, env):
                    "down", "--timeout", "30")
     print()
 
-    # --- Delete data directory (+ tablespaces for PG) ---
+    # --- Delete data directory (+ tablespaces for PG / extra storage for SR) ---
     if data_path and data_path.exists():
         print("  Fixing directory permissions...")
-        parent = data_path.resolve().parent
-        volume_args = ["-v", f"{parent}:/dbparent"]
-        # Recursive: make everything user-owned so shutil.rmtree can clean contents.
-        recursive = ["/dbparent"]
-        # Non-recursive: make tablespace PARENTS user-owned so we can unlink the
-        # tablespace directory itself. Can't be recursive because a parent may
-        # contain sibling DB dirs (e.g. a starrocks dir) we must not touch.
-        non_recursive = []
-        ts_mounts = []  # for the rmtree pass (PG tablespaces and SR extra storage)
         if db_name == "postgres":
-            for ts_name, ts_path in tablespace_paths.items():
-                ts_dir = Path(ts_path)
-                if not ts_dir.is_absolute():
-                    ts_dir = ROOT / ts_dir
-                if ts_dir.exists():
-                    volume_args += ["-v", f"{ts_dir.resolve()}:/tablespace/{ts_name}"]
-                    recursive.append(f"/tablespace/{ts_name}")
-                    ts_parent = ts_dir.resolve().parent
-                    ts_parent_mount = f"/tsparent_{ts_name}"
-                    volume_args += ["-v", f"{ts_parent}:{ts_parent_mount}"]
-                    non_recursive.append(ts_parent_mount)
-                    ts_mounts.append((ts_name, ts_dir))
-        if db_name == "starrocks":
-            # SR extra disks: same chown / rmtree shape as PG tablespaces;
-            # mount under /tablespace/ to reuse the existing chown command.
-            for sp_name, sp_path in sr_storage_paths.items():
-                sp_dir = Path(sp_path)
-                if not sp_dir.is_absolute():
-                    sp_dir = ROOT / sp_dir
-                if sp_dir.exists():
-                    volume_args += ["-v", f"{sp_dir.resolve()}:/tablespace/{sp_name}"]
-                    recursive.append(f"/tablespace/{sp_name}")
-                    sp_parent = sp_dir.resolve().parent
-                    sp_parent_mount = f"/tsparent_{sp_name}"
-                    volume_args += ["-v", f"{sp_parent}:{sp_parent_mount}"]
-                    non_recursive.append(sp_parent_mount)
-                    ts_mounts.append((sp_name, sp_dir))
-        uid_gid = f"{os.getuid()}:{os.getgid()}"
-        chown_cmd = f"chown -R {uid_gid} {' '.join(recursive)}"
-        if non_recursive:
-            chown_cmd += f" && chown {uid_gid} {' '.join(non_recursive)}"
-        subprocess.run(
-            ["docker", "run", "--rm"] + volume_args +
-            [chown_image, "sh", "-c", chown_cmd],
-            cwd=ROOT,
-        )
+            extra_paths = tablespace_paths
+        elif db_name == "starrocks":
+            extra_paths = sr_storage_paths
+        else:
+            extra_paths = {}
+        ts_mounts = _chown_db_data_for_host(db_name, data_path, extra_paths)
         print(f"  Removing {data_path}...")
         shutil.rmtree(data_path)
         extra_label = "tablespace" if db_name == "postgres" else "extra storage"
@@ -2336,6 +2359,215 @@ def cmd_db_unsetup(args):
 
 
 # ============================================================================
+# sdp db reset
+# ============================================================================
+
+# Server-owned subdirectories under <DB>_DATA_PATH that `db reset` wipes.
+# Everything else inside the data dir (.ro_credentials, .bak files, etc.) is
+# preserved. Each entry is recreated as an empty directory after wipe so the
+# DB starts cleanly on the next `db start`.
+_DB_RESET_SUBDIRS = {
+    "postgres": ["pgdata", "state_tracking"],
+    "mongo": ["db", "state_tracking", "logs"],
+    "starrocks": ["fe", "be", "state_tracking"],
+}
+
+# Compose service names that read/write the DB. `db reset` refuses to run
+# while any of these are running — otherwise the orchestrator container
+# keeps writing into state_tracking/ as we delete it.
+_DB_INGEST_SERVICES = {
+    "postgres": {"postgres-ingest", "postgres-ml"},
+    "mongo": {"mongo-ingest"},
+    "starrocks": {"sr-ingest", "sr-ml"},
+}
+
+
+def _read_pg_tablespace_paths():
+    """Read PG tablespace host paths from pipeline/user/db yaml.
+
+    Same union the unsetup path computes (see `_unsetup_single_db`): merge
+    `tablespaces:` from `config/postgres/pipeline.yaml`,
+    `config/postgres/user.yaml`, and `config/db/postgres.yaml`. Returns
+    ``{ts_name: host_path}``; empty when no tablespaces are configured.
+    Defensive against missing/malformed yaml — reset must still be able to
+    wipe pgdata/ even if a tablespace yaml is broken.
+    """
+    import yaml
+    tablespace_paths = {}
+    for cfg_name in ("pipeline.yaml", "user.yaml"):
+        cfg_file = CONFIG_DIR / "postgres" / cfg_name
+        if cfg_file.exists():
+            try:
+                cfg = yaml.safe_load(cfg_file.read_text()) or {}
+                ts = cfg.get("tablespaces") or cfg.get("pipeline", {}).get("tablespaces")
+                if ts and isinstance(ts, dict):
+                    tablespace_paths.update(ts)
+            except Exception:
+                pass
+    pg_db_config = CONFIG_DIR / "db" / "postgres.yaml"
+    if pg_db_config.exists():
+        try:
+            cfg = yaml.safe_load(pg_db_config.read_text()) or {}
+            ts = cfg.get("tablespaces")
+            if ts and isinstance(ts, dict):
+                tablespace_paths.update(ts)
+        except Exception:
+            pass
+    return tablespace_paths
+
+
+def cmd_db_reset(args):
+    """Wipe a database's data; preserve all config.
+
+    Deletes only the DB server's own subdirectories under ``<DB>_DATA_PATH``
+    (``pgdata/``, ``db/``, ``fe/``+``be/``), plus host-side ``state_tracking/``
+    and mongo's ``logs/``, plus the contents of any PG tablespace or SR
+    ``storage_paths`` directories. Everything else is preserved:
+    ``config/db/<db>.yaml``, ``config/sources/*/<db>.yaml``, ``.env``,
+    ``docker-compose.override.yml``, ``config/db/mcp.yaml``, and
+    ``.ro_credentials`` (the entrypoint re-creates the RO user from that file
+    on the next start).
+
+    Use when the data is corrupt or you want to re-ingest from scratch.
+    Use ``db unsetup --db <name>`` instead to remove the DB entirely (config
+    included).
+    """
+    db_name = args.db
+    env = load_env()
+
+    if db_name not in _get_configured_db_services():
+        print(f"\n  No {db_name} configuration found.\n")
+        return 0
+
+    db_label = {"postgres": "PostgreSQL", "mongo": "MongoDB", "starrocks": "StarRocks"}[db_name]
+    data_env_var = _DB_DATA_PATH_ENV[db_name]
+    server_subdirs = _DB_RESET_SUBDIRS[db_name]
+
+    # --- Resolve data path ---
+    data_path_str = env.get(data_env_var, "")
+    if not data_path_str:
+        print(f"\n  No {data_env_var} in .env — nothing to reset.\n")
+        return 0
+    data_path = Path(data_path_str)
+    if not data_path.is_absolute():
+        data_path = ROOT / data_path
+    if not data_path.exists():
+        print(f"\n  {data_path} does not exist — nothing to reset.\n")
+        return 0
+
+    # --- Read extras (PG tablespaces / SR storage_paths) ---
+    if db_name == "postgres":
+        extra_paths = _read_pg_tablespace_paths()
+        extra_label = "Tablespace"
+    elif db_name == "starrocks":
+        extra_paths = _read_sr_storage_paths()
+        extra_label = "Extra storage"
+    else:
+        extra_paths = {}
+        extra_label = ""
+
+    # --- In-flight ingest guard ---
+    # Without this, an `sdp run <ingest>` container keeps writing into
+    # state_tracking/ while we're deleting it, producing corrupt state files
+    # the next ingest would then read.
+    in_flight = _running_services() & _DB_INGEST_SERVICES[db_name]
+    if in_flight:
+        print(
+            f"\n  [ERR] Ingest container(s) running against {db_label}: "
+            f"{', '.join(sorted(in_flight))}"
+        )
+        print("        Stop them before resetting (mid-write corruption otherwise).\n")
+        return 1
+
+    orphaned_jobs_targets = _orphaned_jobs_targets_for(db_name)
+
+    # --- Inventory ---
+    print()
+    header_text = f"Social Data Pipeline - Reset {db_label}"
+    print(f"  {header_text}")
+    print(f"  {'=' * len(header_text)}")
+    print()
+    print(f"  This wipes {db_label} data and keeps your configuration.")
+    print()
+    print("  Will be deleted:")
+    any_listed = False
+    for sub in server_subdirs:
+        p = data_path / sub
+        if p.exists():
+            print(f"    {p}")
+            any_listed = True
+    for name, host_path in extra_paths.items():
+        p = Path(host_path)
+        if not p.is_absolute():
+            p = ROOT / p
+        if p.exists():
+            print(f"    {extra_label} '{name}' contents: {p}")
+            any_listed = True
+    if not any_listed:
+        print("    (nothing to delete — data dirs are already empty)")
+    print()
+    print("  Will be preserved:")
+    print(f"    config/db/{db_name}.yaml, config/db/mcp.yaml")
+    print(f"    config/sources/*/{db_name}.yaml")
+    print("    .env, docker-compose.override.yml")
+    cred_file = data_path / ".ro_credentials"
+    if cred_file.exists():
+        print(f"    {cred_file} (RO user re-created on next start)")
+    print()
+    if orphaned_jobs_targets:
+        print(
+            f"  [WARN] Jobs scheduler has target(s) pointing at {db_label}: "
+            f"{', '.join(orphaned_jobs_targets)}"
+        )
+        print("         They will fail until you run 'sdp db start' again.")
+        print()
+
+    confirm = input(
+        f"  Reset {db_label} data? This CANNOT be undone [y/N]: "
+    ).strip().lower()
+    if confirm not in ("y", "yes"):
+        print("\n  Aborted — nothing was changed.\n")
+        return 0
+    print()
+
+    # --- Stop containers (DB + MCP profile only) ---
+    print(f"  Stopping {db_label} containers...")
+    docker_compose("--profile", db_name, "--profile", f"{db_name}_mcp",
+                   "down", "--timeout", "30")
+    print()
+
+    # --- Chown + wipe ---
+    print("  Fixing directory permissions...")
+    ts_mounts = _chown_db_data_for_host(db_name, data_path, extra_paths)
+
+    for sub in server_subdirs:
+        p = data_path / sub
+        if p.exists():
+            print(f"  Removing {p}...")
+            shutil.rmtree(p)
+            p.mkdir()
+
+    # PG tablespaces and SR storage_paths: wipe CONTENTS, preserve the dir
+    # itself so the docker-compose mount still resolves on next `db start`.
+    for name, p in ts_mounts:
+        if not p.exists():
+            continue
+        print(f"  Wiping {extra_label.lower()} '{name}' at {p}...")
+        for child in p.iterdir():
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
+    print()
+    print(f"  {db_label} data reset complete.")
+    print(f"  Next: sdp db start {db_name}")
+    print(f"        sdp run {db_name}_ingest --source <name>")
+    print()
+    return 0
+
+
+# ============================================================================
 # sdp db recover-password
 # ============================================================================
 
@@ -2501,22 +2733,37 @@ def cmd_db_recover_password(args):
             mongo_cache = env.get("MONGO_CACHE_SIZE_GB", "2")
 
             print("  Starting MongoDB without auth for recovery...")
-            # Match the storage layout the data was created with. The real
-            # mongo container reads config/mongo/mongod.conf which sets
-            # `storage.directoryPerDB: true`; mongod refuses to open an
-            # existing dataset with mismatched directoryPerDB, so we must
-            # pass --directoryperdb here too. Note: no --rm — we retain the
-            # container so `docker logs` can surface mongod errors if it
-            # fails to start. We `docker rm -f` it on every exit path.
+            # The recovery mongod MUST see the same config file the real
+            # mongo container does — historically we passed an ad-hoc flag
+            # list ("--directoryperdb", "--bind_ip 0.0.0.0", default
+            # compressors) and re-discovered every drift the hard way:
+            # mismatched directoryPerDB refused to open the dataset;
+            # missing journalCompressor wrote snappy journal entries into
+            # a zstd-configured dataset and corrupted it on next start.
+            # Mount config/mongo/mongod.conf at the same in-container path
+            # the compose service uses (/etc/mongo/config/mongod.conf,
+            # docker-compose.yml line 220) and invoke mongod with --config
+            # exactly like config/mongo/entrypoint-wrapper.sh line 14 does.
+            # The only CLI override is --wiredTigerCacheSizeGB, mirroring
+            # the real wrapper — it's the one knob that lives in .env, not
+            # in mongod.conf.
+            # No --rm — we retain the container so `docker logs` can
+            # surface mongod errors if it fails to start. We `docker rm -f`
+            # on every exit path.
+            mongod_conf_host = ROOT / "config" / "mongo" / "mongod.conf"
+            if not mongod_conf_host.exists():
+                print(f"  Error: {mongod_conf_host} not found. Is mongo configured?")
+                return 1
             subprocess.run(["docker", "rm", "-f", "sdp-mongo-recovery"],
                            capture_output=True)
             result = subprocess.run(
                 ["docker", "run", "-d",
                  "--name", "sdp-mongo-recovery",
                  "-v", f"{mongo_data_path}/db:/data/db",
+                 "-v", f"{mongod_conf_host}:/etc/mongo/config/mongod.conf:ro",
                  "mongo:8",
-                 "mongod", "--bind_ip", "0.0.0.0",
-                 "--directoryperdb",
+                 "mongod",
+                 "--config", "/etc/mongo/config/mongod.conf",
                  "--wiredTigerCacheSizeGB", mongo_cache],
                 cwd=ROOT, capture_output=True, text=True,
             )
@@ -4074,6 +4321,16 @@ def build_parser():
     db_unsetup_p.add_argument("--db", choices=["postgres", "mongo", "starrocks"],
                                help="Remove a single database (config, containers, and data) without affecting others")
     db_unsetup_p.set_defaults(func=cmd_db_unsetup)
+
+    db_reset_p = db_sub.add_parser(
+        "reset",
+        help="Wipe a database's data (keeps config, env, MCP, and per-source overrides)",
+    )
+    db_reset_p.add_argument(
+        "--db", choices=["postgres", "mongo", "starrocks"], required=True,
+        help="Database to reset",
+    )
+    db_reset_p.set_defaults(func=cmd_db_reset)
 
     db_unsetup_mcp_p = db_sub.add_parser("unsetup-mcp", help="Remove MCP configuration")
     db_unsetup_mcp_p.set_defaults(func=cmd_db_unsetup_mcp)
