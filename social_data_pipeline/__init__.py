@@ -12,4 +12,4 @@ Profiles:
 - postgres_ml: Ingest ML classifier outputs into PostgreSQL
 """
 
-__version__ = "2.0.0"
+__version__ = "3.0.0"

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "social-data-pipeline"
+version = "3.0.0"
+description = "Docker-based pipeline for processing, classifying, and ingesting large-scale social media data dumps."
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "AGPL-3.0-or-later"}
+authors = [{name = "Joao Pinheiro Neto", email = "joaoxp@gmail.com"}]
+keywords = ["reddit", "social-media", "etl", "pipeline", "docker", "mcp"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = ["pyyaml>=6.0"]
+
+[project.scripts]
+sdp = "sdp:main"
+
+[project.urls]
+Homepage = "https://github.com/joaopn/social-data-pipeline"
+Issues = "https://github.com/joaopn/social-data-pipeline/issues"
+
+[tool.setuptools]
+py-modules = ["sdp"]
+packages = ["social_data_pipeline"]

@@ -3,7 +3,7 @@
 # Social Data Pipeline
 
 [![Docker](https://img.shields.io/badge/Docker-Compose_v2-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![MongoDB 8](https://img.shields.io/badge/MongoDB-8-47A248.svg?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
 [![StarRocks](https://img.shields.io/badge/StarRocks-OLAP-FF6D00.svg?logo=starrocks&logoColor=white)](https://www.starrocks.io/)
@@ -111,7 +111,7 @@ flowchart TB
 
 ## ◾ Requirements
 
-- [Python](https://www.python.org/) 3.10+ (for `sdp.py` CLI and setup scripts)
+- [Python](https://www.python.org/) 3.11+ (for `sdp.py` CLI and setup scripts)
 - [Docker Compose](https://docs.docker.com/compose/) v2
 
 > [!TIP]
@@ -128,7 +128,21 @@ flowchart TB
 
 ## ◾ Quick Start
 
-#### 1. Configure (one-time)
+#### 1. Install
+
+```bash
+git clone https://github.com/joaopn/social-data-pipeline
+cd social-data-pipeline
+```
+
+Then pick one of:
+
+- **Run directly** with `python sdp.py <command>`. Zero install. Requires `pyyaml` on the system Python (`pip install pyyaml`) or in an activated venv.
+- **Install as a CLI** with `pipx install --editable .` (requires `pipx >= 1.4`). Gives you a global `sdp` command — every example below works with either `python sdp.py X` or `sdp X`. The install is pinned to the clone location; if you move or delete the clone, run `pipx uninstall social-data-pipeline` and reinstall from the new path.
+
+Updates: `git pull` picks up all source-code changes automatically with either install option. If a release also changes `pyproject.toml` (rare — listed in release notes), `pipx install --editable .` users should also run `pipx reinstall social-data-pipeline` to refresh the install metadata.
+
+#### 2. Configure (one-time)
 
 ```bash
 python sdp.py db setup              # Configure databases — PostgreSQL, MongoDB, StarRocks (with optional auth)
@@ -143,7 +157,7 @@ python sdp.py source add reddit     # Add a data source (interactive setup)
 
 For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). For full configuration details, see the [Configuration Reference](docs/configuration.md).
 
-#### 2. Run
+#### 3. Run
 
 ```bash
 python sdp.py db start                          # Start databases + MCPs + jobs (whatever's configured)
@@ -156,7 +170,7 @@ python sdp.py run sr_ml --source reddit         # Optional: ingest classifier ou
 
 `db start` brings up everything `db setup`/`setup-mcp`/`setup-jobs` configured — no separate command per service. The `--source` flag selects the target source (optional when only one is configured); `source add` prints the recommended run commands for your setup. Ordering rules for the optional enrichment + classifier-ingest steps: `lingua` should run before `*_ingest` so its language columns get folded into the main table; `ml` (GPU transformer classifiers) can run at any point after `parse` — its outputs are independent files; the `*_ml` profiles must run **after** their `*_ingest` counterpart, since classifier tables foreign-key into the main table. See [Classification Profiles](docs/profiles/classification.md) for tuning and the GPU requirements for `ml`. Use `python sdp.py source status` to check progress and `python sdp.py source error-logs` to inspect ingestion failures.
 
-#### 3. Query
+#### 4. Query
 
 Three ways to use the data::
 
