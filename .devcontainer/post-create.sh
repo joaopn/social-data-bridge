@@ -10,6 +10,10 @@ cd "$REPO_ROOT"
 
 DEMO="$REPO_ROOT/tests/demo"
 
+# Bind-mounted host docker socket; relax permissions so the non-root vscode
+# user can talk to the daemon without matching the host's docker group GID.
+sudo chmod 666 /var/run/docker.sock 2>/dev/null || true
+
 copy_if_missing() {
     local src="$1"
     local dst="$2"
