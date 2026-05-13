@@ -28,6 +28,7 @@
         "vscode": {
             "settings": {
                 "workbench.startupEditor": "none",
+                "workbench.colorTheme": "Monokai Dimmed",
                 "workbench.editorAssociations": {
                     "*.md": "vscode.markdown.preview.editor"
                 }

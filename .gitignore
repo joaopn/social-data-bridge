@@ -52,6 +52,7 @@ docker-compose.override.yml
 !tests/demo/docker-compose.override.yml
 !tests/demo/config/starrocks/fe.local.conf
 !tests/demo/config/starrocks/be.local.conf
+!tests/demo/config/postgres/postgresql.local.conf
 
 # Config
 .env

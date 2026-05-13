@@ -32,6 +32,7 @@ copy_if_missing "$DEMO/config/db/starrocks.yaml" config/db/starrocks.yaml
 copy_if_missing "$DEMO/config/db/mcp.yaml" config/db/mcp.yaml
 copy_if_missing "$DEMO/config/jobs/config.local.yaml" config/jobs/config.local.yaml
 copy_if_missing "$DEMO/docker-compose.override.yml" docker-compose.override.yml
+copy_if_missing "$DEMO/config/postgres/postgresql.local.conf" config/postgres/postgresql.local.conf
 copy_if_missing "$DEMO/config/starrocks/fe.local.conf" config/starrocks/fe.local.conf
 copy_if_missing "$DEMO/config/starrocks/be.local.conf" config/starrocks/be.local.conf
 copy_if_missing "$DEMO/config/sources/reddit/platform.yaml" config/sources/reddit/platform.yaml
