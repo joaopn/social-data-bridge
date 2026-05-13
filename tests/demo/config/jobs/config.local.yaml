@@ -11,3 +11,9 @@ targets:
   pg_main:
     backend: postgres
     database: datasets
+  mongo_main:
+    backend: mongodb
+    database: ""
+  sr_main:
+    backend: starrocks
+    database: ""

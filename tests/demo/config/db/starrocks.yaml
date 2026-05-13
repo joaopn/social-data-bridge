@@ -1,0 +1,5 @@
+port: 9030
+fe_http_port: 8030
+fe_jvm_heap: 1
+be_mem_limit: 2
+alter_tablet_workers: 1

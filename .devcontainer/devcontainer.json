@@ -7,6 +7,7 @@
         "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind"
     ],
     "postCreateCommand": "bash .devcontainer/post-create.sh",
+    "postAttachCommand": "code --reuse-window --command markdown.showPreview tests/demo/WELCOME.md",
     "forwardPorts": [8050, 8000, 5432],
     "portsAttributes": {
         "8050": {
@@ -22,5 +23,12 @@
             "onAutoForward": "silent"
         }
     },
-    "remoteUser": "vscode"
+    "remoteUser": "vscode",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "workbench.startupEditor": "none"
+            }
+        }
+    }
 }

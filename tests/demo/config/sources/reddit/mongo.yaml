@@ -1,0 +1,5 @@
+pipeline:
+  processing:
+    data_types:
+      - submissions
+      - comments

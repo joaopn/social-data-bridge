@@ -2,3 +2,10 @@ postgres:
   enabled: true
   port: 8000
   access_mode: restricted
+mongo:
+  enabled: true
+  port: 3000
+  read_only: true
+starrocks:
+  enabled: true
+  port: 9000

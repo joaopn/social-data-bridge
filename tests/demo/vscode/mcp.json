@@ -1,0 +1,8 @@
+{
+    "servers": {
+        "sdp-jobs": {
+            "type": "http",
+            "url": "http://localhost:8050/mcp"
+        }
+    }
+}

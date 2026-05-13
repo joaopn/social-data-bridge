@@ -27,13 +27,20 @@ copy_if_missing() {
 echo "[1/4] Seeding workspace from tests/demo/..."
 copy_if_missing "$DEMO/env.template" .env
 copy_if_missing "$DEMO/config/db/postgres.yaml" config/db/postgres.yaml
+copy_if_missing "$DEMO/config/db/mongo.yaml" config/db/mongo.yaml
+copy_if_missing "$DEMO/config/db/starrocks.yaml" config/db/starrocks.yaml
 copy_if_missing "$DEMO/config/db/mcp.yaml" config/db/mcp.yaml
 copy_if_missing "$DEMO/config/jobs/config.local.yaml" config/jobs/config.local.yaml
 copy_if_missing "$DEMO/docker-compose.override.yml" docker-compose.override.yml
+copy_if_missing "$DEMO/config/starrocks/fe.local.conf" config/starrocks/fe.local.conf
+copy_if_missing "$DEMO/config/starrocks/be.local.conf" config/starrocks/be.local.conf
 copy_if_missing "$DEMO/config/sources/reddit/platform.yaml" config/sources/reddit/platform.yaml
 copy_if_missing "$DEMO/config/sources/reddit/parse.yaml" config/sources/reddit/parse.yaml
 copy_if_missing "$DEMO/config/sources/reddit/postgres.yaml" config/sources/reddit/postgres.yaml
+copy_if_missing "$DEMO/config/sources/reddit/mongo.yaml" config/sources/reddit/mongo.yaml
+copy_if_missing "$DEMO/config/sources/reddit/starrocks.yaml" config/sources/reddit/starrocks.yaml
 copy_if_missing "$DEMO/config/sources/reddit/lingua.yaml" config/sources/reddit/lingua.yaml
+copy_if_missing "$DEMO/vscode/mcp.json" .vscode/mcp.json
 
 # Pre-create host data dirs so the docker daemon doesn't auto-create them
 # as root:root the first time `db start` runs a bind mount.
@@ -44,6 +51,8 @@ for d in \
     data/parsed/reddit \
     data/output/reddit \
     data/database/postgres \
+    data/database/mongo \
+    data/database/starrocks \
     data/jobs-results; do
     mkdir -p "$d"
 done
@@ -61,8 +70,7 @@ echo "  sdp -> $(pipx list --short 2>/dev/null | grep '^social-data-pipeline' ||
 
 cat <<'EOF'
 
-  Codespace ready. Open tests/demo/WELCOME.md to start.
-  Quick path: `sdp db start --db postgres` then drop a Reddit dump into
-  data/dumps/reddit/ and run `sdp run parse`.
+  Codespace ready. tests/demo/WELCOME.md should auto-open.
+  Quick path: `sdp db start postgres`, then bring data and run the pipeline.
 
 EOF
