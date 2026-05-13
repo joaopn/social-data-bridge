@@ -2,7 +2,7 @@
     "name": "Social Data Pipeline Demo",
     "image": "mcr.microsoft.com/devcontainers/python:3.13",
     "features": {
-        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+        "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {}
     },
     "postCreateCommand": "bash .devcontainer/post-create.sh",
     "forwardPorts": [8050, 8000, 5432],
