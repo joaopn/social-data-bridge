@@ -65,12 +65,15 @@ sdp run postgres_ingest --source tweets     # or mongo_ingest / sr_ingest
 
 ## 3. Query via Copilot Chat (the agentic path)
 
-Open the **Copilot Chat** sidebar (left edge of VS Code; View → Copilot Chat if hidden).
+Open the **Copilot Chat** sidebar (left edge of VS Code; View → Copilot Chat if hidden). Four MCP servers are wired:
 
-**Two first-time consent clicks:**
+- `sdp-jobs` — submits queries through the approval queue (any DB you started)
+- `sdp-postgres` / `sdp-mongo` / `sdp-starrocks` — direct read-only access to whichever DB is running, for schema lookups and quick counts (no approval)
 
-1. *"Trust this MCP server?"* for `sdp-jobs` → click **Trust**.
-2. *"Allow tool?"* on the first query submission → click **Allow for workspace**.
+**First-time consent flow:**
+
+1. *"Trust this MCP server?"* — appears once per server. Click **Trust** on each.
+2. *"Allow tool?"* — appears the first time Copilot calls a non-read-only tool (e.g. `submit_postgres_query`). Click **Allow for workspace**.
 
 Then ask Copilot anything that fits the data:
 
@@ -80,7 +83,7 @@ Then ask Copilot anything that fits the data:
 >
 > Show me five random rows.
 
-Copilot picks the right `submit_*_query` tool, fills in SQL, submits via the jobs scheduler.
+For quick reads Copilot will use the read-only DB MCP directly. For anything heavier or audit-worthy, it picks `submit_*_query` and submits via the jobs scheduler.
 
 ## 4. Approve the query in the WebUI
 

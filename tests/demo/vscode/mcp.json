@@ -3,6 +3,18 @@
         "sdp-jobs": {
             "type": "http",
             "url": "http://localhost:8050/mcp"
+        },
+        "sdp-postgres": {
+            "type": "sse",
+            "url": "http://localhost:8000/sse"
+        },
+        "sdp-mongo": {
+            "type": "http",
+            "url": "http://localhost:3000/mcp"
+        },
+        "sdp-starrocks": {
+            "type": "http",
+            "url": "http://localhost:9000/mcp"
         }
     }
 }

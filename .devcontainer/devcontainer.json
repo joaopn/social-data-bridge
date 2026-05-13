@@ -8,7 +8,7 @@
     ],
     "postCreateCommand": "bash .devcontainer/post-create.sh",
     "postAttachCommand": "code --reuse-window tests/demo/WELCOME.md",
-    "forwardPorts": [8050, 8000, 5432],
+    "forwardPorts": [8050, 8000, 3000, 9000, 5432],
     "portsAttributes": {
         "8050": {
             "label": "Jobs scheduler UI",
@@ -16,6 +16,14 @@
         },
         "8000": {
             "label": "PostgreSQL MCP (SSE)",
+            "onAutoForward": "silent"
+        },
+        "3000": {
+            "label": "MongoDB MCP (HTTP)",
+            "onAutoForward": "silent"
+        },
+        "9000": {
+            "label": "StarRocks MCP (HTTP)",
             "onAutoForward": "silent"
         },
         "5432": {
