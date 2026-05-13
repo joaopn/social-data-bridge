@@ -45,14 +45,18 @@ copy_if_missing "$DEMO/vscode/mcp.json" .vscode/mcp.json
 # Pre-create host data dirs so the docker daemon doesn't auto-create them
 # as root:root the first time `db start` runs a bind mount.
 echo "[2/4] Pre-creating data directories..."
+# Including bind-mount subpaths so the docker daemon does not auto-create
+# them as root:root on first `db start` — postgres/mongo/starrocks all run
+# as non-root inside their containers and would otherwise fail to write.
 for d in \
     data/dumps/reddit \
     data/extracted/reddit \
     data/parsed/reddit \
     data/output/reddit \
-    data/database/postgres \
-    data/database/mongo \
-    data/database/starrocks \
+    data/database/postgres/pgdata \
+    data/database/mongo/db \
+    data/database/starrocks/fe/meta \
+    data/database/starrocks/be/storage \
     data/jobs-results; do
     mkdir -p "$d"
 done
@@ -66,7 +70,10 @@ export PATH="$HOME/.local/bin:$PATH"
 
 echo "[4/4] Installing sdp (editable)..."
 pipx install --editable --force "$REPO_ROOT" >/dev/null
-echo "  sdp -> $(pipx list --short 2>/dev/null | grep '^social-data-pipeline' || echo 'installed')"
+# Expose `sdp` system-wide so it works in any shell without depending on
+# pipx's PATH manipulation reaching every spawned terminal.
+sudo ln -sf "$HOME/.local/bin/sdp" /usr/local/bin/sdp
+echo "  sdp -> $(command -v sdp)"
 
 cat <<'EOF'
 

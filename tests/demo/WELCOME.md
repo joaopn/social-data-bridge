@@ -1,8 +1,22 @@
-# Social Data Pipeline — Codespace demo
+<div align="center">
+
+# Social Data Pipeline
+
+[![Docker](https://img.shields.io/badge/Docker-Compose_v2-2496ED.svg?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1.svg?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![MongoDB 8](https://img.shields.io/badge/MongoDB-8-47A248.svg?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![StarRocks](https://img.shields.io/badge/StarRocks-OLAP-FF6D00.svg?logo=starrocks&logoColor=white)](https://www.starrocks.io/)
+
+### Codespace demo
+
+End-to-end ingestion, classification, and agentic querying of large-scale social-media dumps — running entirely in your browser.
+
+</div>
+
+---
 
 You're operating a working SDP install. PostgreSQL, MongoDB, and StarRocks are all pre-configured (along with their read-only MCP servers and the jobs scheduler). Nothing is running yet — pick a backend and start it.
-
-> **Open a terminal**: press <kbd>Ctrl</kbd>+<kbd>`</kbd> (or <kbd>Cmd</kbd>+<kbd>`</kbd> on macOS). All commands below run there.
 
 ## 1. Pick a database and start it
 
