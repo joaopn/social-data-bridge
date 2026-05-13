@@ -1,0 +1,17 @@
+pipeline:
+  processing:
+    data_types:
+      - submissions
+      - comments
+cpu_classifiers:
+  text_columns:
+    submissions:
+      - title
+      - selftext
+    comments:
+      - body
+  lingua:
+    low_accuracy: false
+    workers: 2
+    file_workers: 1
+    batch_size: 2000000

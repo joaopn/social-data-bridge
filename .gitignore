@@ -47,6 +47,9 @@ config/*/user.yaml
 config/*/*/user.yaml
 docker-compose.override.yml
 *.bak
+# Pre-baked Codespace templates intentionally tracked despite the local-override patterns above.
+!tests/demo/config/jobs/config.local.yaml
+!tests/demo/docker-compose.override.yml
 
 # Config
 .env

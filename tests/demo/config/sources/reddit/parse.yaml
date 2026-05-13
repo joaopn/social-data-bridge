@@ -1,0 +1,7 @@
+pipeline:
+  processing:
+    data_types:
+      - submissions
+      - comments
+    parallel_mode: true
+    parse_workers: 2

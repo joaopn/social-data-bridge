@@ -1,0 +1,4 @@
+postgres:
+  enabled: true
+  port: 8000
+  access_mode: restricted

@@ -1,0 +1,24 @@
+{
+    "name": "Social Data Pipeline Demo",
+    "image": "mcr.microsoft.com/devcontainers/python:3.13",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    },
+    "postCreateCommand": "bash .devcontainer/post-create.sh",
+    "forwardPorts": [8050, 8000, 5432],
+    "portsAttributes": {
+        "8050": {
+            "label": "Jobs scheduler UI",
+            "onAutoForward": "notify"
+        },
+        "8000": {
+            "label": "PostgreSQL MCP (SSE)",
+            "onAutoForward": "silent"
+        },
+        "5432": {
+            "label": "PostgreSQL",
+            "onAutoForward": "silent"
+        }
+    },
+    "remoteUser": "vscode"
+}

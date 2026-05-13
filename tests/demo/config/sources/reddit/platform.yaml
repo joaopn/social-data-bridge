@@ -1,0 +1,163 @@
+# Reddit platform configuration — pre-baked Codespace copy.
+# Mirrors what `sdp source add reddit` writes: the canonical template from
+# config/templates/reddit.yaml plus file_format, paths, and sr_buckets.
+
+db_schema: reddit
+
+data_types:
+  - submissions
+  - comments
+
+file_patterns:
+  submissions:
+    dump: '^RS_(\d{4}-\d{2})\..+$'
+    zst: '^RS_(\d{4}-\d{2})\.zst$'
+    json: '^RS_(\d{4}-\d{2})$'
+    csv: '^RS_(\d{4}-\d{2})\.csv$'
+    parquet: '^RS_(\d{4}-\d{2})\.parquet$'
+    prefix: 'RS_'
+  comments:
+    dump: '^RC_(\d{4}-\d{2})\..+$'
+    zst: '^RC_(\d{4}-\d{2})\.zst$'
+    json: '^RC_(\d{4}-\d{2})$'
+    csv: '^RC_(\d{4}-\d{2})\.csv$'
+    parquet: '^RC_(\d{4}-\d{2})\.parquet$'
+    prefix: 'RC_'
+
+indexes:
+  submissions:
+    - dataset
+    - author
+    - subreddit
+    - domain
+  comments:
+    - dataset
+    - author
+    - subreddit
+    - link_id
+
+mongo_collection_strategy: per_file
+mongo_db_name_template: "{platform}_{data_type}"
+
+mongo_indexes:
+  submissions:
+    - id
+    - author
+    - subreddit
+    - domain
+  comments:
+    - id
+    - author
+    - subreddit
+    - link_id
+
+sr_buckets: 16
+
+mandatory_fields:
+  - dataset
+  - id
+
+primary_key: id
+upsert_order_field: retrieved_utc
+state_field: dataset
+
+field_types:
+  dataset: ['char', 7]
+  id: ['varchar', 7]
+  retrieved_utc: integer
+  created_utc: integer
+  author_created_utc: integer
+  score: integer
+  stickied: boolean
+  distinguished: text
+  gilded: integer
+  is_submitter: boolean
+  controversiality: integer
+  total_awards_received: integer
+  link_id: ['varchar', 10]
+  parent_id: ['varchar', 10]
+  author: text
+  author_flair_text: text
+  subreddit: text
+  body: text
+  comment_karma: integer
+  link_karma: integer
+  profile_over_18: boolean
+  active: boolean
+  is_deleted: boolean
+  removal_type: text
+  num_comments: integer
+  upvote_ratio: float
+  num_crossposts: integer
+  subreddit_subscribers: integer
+  locked: boolean
+  quarantine: boolean
+  over_18: boolean
+  link_flair_text: text
+  domain: text
+  url: text
+  title: text
+  selftext: text
+  id10: bigint
+  lang: ['varchar', 2]
+  lang_prob: float
+  lang2: ['varchar', 2]
+  lang2_prob: float
+  lang_chars: integer
+
+fields:
+  submissions:
+    - retrieved_utc
+    - created_utc
+    - id10
+    - score
+    - upvote_ratio
+    - num_comments
+    - num_crossposts
+    - total_awards_received
+    - subreddit
+    - subreddit_subscribers
+    - stickied
+    - gilded
+    - distinguished
+    - locked
+    - quarantine
+    - over_18
+    - is_deleted
+    - removal_type
+    - author
+    - author_flair_text
+    - author_created_utc
+    - link_flair_text
+    - domain
+    - url
+    - title
+    - selftext
+
+  comments:
+    - retrieved_utc
+    - created_utc
+    - link_id
+    - parent_id
+    - score
+    - controversiality
+    - total_awards_received
+    - subreddit
+    - stickied
+    - gilded
+    - distinguished
+    - is_deleted
+    - removal_type
+    - author
+    - author_flair_text
+    - author_created_utc
+    - is_submitter
+    - body
+
+file_format: parquet
+
+paths:
+  dumps: ./data/dumps/reddit
+  extracted: ./data/extracted/reddit
+  parsed: ./data/parsed/reddit
+  output: ./data/output/reddit
