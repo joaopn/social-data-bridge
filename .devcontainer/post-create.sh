@@ -50,7 +50,8 @@ echo "[2/4] Pre-creating data directories..."
 # them as root:root on first `db start` — postgres/mongo/starrocks all run
 # as non-root inside their containers and would otherwise fail to write.
 for d in \
-    data/dumps/reddit \
+    data/dumps/reddit/submissions \
+    data/dumps/reddit/comments \
     data/extracted/reddit \
     data/parsed/reddit \
     data/output/reddit \

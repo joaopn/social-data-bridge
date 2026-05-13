@@ -26,7 +26,7 @@ PostgreSQL is the recommended default for the free-tier Codespace (2 cores / 8 G
 sdp db start postgres
 ```
 
-This brings up PostgreSQL **plus** the PostgreSQL read-only MCP (port 8000) **plus** the jobs scheduler (port 8050) — they're auto-bundled with the database. Takes ~30 seconds.
+This installs and brings up PostgreSQL **plus** the PostgreSQL read-only MCP (port 8000) **plus** the jobs scheduler (port 8050) — they're auto-bundled with the database. Takes 30-60 seconds.
 
 ### Alternatives
 
@@ -41,11 +41,16 @@ sdp db start starrocks    # StarRocks + sr-mcp (port 9000) + jobs (heavier; see 
 
 ### Path A · Reddit dump
 
-Drop a `.zst` from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift) into `data/dumps/reddit/`. A small monthly file (10–100 MB) gives the best demo cadence.
+Drop `.zst` files from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift) into the right subdirectory:
+
+- `RS_YYYY-MM.zst` (submissions) → `data/dumps/reddit/submissions/`
+- `RC_YYYY-MM.zst` (comments) → `data/dumps/reddit/comments/`
+
+Small monthly files (10–100 MB) give the best demo cadence.
 
 ```bash
 sdp run parse              # decompress + parse to Parquet
-sdp run lingua             # add per-row language detection (configured for Reddit only)
+sdp run lingua             # add per-row language detection (optional, configured for Reddit only)
 sdp run postgres_ingest    # or: mongo_ingest, sr_ingest — pick what you started
 ```
 
@@ -87,7 +92,9 @@ For quick reads Copilot will use the read-only DB MCP directly. For anything hea
 
 ## 4. Approve the query in the WebUI
 
-Open the **Ports** panel (bottom of VS Code) → click the globe icon on port 8050. The jobs scheduler UI opens in a new tab. Submitted queries appear as `pending`; click **Approve**. Results land in `data/jobs-results/` and you can download from the UI.
+The jobs scheduler UI auto-opens in a Simple Browser pane the moment port 8050 comes up (right after `sdp db start postgres` finishes). Submitted queries appear as `pending`; click **Approve**. Results land in `data/jobs-results/` and you can download from the UI.
+
+> Not seeing it? Open the **Ports** panel (bottom of VS Code) → click the preview icon on port 8050.
 
 ## Limits and notes
 

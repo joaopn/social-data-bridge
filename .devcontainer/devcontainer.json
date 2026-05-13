@@ -12,7 +12,7 @@
     "portsAttributes": {
         "8050": {
             "label": "Jobs scheduler UI",
-            "onAutoForward": "notify"
+            "onAutoForward": "openPreview"
         },
         "8000": {
             "label": "PostgreSQL MCP (SSE)",
