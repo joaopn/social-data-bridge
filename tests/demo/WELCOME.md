@@ -50,9 +50,11 @@ Small monthly files (10–100 MB) give the best demo cadence.
 
 ```bash
 sdp run parse              # decompress + parse to Parquet
-sdp run lingua             # add per-row language detection (optional, configured for Reddit only)
+sdp run lingua             # per-row language detection
 sdp run postgres_ingest    # or: mongo_ingest, sr_ingest — pick what you started
 ```
+
+> **Skipping lingua?** Lingua can take minutes on only 2 cores and the base source is pre-configured to ingest its output. To skip it, either edit `config/sources/reddit/postgres.yaml` and set `prefer_lingua: false`, or re-run `sdp source configure reddit` and answer "no" to the lingua-prefer prompt. Then `sdp run postgres_ingest` ingests directly from `parsed/` — faster demo, no `lang` / `lang_prob` columns in the table.
 
 ### Path B · HuggingFace dataset (auto-configured)
 

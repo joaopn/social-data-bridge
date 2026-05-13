@@ -243,22 +243,22 @@ def get_required(config: Dict, *keys: str, error_msg: str = None) -> Any:
 def get_optional(config: Dict, *keys: str, default: Any = None) -> Any:
     """
     Get an optional configuration value with a default.
-    
+
     Args:
         config: Configuration dictionary
         *keys: Path of keys to traverse
         default: Default value if not found
-        
+
     Returns:
         Configuration value or default
     """
     value = config
-    
+
     for key in keys:
         if not isinstance(value, dict) or key not in value:
             return default
         value = value[key]
-    
+
     return value
 
 
