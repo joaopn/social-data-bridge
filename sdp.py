@@ -3654,7 +3654,7 @@ def cmd_source_download(args):
         saved_configs = {c for configs in config_map.values() for c in configs}
         missing = sorted(saved_configs - live_configs)
         if missing:
-            print(f"\n  Error: saved hf_config_map references configs that no longer exist on HF.")
+            print("\n  Error: saved hf_config_map references configs that no longer exist on HF.")
             print(f"  Missing configs: {', '.join(missing)}")
             print(f"  Available on HF: {', '.join(sorted(live_configs))}")
             print(f"  Re-run 'sdp source add {source_name} --hf {hf_dataset}' to regenerate the mapping.\n")

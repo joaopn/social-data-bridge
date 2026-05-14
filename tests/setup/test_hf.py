@@ -1,15 +1,19 @@
 """Unit tests for HuggingFace download organization (setup/hf.py).
 
 Pure-logic tests for organize_hf_downloads — the function that copies
-parquet files from data/dumps/<source>/<config>/<split>/<idx>.parquet to
-data/extracted/<source>/<data_type>/<config>_<idx>.parquet (multi-config)
-or .../<idx>.parquet (single-config).
+parquet files from data/dumps/<source>/<config>/<rel-path>.parquet to
+data/extracted/<source>/<data_type>/<config>_<rel-path-flattened>.parquet
+(multi-config) or .../<rel-path-flattened>.parquet (single-config). The
+relative path is the source path under the config dir, with `/` replaced
+by `_`, so split sub-dirs are preserved in the filename.
 
 Bug class:
   - filename mangling regressions (multi-config vs single-config branch)
   - skip-if-already-organized check (size-based) breaking
   - missing config dir produces a warning, not a crash
   - rglob finds files across split subdirectories
+  - re-runs idempotent when upstream HF adds shards (filenames are
+    derived from the source path, not a positional index)
 """
 
 from pathlib import Path
@@ -25,7 +29,7 @@ def _write_parquet(path: Path, content: bytes = b"PAR1\x00\x00") -> None:
 
 
 def test_single_config_strips_config_name(tmp_path):
-    """One config per data type → output names use just the index (no config prefix)."""
+    """One config per data type → output names omit the config prefix but keep the split sub-dir."""
     dumps = tmp_path / "dumps"
     extracted = tmp_path / "extracted"
     _write_parquet(dumps / "default" / "train" / "0.parquet")
@@ -35,7 +39,7 @@ def test_single_config_strips_config_name(tmp_path):
 
     out = extracted / "comments"
     files = sorted(p.name for p in out.iterdir())
-    assert files == ["0.parquet", "1.parquet"], f"got {files}"
+    assert files == ["train_0.parquet", "train_1.parquet"], f"got {files}"
 
 
 def test_multi_config_prefixes_config_name(tmp_path):
@@ -52,7 +56,7 @@ def test_multi_config_prefixes_config_name(tmp_path):
 
     out = extracted / "comments"
     files = sorted(p.name for p in out.iterdir())
-    assert files == ["config_a_0.parquet", "config_b_0.parquet"], f"got {files}"
+    assert files == ["config_a_train_0.parquet", "config_b_train_0.parquet"], f"got {files}"
 
 
 def test_walks_across_split_subdirs(tmp_path):
@@ -65,9 +69,9 @@ def test_walks_across_split_subdirs(tmp_path):
 
     organize_hf_downloads(dumps, extracted, {"comments": ["default"]})
 
-    # 3 input files → 3 output files indexed 0..2 (sorted by source path).
+    # 3 input files → 3 output files, each tagged with its split subdir.
     files = sorted(p.name for p in (extracted / "comments").iterdir())
-    assert files == ["0.parquet", "1.parquet", "2.parquet"], f"got {files}"
+    assert files == ["test_0.parquet", "train_0.parquet", "validation_0.parquet"], f"got {files}"
 
 
 def test_skips_when_already_present_with_matching_size(tmp_path):
@@ -78,7 +82,7 @@ def test_skips_when_already_present_with_matching_size(tmp_path):
     _write_parquet(src, b"some-bytes")
 
     organize_hf_downloads(dumps, extracted, {"comments": ["default"]})
-    dest = extracted / "comments" / "0.parquet"
+    dest = extracted / "comments" / "train_0.parquet"
     assert dest.exists()
     first_mtime = dest.stat().st_mtime_ns
 
@@ -95,7 +99,7 @@ def test_recopies_when_size_differs(tmp_path):
     _write_parquet(src, b"new-bytes-12345")
 
     # Pre-seed extracted with a different-size file at the destination.
-    dest = extracted / "comments" / "0.parquet"
+    dest = extracted / "comments" / "train_0.parquet"
     _write_parquet(dest, b"old")
     assert dest.stat().st_size != src.stat().st_size
 
@@ -121,7 +125,7 @@ def test_missing_config_warns_and_continues(tmp_path, capsys):
 
     # The present config still got organized (multi_config=True since two listed).
     files = sorted(p.name for p in (extracted / "comments").iterdir())
-    assert files == ["present_0.parquet"], f"got {files}"
+    assert files == ["present_train_0.parquet"], f"got {files}"
 
 
 def test_creates_data_type_dir_when_absent(tmp_path):
@@ -135,7 +139,7 @@ def test_creates_data_type_dir_when_absent(tmp_path):
     organize_hf_downloads(dumps, extracted, {"comments": ["default"]})
 
     assert (extracted / "comments").is_dir()
-    assert (extracted / "comments" / "0.parquet").is_file()
+    assert (extracted / "comments" / "train_0.parquet").is_file()
 
 
 def test_multiple_data_types_routed_separately(tmp_path):
@@ -153,5 +157,5 @@ def test_multiple_data_types_routed_separately(tmp_path):
         },
     )
 
-    assert (extracted / "comments" / "0.parquet").exists()
-    assert (extracted / "submissions" / "0.parquet").exists()
+    assert (extracted / "comments" / "train_0.parquet").exists()
+    assert (extracted / "submissions" / "train_0.parquet").exists()
