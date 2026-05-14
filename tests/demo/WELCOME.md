@@ -93,9 +93,20 @@ Some queries to test with the reddit data:
 
 ## 4. Approve the query in the WebUI
 
-The jobs scheduler UI auto-opens in a new browser tab the moment port `8050` comes up (right after `sdp db start postgres` finishes). Submitted queries appear as `pending`; click **Approve**. You can also toggle a per-database `Auto-accept`. Results land in `data/jobs-results/` and you can download from the UI. 
+Open the jobs scheduler UI on port 8050 — either:
 
-> Not seeing it? Open the **Ports** panel (bottom of VS Code) → click the globe icon on port 8050.
+- Run this in the terminal:
+  ```bash
+  "$BROWSER" "https://${CODESPACE_NAME}-8050.${GITHUB_CODESPACES_PORT_FORWARDING_DOMAIN}/"
+  ```
+- Or open the **Ports** panel (bottom of VS Code) → click the globe icon on port 8050.
+
+Submitted queries appear as `pending`. From the UI you can:
+
+- **Approve / Reject / Kill** any pending or running job.
+- **Auto-accept** (per-target toggle) — bypass the approval queue for the duration of the session when you trust what Copilot is sending.
+- **EXPLAIN** any pending query — runs the backend's planner (`EXPLAIN` for PG/SR, `aggregate explain` for Mongo) against the SQL/pipeline and shows the plan inline, so you can sanity-check what Copilot drafted before approving.
+- **Preview** a completed result inline — first N rows rendered as a table in the UI. Full result files land under `data/jobs-results/` and download from the same row.
 
 ## Limits and notes
 
