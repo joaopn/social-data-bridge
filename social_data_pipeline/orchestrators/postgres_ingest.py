@@ -848,6 +848,8 @@ def run_pipeline(config_dir: str = "/app/config"):
 
         t_start = time.time()
         for data_type in data_types:
+            if data_type not in data_types_with_files:
+                continue
             index_fields = index_config.get(data_type, [])
             if not index_fields:
                 print(f"[sdp] No indexes configured for {data_type}, skipping")
@@ -882,8 +884,10 @@ def run_pipeline(config_dir: str = "/app/config"):
         t_start = time.time()
         
         print("[sdp] Running ANALYZE")
-        
+
         for data_type in data_types:
+            if data_type not in data_types_with_files:
+                continue
             try:
                 analyze_table(
                     table=data_type,
