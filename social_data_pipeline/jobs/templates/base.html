@@ -1,11 +1,26 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{% block title %}SDP Jobs{% endblock %}</title>
+  <script>
+    (function () {
+      var saved = null;
+      try { saved = localStorage.getItem('sdp-theme'); } catch (_) {}
+      var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      var theme = (saved === 'dark' || saved === 'light') ? saved : (prefersDark ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+      window.__sdpInitialTheme = theme;
+    })();
+  </script>
   <link rel="stylesheet" href="/static/pico.min.css">
-  <link rel="stylesheet" href="/static/prism.min.css">
+  <link rel="stylesheet" id="prism-css" href="/static/prism.min.css">
+  <script>
+    if (window.__sdpInitialTheme === 'dark') {
+      document.getElementById('prism-css').href = '/static/prism-tomorrow.min.css';
+    }
+  </script>
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/prism-core.min.js" defer></script>
   <script src="/static/prism-sql.min.js" defer></script>
@@ -20,7 +35,7 @@
     nav.topnav .nav-stat { color: var(--pico-muted-color); padding: 0.25rem 0.5rem; }
     table { font-size: 0.9rem; }
     table td, table th { vertical-align: top; padding: 0.5rem 0.6rem; }
-    td.sql, td.sqlprev { font-family: var(--pico-font-family-monospace); font-size: 0.82rem; color: var(--pico-color-slate-700); }
+    td.sql, td.sqlprev { font-family: var(--pico-font-family-monospace); font-size: 0.82rem; color: var(--pico-color); }
     td.sqlprev { max-width: 38rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .status-pending { color: var(--pico-color-amber-600); }
     .status-approved { color: var(--pico-primary); }
@@ -81,6 +96,15 @@
     .auto-accept-targets input[type="checkbox"] { margin: 0; }
     .auto-accept-targets output { font-variant-numeric: tabular-nums; min-width: 1.5em; text-align: right; color: var(--pico-muted-color); }
     .auto-accept-empty { color: var(--pico-muted-color); font-size: 0.85rem; padding: 0.4rem 0; }
+    button.theme-toggle { background: transparent; border: 0; padding: 0.25rem 0.5rem; margin: 0; color: var(--pico-muted-color); cursor: pointer; border-radius: 4px; line-height: 1; }
+    button.theme-toggle:hover { color: var(--pico-primary); background: var(--pico-primary-focus); }
+    button.theme-toggle svg { display: block; width: 1.1em; height: 1.1em; }
+    [data-theme=dark] button.theme-toggle .theme-icon-moon,
+    [data-theme=light] button.theme-toggle .theme-icon-sun { display: none; }
+    [data-theme=dark] .error-box { background: var(--pico-color-red-900); color: var(--pico-color-red-100); }
+    [data-theme=dark] code.copyable.copied { background: var(--pico-color-jade-800); color: var(--pico-color-jade-100); }
+    [data-theme=dark] button.copy-icon.copied { background: var(--pico-color-jade-800); color: var(--pico-color-jade-200); }
+    [data-theme=dark] .auto-accept-body { box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); }
   </style>
 </head>
 <body>
@@ -97,6 +121,12 @@
         <li><a href="/pending" class="{% if tab == 'pending' %}active{% endif %}">Pending <span class="muted">({{ counts.pending }})</span></a></li>
         <li><a href="/running" class="{% if tab == 'running' %}active{% endif %}">Running <span class="muted">({{ counts.running }})</span></a></li>
         <li><a href="/history" class="{% if tab == 'history' %}active{% endif %}">History</a></li>
+        <li>
+          <button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode">
+            <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+            <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          </button>
+        </li>
         {% if auth_enabled %}
         <li>
           <form method="post" action="/logout" style="display:inline; margin:0;">
@@ -248,6 +278,24 @@
         if (e.target && e.target.classList && e.target.classList.contains('auto-accept-slot')) {
           window.aaWireSlot(e.target);
         }
+      });
+
+      // Theme toggle: flip data-theme on <html>, persist in localStorage,
+      // swap the Prism stylesheet to its dark variant, and re-highlight any
+      // code that's already on the page so it picks up the new colors.
+      document.addEventListener('click', function (ev) {
+        var btn = ev.target.closest('button[data-theme-toggle]');
+        if (!btn) return;
+        ev.preventDefault();
+        var root = document.documentElement;
+        var next = root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        try { localStorage.setItem('sdp-theme', next); } catch (_) {}
+        var prism = document.getElementById('prism-css');
+        if (prism) {
+          prism.href = next === 'dark' ? '/static/prism-tomorrow.min.css' : '/static/prism.min.css';
+        }
+        if (window.Prism) window.Prism.highlightAll();
       });
 
       // Click an expandable row to reveal its SQL/error details row below.

@@ -22,6 +22,8 @@ RUN mkdir -p /app/social_data_pipeline/jobs/static \
          https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/prism.min.css \
          https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism.min.css \
+    && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-tomorrow.min.css \
+         https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-core.min.js \
          https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js \
     && curl -sSL -o /app/social_data_pipeline/jobs/static/prism-sql.min.js \
