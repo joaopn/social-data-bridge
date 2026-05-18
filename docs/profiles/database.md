@@ -372,7 +372,7 @@ Uses database-per-source with per-data-type databases or explicit naming. See [m
 
 ### Primary Keys
 
-All PostgreSQL and StarRocks tables use composite primary key: `(dataset, id)`. StarRocks tables are Primary Key tables with `DISTRIBUTED BY HASH(id)` and `enable_persistent_index = true`.
+PostgreSQL and StarRocks ingest the platform's `primary_key` column as the table PK. The Reddit template hardcodes `primary_key: id`; custom platforms set it interactively in `sdp source add` (default: leave blank). When set, PostgreSQL adds `PRIMARY KEY (pk)` after the bulk load and StarRocks uses the Primary Key table model with `DISTRIBUTED BY HASH(pk)` and `enable_persistent_index = true`. When left blank (common for HF datasets without a natural unique field), PostgreSQL ingests without a PK constraint and StarRocks uses the Duplicate Key model with `DISTRIBUTED BY RANDOM` — re-runs append rows, no source-level dedup, no `merge_condition` upsert.
 
 ---
 
@@ -611,12 +611,12 @@ The container health check verifies MySQL connectivity. StarRocks takes 30-60s t
 
 ## sr_ingest Profile
 
-Ingests parsed Parquet or CSV files into StarRocks Primary Key tables. Feature parity with `postgres_ingest` but significantly simpler — StarRocks handles upsert and deduplication natively.
+Ingests parsed Parquet or CSV files into StarRocks. Feature parity with `postgres_ingest` but significantly simpler — when a `primary_key` is configured, StarRocks handles upsert and deduplication natively; when not, the table uses the Duplicate Key model and re-runs append rows.
 
 ### How It Works
 
 1. **Creates database** — one database per source (e.g., `reddit`, `twitter_academic`), like MongoDB's database-per-source pattern
-2. **Creates Primary Key tables** — columns and types derived from `platform.yaml` field definitions. Primary Key tables auto-deduplicate on insert
+2. **Creates tables** — columns and types derived from `platform.yaml` field definitions. With a `primary_key`: Primary Key table with `DISTRIBUTED BY HASH(pk)`, auto-deduplicates on insert. Without one: Duplicate Key model with `DISTRIBUTED BY RANDOM`, append-only
 3. **Ingests files** — `INSERT INTO ... SELECT FROM FILES()` reads Parquet/CSV directly from the StarRocks BE filesystem mount. The ingestion container sends SQL; StarRocks BE reads the files itself
 4. **Conditional upsert** — when `check_duplicates: true`, uses `merge_condition` to keep rows with higher `upsert_order_field` (e.g., `retrieved_utc`)
 5. **Creates BITMAP indexes** — for configured columns (e.g., `dataset`, `subreddit`, `author`). Tables are built in parallel with each other; fields within a table are built serially (StarRocks allows only one schema change per table at a time). `CREATE INDEX` is async on the BE, so the pipeline polls `SHOW ALTER TABLE COLUMN` every `processing.index_poll_interval` seconds (default: 10) until each alter job reaches `FINISHED`. Per-BE concurrency for schema changes is capped by `alter_tablet_worker_count` in `config/starrocks/be.conf` — configured at `sdp db setup`.

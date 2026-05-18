@@ -212,8 +212,10 @@ def run_pipeline(config_dir: str = "/app/config"):
         first_file = type_files[0][0]
         columns_list = get_column_list(data_type, platform_config, file=first_file)
 
-        # Create table if not exists
-        if pk_column and not table_exists(
+        # Create table if not exists. pk_column may be None (no source PK):
+        # get_create_table_query handles that by emitting the Duplicate Key
+        # + DISTRIBUTED BY RANDOM shape.
+        if not table_exists(
             table=data_type,
             database=database,
             host=db_config['host'],

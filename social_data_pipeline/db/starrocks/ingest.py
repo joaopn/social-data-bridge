@@ -116,17 +116,40 @@ def get_column_list(data_type: str, platform_config: Dict, file: str = None) -> 
 
 
 def get_create_table_query(table, database, columns_list, platform_config, pk_column, buckets=None):
-    """Build StarRocks CREATE TABLE statement with Primary Key model.
+    """Build StarRocks CREATE TABLE statement.
 
-    Primary Key tables provide native upsert/dedup on duplicate keys.
-    DISTRIBUTED BY HASH is required for PK tables.
+    With a primary key: PRIMARY KEY (pk) table + DISTRIBUTED BY HASH(pk) —
+    native upsert/dedup on duplicate keys.
+
+    Without a primary key (custom platforms that opted out): Duplicate Key
+    table (default model when no key clause is supplied) + DISTRIBUTED BY
+    RANDOM. Re-runs append rows; no source-level dedup. Matches the shape
+    `get_classifier_create_table_query` already uses for ML output tables.
 
     Args:
-        buckets: Explicit bucket count for DISTRIBUTED BY HASH. If None, SR's
-            auto-bucketing default is used (typically too low for single-BE
-            clusters at TB scale — callers should pass an explicit value).
+        pk_column: Source column name, or None to use the no-PK model.
+        buckets: Explicit bucket count. If None, SR's auto-bucketing default
+            is used (typically too low for single-BE clusters at TB scale —
+            callers should pass an explicit value).
     """
     field_types = platform_config.get('field_types', {})
+
+    if pk_column is None:
+        col_defs = [
+            f"    `{c}` {yaml_type_to_sr_sql(field_types.get(c, 'text'))}"
+            for c in columns_list
+        ]
+        columns_sql = ",\n".join(col_defs)
+        distribute_clause = "DISTRIBUTED BY RANDOM"
+        if buckets is not None:
+            distribute_clause += f" BUCKETS {int(buckets)}"
+        query = (
+            f"CREATE TABLE IF NOT EXISTS `{database}`.`{table}` (\n"
+            f"{columns_sql}\n"
+            f") {distribute_clause}\n"
+            f"PROPERTIES(\"replication_num\" = \"1\")"
+        )
+        return query
 
     # StarRocks requires PK column to be first in the schema
     ordered_cols = [pk_column] + [c for c in columns_list if c != pk_column]

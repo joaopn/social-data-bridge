@@ -578,24 +578,19 @@ def run_questionnaire(hw, source_name, db_setup, hf_defaults=None):
                         settings["custom_sr_indexes"][dt] = idx
 
         # Primary key (custom platforms only — Reddit has `id` hardcoded in its template).
-        # Needed whenever a DB profile performs PK-based upsert/dedup.
+        # Optional: when set, enables PK-based upsert/dedup across re-ingestions.
+        # When blank, PG runs append-only (no dedup) and SR uses the Duplicate
+        # Key table model with random distribution. Re-runs append rows in both.
         if has_postgres or has_starrocks:
             section_header("Primary Key")
-            print("  Column used as the table's primary key. Required for")
-            print("  duplicate detection and upsert behavior.")
+            print("  Optional. Name a source column whose value is unique per")
+            print("  row to enable duplicate detection and upsert on re-ingest.")
+            print("  Leave blank if no source column qualifies — re-runs will")
+            print("  append rows with no source-level dedup.")
             print()
-            # Default: "id" if present anywhere in configured fields, else first field
-            configured_fields = settings.get("custom_fields") or {}
-            all_field_names = sorted({f for flist in configured_fields.values() for f in (flist or [])})
-            if existing.get("primary_key"):
-                default_pk = existing["primary_key"]
-            elif "id" in all_field_names:
-                default_pk = "id"
-            elif all_field_names:
-                default_pk = all_field_names[0]
-            else:
-                default_pk = "id"
-            settings["primary_key"] = ask("Primary key column", default_pk, tag="src_primary_key")
+            default_pk = existing.get("primary_key")  # may be None
+            pk_input = ask("Primary key column (blank for none)", default_pk, tag="src_primary_key")
+            settings["primary_key"] = pk_input.strip() or None
 
     # ---- StarRocks settings (per-source) ----
     if has_starrocks:
@@ -682,9 +677,12 @@ def generate_platform_yaml(settings):
     if settings.get("sr_buckets") is not None:
         config["sr_buckets"] = settings["sr_buckets"]
 
-    # Field types: use HF-derived types if available, otherwise generic defaults
+    # Field types: use HF-derived types if available, otherwise generic defaults.
+    # `dataset` is always present (the custom parser prepends it as a per-dump
+    # lineage column), so emit a type for it in both branches.
     if settings.get("custom_field_types"):
         field_types = dict(settings["custom_field_types"])
+        field_types.setdefault("dataset", "text")
         # Always include lingua fields for compatibility
         field_types.update({
             "lang": ["varchar", 2],
@@ -696,6 +694,7 @@ def generate_platform_yaml(settings):
     else:
         field_types = {
             # Common field types — add or modify as needed
+            "dataset": "text",
             "id": "text",
             "created_at": "integer",
             "timestamp": "integer",
@@ -724,6 +723,14 @@ def generate_platform_yaml(settings):
             "settings['custom_fields'] before calling generate_platform_yaml()."
         )
     config["fields"] = settings["custom_fields"]
+
+    # The custom parser unconditionally writes `dataset` as the first column of
+    # the parsed Parquet/CSV (per-dump-file lineage, populated from the filename
+    # stem). Pin it as a platform-level mandatory_field so downstream ingest
+    # (PG/SR) includes it in CREATE TABLE and the column count matches what the
+    # parser actually emits. Without this, PG COPY explodes on the count
+    # mismatch and SR silently drops the column from the table.
+    config["mandatory_fields"] = ["dataset"]
 
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
@@ -770,6 +777,10 @@ def generate_postgres_yaml(settings):
     processing = {
         "data_types": settings["data_types"],
     }
+    # Sources without a primary_key cannot dedup at the source-row level;
+    # disable the runtime guard that requires a PK when check_duplicates=true.
+    if not settings.get("primary_key"):
+        processing["check_duplicates"] = False
     if "pg_prefer_lingua" in settings:
         processing["prefer_lingua"] = settings["pg_prefer_lingua"]
     if "pg_parallel_index_workers" in settings:
@@ -791,11 +802,16 @@ def generate_postgres_yaml(settings):
 
 def generate_postgres_ml_yaml(settings):
     """Generate config/sources/<name>/postgres_ml.yaml."""
+    processing = {
+        "data_types": settings["data_types"],
+    }
+    # Sources without a primary_key cannot dedup classifier rows back to a
+    # source row; disable the dedup path consistently with the base profile.
+    if not settings.get("primary_key"):
+        processing["check_duplicates"] = False
     config = {
         "pipeline": {
-            "processing": {
-                "data_types": settings["data_types"],
-            }
+            "processing": processing,
         }
     }
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
@@ -815,11 +831,16 @@ def generate_mongo_yaml(settings):
 
 def generate_sr_ml_yaml(settings):
     """Generate config/sources/<name>/sr_ml.yaml."""
+    processing = {
+        "data_types": settings["data_types"],
+    }
+    # See generate_postgres_ml_yaml for rationale. Also avoids emitting
+    # merge_condition in INSERT statements against Duplicate Key tables.
+    if not settings.get("primary_key"):
+        processing["check_duplicates"] = False
     config = {
         "pipeline": {
-            "processing": {
-                "data_types": settings["data_types"],
-            }
+            "processing": processing,
         }
     }
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
@@ -830,6 +851,9 @@ def generate_starrocks_yaml(settings):
     processing = {
         "data_types": settings["data_types"],
     }
+    # See generate_postgres_yaml for the parallel rationale.
+    if not settings.get("primary_key"):
+        processing["check_duplicates"] = False
     if "sr_prefer_lingua" in settings:
         processing["prefer_lingua"] = settings["sr_prefer_lingua"]
     config = {

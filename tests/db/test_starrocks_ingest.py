@@ -271,6 +271,49 @@ class TestGetCreateTableQuery:
         assert '`mystery_field` VARCHAR(1048576)' in query
 
 
+class TestGetCreateTableQueryNoPK:
+    """Custom platforms that opted out of a source PK use the Duplicate Key
+    table model + DISTRIBUTED BY RANDOM. Re-runs append rows; no source-level
+    dedup. Mirrors the shape get_classifier_create_table_query uses."""
+
+    PLATFORM = {'field_types': {'text': 'text', 'score': 'integer'}}
+    COLUMNS = ['text', 'score']
+
+    def test_no_primary_key_clause(self):
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None)
+        assert 'PRIMARY KEY' not in query
+
+    def test_distributed_by_random(self):
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None)
+        assert 'DISTRIBUTED BY RANDOM' in query
+        assert 'DISTRIBUTED BY HASH' not in query
+
+    def test_no_not_null_on_any_column(self):
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None)
+        assert 'NOT NULL' not in query
+
+    def test_columns_preserve_declared_order(self):
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None)
+        text_idx = query.index('`text`')
+        score_idx = query.index('`score`')
+        assert text_idx < score_idx
+
+    def test_no_persistent_index_property(self):
+        # enable_persistent_index is a PK-table property; Duplicate Key tables
+        # reject it. Only replication_num should be present.
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None)
+        assert 'enable_persistent_index' not in query
+        assert '"replication_num" = "1"' in query
+
+    def test_buckets_clause_when_supplied(self):
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None, buckets=32)
+        assert 'DISTRIBUTED BY RANDOM BUCKETS 32' in query
+
+    def test_create_if_not_exists(self):
+        query = get_create_table_query('tweets', 'hf', self.COLUMNS, self.PLATFORM, None)
+        assert 'CREATE TABLE IF NOT EXISTS `hf`.`tweets`' in query
+
+
 # ── get_ingest_query ──────────────────────────────────────────────────────────
 
 class TestGetIngestQuery:
