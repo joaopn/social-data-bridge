@@ -60,13 +60,10 @@ sdp run postgres_ingest    # or: mongo_ingest, sr_ingest — pick what you start
 
 ### Path B · HuggingFace dataset (auto-configured)
 
-`sdp source add --hf` queries the HF dataset API and pre-fills the platform config. Two datasets to try (multilingual, permissive licenses):
-
-- `cardiffnlp/tweet_sentiment_multilingual` — 24k tweets, 8 languages, ~4 MB
-- `wikimedia/wikipedia` configs `20231101.eu` + `20231101.simple` — 640k rows, 2 languages, ~400 MB
+`sdp source add --hf` queries the HF dataset API and pre-fills the platform config, with field selection and optional merging of datasets into a single datatype. 
 
 ```bash
-sdp source add tweets --hf cardiffnlp/tweet_sentiment_multilingual
+sdp source add tweets --hf roupenminassian/twitter-misinformation
 sdp source download tweets
 sdp run parse --source tweets
 sdp run postgres_ingest --source tweets     # or mongo_ingest / sr_ingest
