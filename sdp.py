@@ -297,6 +297,21 @@ _DB_TO_JOBS_BACKEND = {
     "starrocks": "starrocks",
 }
 
+# Canonical display names used by `db status` / `source status` output.
+# Keyed by the various names a backend goes by in the codebase: the
+# `configured_dbs` short name, the `db_type` arg passed to ingestion-state
+# helpers (which uses the profile name for the SR variants), and the jobs
+# config `backend` string. Single source of truth — using `.title()` would
+# yield "Sr_Ingest" / "Mongodb" which is wrong.
+_DB_DISPLAY = {
+    "postgres":  "PostgreSQL",
+    "mongo":     "MongoDB",
+    "mongodb":   "MongoDB",
+    "starrocks": "StarRocks",
+    "sr_ingest": "StarRocks",
+    "sr_ml":     "StarRocks ML",
+}
+
 
 def _read_sr_storage_paths():
     """Read StarRocks extra-disk paths from config/db/starrocks.yaml.
@@ -1250,25 +1265,58 @@ def cmd_db_status(args):
             print(f"    RW user:       {', '.join(rw_parts)}")
         ro_user = env.get("POSTGRES_RO_USER") or env.get("MONGO_RO_USER") or env.get("STARROCKS_RO_USER")
         if ro_user:
-            # Check if RO credentials file exists in any data path
-            ro_cred_path = None
-            for path_key, default in [("PGDATA_PATH", "./data/database/postgres"),
-                                      ("MONGO_DATA_PATH", "./data/database/mongo"),
-                                      ("STARROCKS_DATA_PATH", "./data/database/starrocks")]:
+            # Iterate every configured DB whose auth is enabled and report its
+            # `.ro_credentials` path independently. Collapsing to the first
+            # match (the old behavior) silently hid per-DB drift — e.g. Mongo
+            # and StarRocks both having creds but only Mongo's path surfacing.
+            ro_cred_paths = []  # [(display_name, cred_path), ...]
+            db_path_env = [
+                ("postgres",  "POSTGRES_AUTH_ENABLED",  "PGDATA_PATH",         "./data/database/postgres"),
+                ("mongo",     "MONGO_AUTH_ENABLED",     "MONGO_DATA_PATH",     "./data/database/mongo"),
+                ("starrocks", "STARROCKS_AUTH_ENABLED", "STARROCKS_DATA_PATH", "./data/database/starrocks"),
+            ]
+            for db_name, auth_key, path_key, default in db_path_env:
+                if db_name not in configured:
+                    continue
+                if env.get(auth_key) != "true":
+                    continue
                 dp = Path(env.get(path_key, default))
                 if not dp.is_absolute():
                     dp = ROOT / dp
                 cred_file = dp / ".ro_credentials"
                 if cred_file.exists():
-                    ro_cred_path = cred_file
-                    break
-            if ro_cred_path:
-                print(f"    RO user:       {ro_user} (password in {ro_cred_path})")
-            else:
+                    ro_cred_paths.append((_DB_DISPLAY.get(db_name, db_name), cred_file))
+            if not ro_cred_paths:
                 print(f"    RO user:       {ro_user} (no password)")
-        mcp_user = env.get("POSTGRES_MCP_USER") or env.get("MONGO_MCP_USER") or env.get("STARROCKS_MCP_USER")
-        if mcp_user:
-            print(f"    MCP user:      {mcp_user}")
+            elif len(ro_cred_paths) == 1:
+                _, cred_path = ro_cred_paths[0]
+                print(f"    RO user:       {ro_user} (password in {cred_path})")
+            else:
+                print(f"    RO user:       {ro_user}")
+                width = max(len(name) for name, _ in ro_cred_paths)
+                for name, cred_path in ro_cred_paths:
+                    print(f"      {(name + ':'):<{width + 1}}  {cred_path}")
+
+        # MCP user per configured DB — same `or`-chain anti-pattern as RO above
+        # collapsed every DB to whichever envvar resolved first. Iterate.
+        mcp_users = []
+        for db_name, mcp_env in (
+            ("postgres",  "POSTGRES_MCP_USER"),
+            ("mongo",     "MONGO_MCP_USER"),
+            ("starrocks", "STARROCKS_MCP_USER"),
+        ):
+            if db_name not in configured:
+                continue
+            user = env.get(mcp_env)
+            if user:
+                mcp_users.append((_DB_DISPLAY.get(db_name, db_name), user))
+        if len(mcp_users) == 1:
+            print(f"    MCP user:      {mcp_users[0][1]}")
+        elif len(mcp_users) > 1:
+            print("    MCP user:")
+            width = max(len(name) for name, _ in mcp_users)
+            for name, user in mcp_users:
+                print(f"      {(name + ':'):<{width + 1}}  {user}")
 
     # Check which services are running
     running_services = set()
@@ -1300,7 +1348,7 @@ def cmd_db_status(args):
         print(f"    Running:   {'yes' if 'postgres' in running_services else 'no'}")
 
         state_dir = pgdata / "state_tracking"
-        _print_ingestion_state(state_dir, "_postgres_", "postgres")
+        _maybe_print_ingestion(state_dir, "_postgres_", "postgres", getattr(args, "verbose", False))
 
     # MongoDB
     if "mongo" in configured:
@@ -1315,7 +1363,7 @@ def cmd_db_status(args):
         print(f"    Running:   {'yes' if 'mongo' in running_services else 'no'}")
 
         state_dir = mongo_data / "state_tracking"
-        _print_ingestion_state(state_dir, "_mongo_", "mongo")
+        _maybe_print_ingestion(state_dir, "_mongo_", "mongo", getattr(args, "verbose", False))
 
     # StarRocks
     if "starrocks" in configured:
@@ -1329,6 +1377,9 @@ def cmd_db_status(args):
         print(f"    Port:      {env.get('STARROCKS_PORT', '9030')}")
         print(f"    FE HTTP:   {env.get('STARROCKS_FE_HTTP_PORT', '8030')}")
         print(f"    Running:   {'yes' if 'starrocks' in running_services else 'no'}")
+
+        state_dir = sr_data / "state_tracking"
+        _maybe_print_ingestion(state_dir, "_sr_", "sr", getattr(args, "verbose", False))
 
     # Export path
     export_path = env.get("DB_EXPORT_PATH")
@@ -1347,7 +1398,10 @@ def cmd_db_status(args):
             running = "yes" if "postgres-mcp" in running_services else "no"
             print("\n  PostgreSQL MCP:")
             print(f"    Port:      {port}")
-            print(f"    Access:    {access}")
+            if access == "restricted":
+                print("    Read-only: yes (access-mode restricted)")
+            else:
+                print(f"    Read-only: no (access-mode {access})")
             print(f"    Endpoint:  http://<server_ip>:{port}/sse (type: sse)")
             print(f"    Running:   {running}")
 
@@ -1358,7 +1412,10 @@ def cmd_db_status(args):
             running = "yes" if "mongo-mcp" in running_services else "no"
             print("\n  MongoDB MCP:")
             print(f"    Port:      {port}")
-            print(f"    Read-only: {read_only}")
+            if read_only:
+                print("    Read-only: yes (filtered tool list)")
+            else:
+                print("    Read-only: no")
             print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
             print(f"    Running:   {running}")
 
@@ -1366,8 +1423,18 @@ def cmd_db_status(args):
         if sr_mcp.get("enabled"):
             port = sr_mcp.get("port", 9000)
             running = "yes" if "starrocks-mcp" in running_services else "no"
+            sr_ro_active = (
+                env.get("STARROCKS_AUTH_ENABLED") == "true"
+                and bool(env.get("STARROCKS_RO_USER"))
+            )
             print("\n  StarRocks MCP:")
             print(f"    Port:      {port}")
+            # StarRocks has no application-level read-only switch — the
+            # parenthetical hint exists so operators don't go hunting for one.
+            if sr_ro_active:
+                print("    Read-only: yes (database-level via sdp_readonly role)")
+            else:
+                print("    Read-only: no (auth disabled — RO role not enforced)")
             print(f"    Endpoint:  http://<server_ip>:{port}/mcp (type: http)")
             print(f"    Running:   {running}")
 
@@ -1386,7 +1453,8 @@ def cmd_db_status(args):
         print(f"    Running:      {running}")
         if targets:
             names = ", ".join(
-                f"{n} ({spec.get('backend')})" for n, spec in targets.items()
+                f"{n} ({_DB_DISPLAY.get(spec.get('backend'), spec.get('backend'))})"
+                for n, spec in targets.items()
             )
             print(f"    Targets:      {names}")
 
@@ -1662,6 +1730,22 @@ def _load_classifier_suffixes():
         return {}
 
 
+def _maybe_print_ingestion(state_dir, label_split, db_type, verbose):
+    """Render the ingestion breakdown for `db_type` (verbose) or a one-line teaser.
+
+    Verbose mode dispatches to `_print_ingestion_state` for the full per-source
+    list. Default mode prints a single advisory line `Ingestion: run with
+    --verbose for per-source breakdown.` when state files exist, and nothing
+    when the state dir is empty or absent — no point teasing about data that
+    isn't there.
+    """
+    if verbose:
+        _print_ingestion_state(state_dir, label_split, db_type)
+        return
+    if state_dir.exists() and any(state_dir.glob("*.json")):
+        print("\n    Ingestion: run with --verbose for per-source breakdown.")
+
+
 def _print_ingestion_state(state_dir, label_split, db_type):
     """Print ingestion state from JSON files in a state directory."""
     from social_data_pipeline.setup.utils import load_source_config
@@ -1748,10 +1832,13 @@ def _print_ingestion_state(state_dir, label_split, db_type):
                     (tag, table, count, latest, in_progress, cls_failed, last_updated)
                 )
         else:
-            # Main data (ingest profile)
+            # Main data (ingest profile, or SR ml — no per-classifier grouping).
             if db_type == "postgres":
                 schema = pconfig.get("db_schema", source)
                 table = f"{schema}.{data_type}"
+            elif db_type == "sr":
+                # StarRocks is database-per-source, like MongoDB.
+                table = f"{source}.{data_type}"
             else:
                 if "mongo_db_name" in pconfig:
                     table = pconfig["mongo_db_name"]
@@ -1762,7 +1849,12 @@ def _print_ingestion_state(state_dir, label_split, db_type):
 
             count = len(processed)
             latest = processed[-1] if processed else "-"
-            tag = "main data" if db_type == "postgres" else ""
+            if db_type == "postgres":
+                tag = "main data"
+            elif db_type == "sr" and profile == "ml":
+                tag = "ml classifiers"
+            else:
+                tag = ""
             source_entries[source].append(
                 (tag, table, count, latest, in_progress, failed, last_updated)
             )
@@ -3882,20 +3974,19 @@ def cmd_source_status(args):
 
 def _print_source_ingestion_state(state_dir, source, db_type):
     """Print ingestion state for a specific source from state files."""
-    if not state_dir.exists():
-        return
+    display = _DB_DISPLAY.get(db_type, db_type.title())
 
     prefix = f"{source}_{db_type}_"
-    state_files = sorted(f for f in state_dir.glob("*.json") if f.stem.startswith(prefix))
+    if state_dir.exists():
+        state_files = sorted(f for f in state_dir.glob("*.json") if f.stem.startswith(prefix))
+    else:
+        state_files = []
 
-    # Also check legacy naming (PLATFORM prefix)
     if not state_files:
-        state_files = sorted(state_dir.glob(f"*_{db_type}_*.json"))
-
-    if not state_files:
+        print(f"\n    {display} ingestion: no data yet for source '{source}'.")
         return
 
-    print(f"\n    {db_type.title()} ingestion:")
+    print(f"\n    {display} ingestion:")
     for sf in state_files:
         try:
             sdata = json.loads(sf.read_text())
@@ -4333,6 +4424,11 @@ def build_parser():
     db_stop_p.set_defaults(func=cmd_db_stop)
 
     db_status_p = db_sub.add_parser("status", help="Show database status")
+    db_status_p.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Include per-source ingestion breakdown for each configured DB",
+    )
     db_status_p.set_defaults(func=cmd_db_status)
 
     db_verify_p = db_sub.add_parser(
