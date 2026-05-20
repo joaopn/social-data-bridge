@@ -777,9 +777,14 @@ def generate_postgres_yaml(settings):
     processing = {
         "data_types": settings["data_types"],
     }
-    # Sources without a primary_key cannot dedup at the source-row level;
-    # disable the runtime guard that requires a PK when check_duplicates=true.
-    if not settings.get("primary_key"):
+    # Custom platforms without a primary_key cannot dedup at the source-row
+    # level; disable the runtime guard that requires a PK when
+    # check_duplicates=true. Reddit always has primary_key: id in its template
+    # and its settings dict never carries a "primary_key" key (the PK prompt
+    # is custom-only) — gate on platform to avoid silently disabling Reddit's
+    # ON CONFLICT path.
+    is_custom = settings.get("platform", "").startswith("custom/")
+    if is_custom and not settings.get("primary_key"):
         processing["check_duplicates"] = False
     if "pg_prefer_lingua" in settings:
         processing["prefer_lingua"] = settings["pg_prefer_lingua"]
@@ -805,9 +810,11 @@ def generate_postgres_ml_yaml(settings):
     processing = {
         "data_types": settings["data_types"],
     }
-    # Sources without a primary_key cannot dedup classifier rows back to a
-    # source row; disable the dedup path consistently with the base profile.
-    if not settings.get("primary_key"):
+    # Custom platforms without a primary_key cannot dedup classifier rows
+    # back to a source row; disable the dedup path consistently with the
+    # base profile. Reddit is gated out (see generate_postgres_yaml).
+    is_custom = settings.get("platform", "").startswith("custom/")
+    if is_custom and not settings.get("primary_key"):
         processing["check_duplicates"] = False
     config = {
         "pipeline": {
@@ -836,7 +843,9 @@ def generate_sr_ml_yaml(settings):
     }
     # See generate_postgres_ml_yaml for rationale. Also avoids emitting
     # merge_condition in INSERT statements against Duplicate Key tables.
-    if not settings.get("primary_key"):
+    # Reddit is gated out (see generate_postgres_yaml).
+    is_custom = settings.get("platform", "").startswith("custom/")
+    if is_custom and not settings.get("primary_key"):
         processing["check_duplicates"] = False
     config = {
         "pipeline": {
@@ -851,8 +860,10 @@ def generate_starrocks_yaml(settings):
     processing = {
         "data_types": settings["data_types"],
     }
-    # See generate_postgres_yaml for the parallel rationale.
-    if not settings.get("primary_key"):
+    # See generate_postgres_yaml for the parallel rationale. Reddit is gated
+    # out so its standard upsert/merge_condition path stays intact.
+    is_custom = settings.get("platform", "").startswith("custom/")
+    if is_custom and not settings.get("primary_key"):
         processing["check_duplicates"] = False
     if "sr_prefer_lingua" in settings:
         processing["prefer_lingua"] = settings["sr_prefer_lingua"]
