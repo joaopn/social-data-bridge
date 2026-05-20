@@ -7,6 +7,8 @@ Usage:
     sdp.py db setup                          Configure databases (PostgreSQL, MongoDB)
     sdp.py db setup --add <db>               Add a single database to existing setup
     sdp.py db setup-mcp                      Configure MCP servers for databases
+    sdp.py db setup-jobs                     Configure the query scheduler
+    sdp.py db setup-llm                      Bundle: setup-mcp then setup-jobs
     sdp.py db start [service]                Start services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
     sdp.py db stop [service]                 Stop services (postgres|mongo|starrocks|postgres-mcp|mongo-mcp|starrocks-mcp|all)
     sdp.py db status                         Show database config and health
@@ -467,6 +469,15 @@ def cmd_db_setup_mcp(args):
 def cmd_db_setup_jobs(args):
     """Configure the query scheduler (jobs profile)."""
     from social_data_pipeline.setup.jobs import main as jobs_main
+    jobs_main()
+    return 0
+
+
+def cmd_db_setup_llm(args):
+    """Configure both MCP servers and the jobs scheduler in one go."""
+    from social_data_pipeline.setup.mcp import main as mcp_main
+    from social_data_pipeline.setup.jobs import main as jobs_main
+    mcp_main()
     jobs_main()
     return 0
 
@@ -4298,6 +4309,12 @@ def build_parser():
         help="Configure the query scheduler (jobs profile)",
     )
     db_setup_jobs_p.set_defaults(func=cmd_db_setup_jobs)
+
+    db_setup_llm_p = db_sub.add_parser(
+        "setup-llm",
+        help="Bundle: run setup-mcp then setup-jobs",
+    )
+    db_setup_llm_p.set_defaults(func=cmd_db_setup_llm)
 
     db_start_p = db_sub.add_parser("start", help="Start database services")
     db_start_p.add_argument("service", nargs="?",

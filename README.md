@@ -24,9 +24,8 @@ A researcher-focused CLI pipeline for processing, classifying, ingesting, and qu
 
 ```bash
 # 1. Configure databases and sources (one-time)
-python sdp.py db setup                      # Configure databases (interactive setup)
-python sdp.py db setup-mcp                  # MCP servers for agentic AI data access (optional)
-python sdp.py db setup-jobs                 # Job scheduler for agentic AI query submission (optional)
+python sdp.py db setup                      # Configures databases (interactive setup)
+python sdp.py db setup-llm                  # Configures LLM MCP servers (optional)
 python sdp.py source add reddit             # Add a data source (interactive setup)
 
 # 2. Start databases and process data
@@ -159,7 +158,7 @@ python sdp.py source add reddit     # Add a data source (interactive setup)
 
 `db setup` walks you through database selection, data paths, port choices, optional authentication, and per-DB tuning (PGTune for PostgreSQL, FE/BE memory split for StarRocks). Run `db setup --add <db>` to add a new database later without reconfiguring existing ones. `source add` walks you through data types, file patterns, fields, indexes, and classifier configuration — generating per-source config in `config/sources/<name>/`.
 
-`setup-mcp` and `setup-jobs` are optional but recommended for agentic workflows; they layer on top of `db setup` and reuse its read-only credentials. For details on each, see the [Database Profiles (MCP)](docs/profiles/database.md#mcp-servers) and [Jobs Scheduler](docs/profiles/jobs.md) docs.
+`setup-mcp` and `setup-jobs` are optional but recommended for agentic workflows; they layer on top of `db setup` and reuse its read-only credentials. For details on each, see the [Database Profiles (MCP)](docs/profiles/database.md#mcp-servers) and [Jobs Scheduler](docs/profiles/jobs.md) docs. `setup-llm` bundles both.
 
 For Reddit, download the data dumps from [Arctic Shift](https://github.com/ArthurHeitmann/arctic_shift/blob/master/download_links.md) and place them in the dumps directory configured during setup. For Hugging Face datasets, see [Platform Support](#-platform-support). Or check the [interactive Codespaces demo](https://codespaces.new/joaopn/social-data-pipeline?ref=main) — same pipeline, zero install. For full configuration details, see the [Configuration Reference](docs/configuration.md).
 
@@ -213,6 +212,7 @@ python sdp.py <db|source|run> [options]
 | `sdp.py db setup --add <db>` | Add or reconfigure a single database (`postgres\|mongo\|starrocks`) without touching others |
 | `sdp.py db setup-mcp` | Configure MCP servers for AI tool access (ports, read-only mode) |
 | `sdp.py db setup-jobs` | Configure the query scheduler (jobs profile) — WebUI + MCP for agent query submission |
+| `sdp.py db setup-llm` | Bundle: runs `setup-mcp` followed by `setup-jobs` |
 | `sdp.py db start [service]` | Start services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp\|jobs` (all if unspecified) |
 | `sdp.py db stop [service]` | Stop services: `postgres\|mongo\|starrocks\|postgres-mcp\|mongo-mcp\|starrocks-mcp\|jobs` (all if unspecified) |
 | `sdp.py db status` | Show database config, health, MCP, and jobs scheduler status |

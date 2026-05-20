@@ -1536,6 +1536,7 @@ def add_database(db_name):
 
     print("\n  Next steps:")
     print("    python sdp.py db status           # Check database status and info")
+    print("    python sdp.py db setup-llm        # Configure MCP + jobs scheduler for agentic AI access (optional)")
     print("    python sdp.py source add <name>   # Add a data source")
     print()
 
@@ -1652,6 +1653,7 @@ def main():
 
     print("\n  Next steps:")
     print("    python sdp.py db status           # Check database status and info")
+    print("    python sdp.py db setup-llm        # Configure MCP + jobs scheduler for agentic AI access (optional)")
     print("    python sdp.py source add <name>   # Add a data source")
     print()
 
