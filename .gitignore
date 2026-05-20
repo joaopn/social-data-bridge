@@ -48,11 +48,11 @@ config/*/*/user.yaml
 docker-compose.override.yml
 *.bak
 # Pre-baked Codespace templates intentionally tracked despite the local-override patterns above.
-!tests/demo/config/jobs/config.local.yaml
-!tests/demo/docker-compose.override.yml
-!tests/demo/config/starrocks/fe.local.conf
-!tests/demo/config/starrocks/be.local.conf
-!tests/demo/config/postgres/postgresql.local.conf
+!.devcontainer/demo/config/jobs/config.local.yaml
+!.devcontainer/demo/docker-compose.override.yml
+!.devcontainer/demo/config/starrocks/fe.local.conf
+!.devcontainer/demo/config/starrocks/be.local.conf
+!.devcontainer/demo/config/postgres/postgresql.local.conf
 
 # Config
 .env

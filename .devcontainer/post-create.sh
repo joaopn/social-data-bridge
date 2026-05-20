@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Provisions a Codespace into a working SDP install: copies pre-baked configs
-# from tests/demo/ into the workspace, pre-creates data dirs, installs sdp via
-# pipx. Idempotent — re-running skips files that already exist.
+# from .devcontainer/demo/ into the workspace, pre-creates data dirs, installs
+# sdp via pipx. Idempotent — re-running skips files that already exist.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-DEMO="$REPO_ROOT/tests/demo"
+DEMO="$REPO_ROOT/.devcontainer/demo"
 
 # Bind-mounted host docker socket; relax permissions so the non-root vscode
 # user can talk to the daemon without matching the host's docker group GID.
@@ -24,7 +24,7 @@ copy_if_missing() {
     fi
 }
 
-echo "[1/4] Seeding workspace from tests/demo/..."
+echo "[1/4] Seeding workspace from .devcontainer/demo/..."
 copy_if_missing "$DEMO/env.template" .env
 copy_if_missing "$DEMO/config/db/postgres.yaml" config/db/postgres.yaml
 copy_if_missing "$DEMO/config/db/mongo.yaml" config/db/mongo.yaml
@@ -79,7 +79,7 @@ echo "  sdp -> $(command -v sdp)"
 
 cat <<'EOF'
 
-  Codespace ready. tests/demo/WELCOME.md should auto-open.
+  Codespace ready. .devcontainer/demo/WELCOME.md should auto-open.
   Quick path: `sdp db start postgres`, then bring data and run the pipeline.
 
 EOF
